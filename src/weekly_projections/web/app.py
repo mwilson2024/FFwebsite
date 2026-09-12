@@ -39,13 +39,32 @@ from weekly_projections.lineup import (
 )
 from weekly_projections.projection_sources import ProjectionBlend, projection_blend
 from weekly_projections.live_stats import weekly_boxscore, scoring_components
-from weekly_projections.recommendations import PlayerRecommendation, rank_available_players
+from weekly_projections.recommendations import PlayerRecommendation, build_player_board
 from weekly_projections.trade_engine import suggest_trades, analyze_target_trade
 from weekly_projections.web.diagnostics import initialize_log, log_error, request_context
 
 
 PACKAGE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=PACKAGE_DIR / "templates")
+
+_TEAM_DEFENSE_POSITIONS = {"DEF", "DST", "D/ST"}
+_INDIVIDUAL_DEFENSE_POSITIONS = {
+    "CB", "DB", "DE", "DL", "DT", "EDGE", "ILB", "LB", "NT", "OLB", "S", "SAF",
+}
+
+
+def _board_position(player: MFLPlayer) -> str:
+    value = player.position.strip().upper()
+    return "DEF" if value in _TEAM_DEFENSE_POSITIONS else "PK" if value == "K" else value
+
+
+def _include_on_player_board(player: MFLPlayer) -> bool:
+    """Keep team defense, but hide IDP records from this non-IDP player market."""
+    position = _board_position(player)
+    if position == "DEF":
+        return True
+    tokens = {token for token in position.replace("-", "/").split("/") if token}
+    return not bool(tokens & _INDIVIDUAL_DEFENSE_POSITIONS)
 
 
 @dataclass
@@ -362,9 +381,37 @@ def _load_player_board(
     set[str],
 ]:
     roster_ids = client.roster_ids()
-    roster = client.named_players(roster_ids)
     availability = client.free_agents()
-    available_players = client.named_players(availability)
+    league_rosters = client.trade_rosters()
+    league_rosters.setdefault(client.config.franchise_id.zfill(4), set()).update(roster_ids)
+    rostered_by = {
+        player_id: franchise_id.zfill(4)
+        for franchise_id, player_ids in league_rosters.items()
+        for player_id in player_ids
+    }
+    details = client.league_details()
+    franchise_names = {
+        franchise_id.zfill(4): franchise.name
+        for franchise_id, franchise in details.franchises.items()
+    }
+    catalog = client.players()
+    roster = [catalog.get(player_id, MFLPlayer(id=player_id, name=player_id)) for player_id in roster_ids]
+    available_players = [
+        catalog.get(player_id, MFLPlayer(id=player_id, name=player_id))
+        for player_id in availability
+        if player_id not in rostered_by
+    ]
+    rostered_players = [
+        catalog.get(player_id, MFLPlayer(id=player_id, name=player_id))
+        for player_id in rostered_by
+    ]
+    roster = [player for player in roster if _include_on_player_board(player)]
+    available_players = [player for player in available_players if _include_on_player_board(player)]
+    rostered_players = [player for player in rostered_players if _include_on_player_board(player)]
+    visible_ids = {player.id for player in (*available_players, *rostered_players)}
+    availability = {
+        player_id: state for player_id, state in availability.items() if player_id in visible_ids
+    }
     week = client.current_week()
     roster_locked: set[str] = set()
     if week is not None:
@@ -384,13 +431,13 @@ def _load_player_board(
             pass
     projections: dict[str, float] = {}
     try:
-        projections = client.projected_scores(week=week, free_agents_only=True)
-        if roster_ids:
-            projections.update(client.projected_scores(week=week, player_ids=roster_ids))
+        # One league-wide request is both more complete and gentler on MFL's
+        # rate limit than separate free-agent and roster projection requests.
+        projections = client.projected_scores(week=week)
     except MFLApiError:
         # The player market is still useful before weekly projections publish.
         projections = {}
-    all_players = [*available_players, *roster]
+    all_players = list({player.id: player for player in (*available_players, *rostered_players)}.values())
     blend = (
         projection_blend(
             all_players,
@@ -407,10 +454,14 @@ def _load_player_board(
             ml_matched=0,
         )
     )
-    recommendations = rank_available_players(
+    recommendations = build_player_board(
         available_players=available_players,
         availability=availability,
-        roster=roster,
+        rostered_players=rostered_players,
+        rostered_by=rostered_by,
+        franchise_names=franchise_names,
+        own_franchise_id=client.config.franchise_id,
+        own_roster=roster,
         projections=blend.scores,
     )
     return week, roster, recommendations, blend, roster_locked
@@ -632,6 +683,7 @@ def _stage_move(
     mode: Literal["fcfs", "waiver", "blind-bid"],
     bid: int | None,
     round_number: int | None,
+    replace_existing: bool = False,
 ) -> tuple[str, AddDropPreview, MFLLeague]:
     league = _league(current, league_id)
     client = _client(current, league)
@@ -641,6 +693,7 @@ def _stage_move(
         mode=mode,
         bid=bid,
         round_number=round_number,
+        replace_existing=replace_existing,
     )
     week = client.current_week()
     if week is not None:
@@ -882,8 +935,17 @@ def moves(request: Request, league: str, q: str = "", error: str = ""):
         log_error("player_board_failed", caught)
         api_error = str(caught)
     positions = sorted(
-        {item.player.position for item in recommendations if item.player.position},
+        {_board_position(item.player) for item in recommendations if item.player.position},
         key=lambda value: (value not in {"QB", "RB", "WR", "TE", "PK", "DEF"}, value),
+    )
+    nfl_teams = sorted({item.player.team for item in recommendations if item.player.team})
+    fantasy_teams = sorted(
+        {
+            (item.fantasy_team_id, item.fantasy_team_name)
+            for item in recommendations
+            if item.fantasy_team_id
+        },
+        key=lambda item: item[1].casefold(),
     )
     return templates.TemplateResponse(
         request=request,
@@ -894,8 +956,13 @@ def moves(request: Request, league: str, q: str = "", error: str = ""):
             "roster": sorted(roster, key=lambda player: (player.position, player.name.casefold())),
             "recommendations": recommendations,
             "positions": positions,
+            "board_positions": {item.player.id: _board_position(item.player) for item in recommendations},
+            "nfl_teams": nfl_teams,
+            "fantasy_teams": fantasy_teams,
             "week": week,
             "player_count": len(recommendations),
+            "available_count": sum(not item.is_rostered for item in recommendations),
+            "rostered_count": sum(item.is_rostered for item in recommendations),
             "locked_count": sum(item.availability.locked for item in recommendations),
             "projected_count": sum(item.projection is not None for item in recommendations),
             "projection_source": blend.source_label,
@@ -1207,6 +1274,7 @@ def preview_move(
     mode: Literal["fcfs", "waiver", "blind-bid"] = Form("fcfs"),
     bid: str = Form(""),
     round_number: str = Form(""),
+    replace_existing: str = Form(""),
 ):
     current = _require_session(request)
     _check_csrf(current, csrf_token)
@@ -1219,6 +1287,7 @@ def preview_move(
             mode=mode,
             bid=_optional_int(bid, "Bid"),
             round_number=_optional_int(round_number, "Round"),
+            replace_existing=replace_existing == "1",
         )
     except (MFLApiError, ValueError) as error:
         log_error("move_review_failed", error)
@@ -1275,7 +1344,7 @@ def submit_move(request: Request, pending_id: str, csrf_token: str = Form(...)):
                     if player.id in locked
                 )
                 raise ValueError(f"Game already started; MFL has locked: {names}")
-        result = client.submit_add_drop(preview)
+        result = client.submit_add_drop(preview, replace=preview.replace_existing)
         success = "MFL accepted the transaction request."
         error = None
     except (MFLApiError, ValueError) as api_error:
@@ -1630,6 +1699,7 @@ class StageMoveRequest(BaseModel):
     mode: Literal["fcfs", "waiver", "blind-bid"] = "fcfs"
     bid: int | None = None
     round: int | None = None
+    replace_existing: bool = False
 
 
 @app.get("/api/free-agents")
@@ -1639,7 +1709,10 @@ def api_free_agents(request: Request, league: str, q: str = ""):
     client = _client(current, selected)
     week, _, board, blend, _ = _load_player_board(client)
     needle = q.strip()[:80].casefold()
-    matches = [item for item in board if needle in item.player.name.casefold()]
+    matches = [
+        item for item in board
+        if not item.is_rostered and needle in item.player.name.casefold()
+    ]
     _remember_catalog(current, client)
     return {
         "league_id": league,
@@ -1675,6 +1748,7 @@ def api_stage_move(request: Request, move: StageMoveRequest):
         mode=move.mode,
         bid=move.bid,
         round_number=move.round,
+        replace_existing=move.replace_existing,
     )
     return JSONResponse(
         {

@@ -106,7 +106,7 @@ small { font-size: .8125rem; }
 .league-actions a:hover { filter: brightness(1.12); }
 
 /* Decision surfaces */
-.projection-scorecard,.board-summary { display: flex; align-items: center; gap: 1.4rem; padding: 1rem 1.25rem; border: 1px solid var(--line); border-radius: 15px; background: var(--panel); }
+.projection-scorecard,.board-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 1.4rem; padding: 1rem 1.25rem; border: 1px solid var(--line); border-radius: 15px; background: var(--panel); }
 .projection-scorecard span:not(.score-arrow,.gain-pill) { display: grid; gap: .2rem; }
 .projection-scorecard small,.board-summary span { color: var(--muted); font-size: .8125rem; }
 .projection-scorecard strong,.board-summary strong { color: var(--ink); font-size: 1.5rem; font-variant-numeric: tabular-nums; }
@@ -125,7 +125,10 @@ small { font-size: .8125rem; }
 .waiver-board,.lineup-board { overflow: hidden; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); box-shadow: var(--shadow); }
 .board-toolbar,.lineup-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 1.5rem; padding: 1.25rem; border-bottom: 1px solid var(--line); }
 .board-toolbar p:last-child,.lineup-toolbar p:last-child { margin: 0; color: var(--muted); font-size: .875rem; }
-.board-filters { display: grid; grid-template-columns: minmax(180px,1fr) 110px 145px; gap: .65rem; }
+.waiver-board .board-toolbar { align-items: flex-start; flex-wrap: wrap; }
+.waiver-board .board-toolbar > div:first-child { flex: 1 1 260px; }
+.board-filters { display: grid; flex: 4 1 680px; grid-template-columns: repeat(auto-fit,minmax(125px,1fr)); gap: .65rem; }
+.board-filters label:first-child { grid-column: span 2; }
 .board-filters label { font-size: .8125rem; }
 .lineup-actions { display: flex; gap: .6rem; flex-shrink: 0; }
 .secondary-button.accent { color: var(--acid); border-color: #3b8d82; background: var(--accent-soft); }
@@ -148,7 +151,11 @@ small { font-size: .8125rem; }
 .position-token[data-position="TE"] { background: #453921; border-color: #736139; color: #efce86; }
 .availability-badge,.recommendation,.current-status,.healthy-status,.injury-status,.game-state { display: inline-flex; align-items: center; width: fit-content; border-radius: 6px; padding: .28rem .55rem; font-size: .75rem; font-weight: 650; background: #233149; color: #b7c6db; }
 .availability-badge.open,.recommendation.good,.recommendation.strong,.current-status.starting,.healthy-status { color: #82ead1; background: #163b38; }
+.availability-badge.waiver { color: #bad5ff; background: #203c62; }
 .availability-badge.locked,.current-status.locked,.recommendation.locked { color: #e2c68e; background: #393426; }
+.availability-badge.rostered { color: #d2c3ff; background: #352b51; }
+.ownership-note { display: block; margin-top: .35rem; color: var(--muted); font-size: .75rem; }
+.not-addable { color: var(--muted); font-weight: 700; }
 .recommendation.fair { color: #bed5ff; background: #233d60; }
 .recommendation.danger,.injury-status,.current-status.unavailable { color: #ffb0be; background: #46293d; }
 .number-cell { min-width: 95px; font-variant-numeric: tabular-nums; }
@@ -157,6 +164,9 @@ small { font-size: .8125rem; }
 .move-builder { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); align-items: end; gap: 1rem; margin-top: 1.25rem; padding: 1.25rem; border: 1px solid #37516a; border-radius: var(--radius); background: #15243a; }
 .builder-title { grid-column: 1 / -1; }
 .builder-title strong { font-size: 1.1rem; }
+.move-builder label > small,.replace-claims > small { display: block; margin-top: .4rem; color: var(--muted); font-size: .75rem; line-height: 1.4; }
+.replace-claims > span { display: flex; align-items: center; gap: .55rem; min-height: 46px; padding: .7rem .8rem; border: 1px solid var(--line); border-radius: 10px; }
+.replace-claims input { width: 1rem; height: 1rem; margin: 0; }
 .move-builder .review-button { align-self: end; }
 .mobile-move-shortcut { display: none; }
 .move-builder { scroll-margin-top: 96px; }

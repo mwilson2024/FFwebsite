@@ -16,6 +16,26 @@ class PlayerRecommendation:
     recommendation: str
     recommendation_tone: str
     reason: str
+    fantasy_team_id: str = ""
+    fantasy_team_name: str = ""
+
+    @property
+    def is_rostered(self) -> bool:
+        return bool(self.fantasy_team_id)
+
+    @property
+    def is_claimable(self) -> bool:
+        return not self.is_rostered and self.availability.claimable
+
+    @property
+    def market_status(self) -> str:
+        if self.is_rostered:
+            return "mine" if self.availability.status == "mine" else "rostered"
+        if self.availability.locked:
+            return "locked"
+        if self.availability.status.casefold() in {"waiver", "waivers"}:
+            return "waiver"
+        return "open"
 
 def _recommendation_copy(
     *, projection: float | None, delta: float | None, locked: bool
@@ -98,6 +118,92 @@ def rank_available_players(
     return sorted(
         recommendations,
         key=lambda item: (
+            -(item.roster_delta if item.roster_delta is not None else -999.0),
+            -(item.projection if item.projection is not None else -999.0),
+            item.player.name.casefold(),
+        ),
+    )
+
+
+def build_player_board(
+    *,
+    available_players: Iterable[MFLPlayer],
+    availability: Mapping[str, MFLAvailability],
+    rostered_players: Iterable[MFLPlayer],
+    rostered_by: Mapping[str, str],
+    franchise_names: Mapping[str, str],
+    own_franchise_id: str,
+    own_roster: Iterable[MFLPlayer],
+    projections: Mapping[str, float],
+) -> list[PlayerRecommendation]:
+    """Combine free agents and rostered players into one searchable league board."""
+    own_roster = tuple(own_roster)
+    board = rank_available_players(
+        available_players=available_players,
+        availability=availability,
+        roster=own_roster,
+        projections=projections,
+    )
+    own_by_position: dict[str, list[MFLPlayer]] = {}
+    for player in own_roster:
+        own_by_position.setdefault(player.position.casefold(), []).append(player)
+
+    own_id = own_franchise_id.zfill(4)
+    for player in rostered_players:
+        franchise_id = str(rostered_by.get(player.id, "")).zfill(4)
+        if not franchise_id or franchise_id == "0000":
+            continue
+        franchise_name = franchise_names.get(franchise_id, f"Team {franchise_id}")
+        projection = projections.get(player.id)
+        peers = [
+            peer
+            for peer in own_by_position.get(player.position.casefold(), [])
+            if peer.id in projections and peer.id != player.id
+        ]
+        suggested_drop = min(peers, key=lambda peer: projections[peer.id]) if peers else None
+        delta = (
+            projection - projections[suggested_drop.id]
+            if projection is not None and suggested_drop is not None
+            else None
+        )
+        is_mine = franchise_id == own_id
+        if is_mine:
+            label, tone = "Your roster", "muted"
+            reason = f"Currently rostered by {franchise_name}."
+        else:
+            label = "Trade target" if delta is not None and delta >= 0.5 else "Rostered"
+            tone = "good" if label == "Trade target" else "muted"
+            comparison = (
+                f" Projects {abs(delta):.1f} points {'above' if delta >= 0 else 'below'} "
+                f"{suggested_drop.name}."
+                if delta is not None and suggested_drop is not None
+                else ""
+            )
+            reason = f"Rostered by {franchise_name}.{comparison} Use Trade Center to build an offer."
+        board.append(
+            PlayerRecommendation(
+                player=player,
+                availability=MFLAvailability(
+                    player_id=player.id,
+                    status="mine" if is_mine else "rostered",
+                    locked=False,
+                ),
+                projection=projection,
+                roster_delta=delta,
+                suggested_drop=suggested_drop,
+                recommendation=label,
+                recommendation_tone=tone,
+                reason=reason,
+                fantasy_team_id=franchise_id,
+                fantasy_team_name=franchise_name,
+            )
+        )
+
+    status_order = {"open": 0, "waiver": 1, "locked": 2, "rostered": 3, "mine": 4}
+    return sorted(
+        board,
+        key=lambda item: (
+            status_order.get(item.market_status, 9),
             -(item.roster_delta if item.roster_delta is not None else -999.0),
             -(item.projection if item.projection is not None else -999.0),
             item.player.name.casefold(),

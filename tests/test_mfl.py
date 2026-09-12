@@ -260,8 +260,26 @@ def test_blind_bid_requires_bid(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(client, "roster_ids", lambda: {"200"})
 
-    with pytest.raises(ValueError, match="requires a non-negative --bid"):
+    with pytest.raises(ValueError, match="non-negative FAAB bid"):
         client.preview_add_drop(add="100", drop="200", mode="blind-bid")
+
+
+def test_waiver_preview_preserves_replace_choice(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = MFLClient(_config(user_cookie="cookie"))
+    players = {"100": MFLPlayer("100", "Add"), "200": MFLPlayer("200", "Drop")}
+    monkeypatch.setattr(client, "players", lambda refresh=False: players)
+    monkeypatch.setattr(client, "free_agents", lambda: {"100": MFLAvailability("100", status="waiver")})
+    monkeypatch.setattr(client, "roster_ids", lambda: {"200"})
+    preview = client.preview_add_drop(
+        add="100", drop="200", mode="waiver", round_number=2, replace_existing=True
+    )
+    assert preview.round == 2
+    assert preview.replace_existing is True
+    recorded = {}
+    monkeypatch.setattr(client, "import_request", lambda kind, **values: recorded.update(kind=kind, **values) or {})
+    client.submit_add_drop(preview, replace=preview.replace_existing)
+    assert recorded["kind"] == "waiverRequest"
+    assert recorded["REPLACE"] == "1"
 
 
 def test_free_agents_preserve_mfl_lock_state(monkeypatch: pytest.MonkeyPatch) -> None:

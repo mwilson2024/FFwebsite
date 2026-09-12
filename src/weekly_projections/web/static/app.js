@@ -148,6 +148,11 @@
   const search = document.querySelector("#player-filter");
   const position = document.querySelector("#position-filter");
   const status = document.querySelector("#status-filter");
+  const nflTeam = document.querySelector("#nfl-team-filter");
+  const fantasyTeam = document.querySelector("#fantasy-team-filter");
+  const projectionFilter = document.querySelector("#projection-filter");
+  const playerSort = document.querySelector("#player-sort");
+  const playerTableBody = document.querySelector(".waiver-table tbody");
   const empty = document.querySelector("#filtered-empty");
   const selectedCopy = document.querySelector("#selected-player");
   const dropSelect = document.querySelector('select[name="drop_id"]');
@@ -170,15 +175,37 @@
     const needle = (search?.value || "").trim().toLowerCase();
     const wantedPosition = position?.value || "all";
     const wantedStatus = status?.value || "all";
+    const wantedNflTeam = nflTeam?.value || "all";
+    const wantedFantasyTeam = fantasyTeam?.value || "all";
+    const wantedProjection = projectionFilter?.value || "all";
     let shown = 0;
     rows.forEach((row) => {
       const matchesSearch = !needle || row.dataset.search.includes(needle);
       const matchesPosition = wantedPosition === "all" || row.dataset.position === wantedPosition;
       const matchesStatus = wantedStatus === "all" || row.dataset.status === wantedStatus;
-      row.hidden = !(matchesSearch && matchesPosition && matchesStatus);
+      const matchesNflTeam = wantedNflTeam === "all" || row.dataset.nflTeam === wantedNflTeam;
+      const matchesFantasyTeam = wantedFantasyTeam === "all" || row.dataset.fantasyTeam === wantedFantasyTeam;
+      const matchesProjection = wantedProjection === "all" || row.dataset.projected === wantedProjection;
+      row.hidden = !(matchesSearch && matchesPosition && matchesStatus && matchesNflTeam && matchesFantasyTeam && matchesProjection);
       if (!row.hidden) shown += 1;
     });
     if (empty) empty.hidden = shown !== 0;
+  };
+
+  const applySort = () => {
+    if (!playerTableBody) return;
+    const selected = playerSort?.value || "recommended";
+    const number = (row, key) => Number(row.dataset[key] || -9999);
+    const text = (row, key) => row.dataset[key] || "";
+    const sorted = rows.slice().sort((left, right) => {
+      if (selected === "projection") return number(right, "projection") - number(left, "projection") || text(left, "name").localeCompare(text(right, "name"));
+      if (selected === "edge") return number(right, "edge") - number(left, "edge") || number(right, "projection") - number(left, "projection");
+      if (selected === "name") return text(left, "name").localeCompare(text(right, "name"));
+      if (selected === "nfl-team") return text(left, "nflTeam").localeCompare(text(right, "nflTeam")) || text(left, "name").localeCompare(text(right, "name"));
+      if (selected === "fantasy-team") return text(left, "fantasyTeam").localeCompare(text(right, "fantasyTeam")) || text(left, "name").localeCompare(text(right, "name"));
+      return number(left, "originalOrder") - number(right, "originalOrder");
+    });
+    sorted.forEach((row) => playerTableBody.append(row));
   };
 
   const updateModeFields = () => {
@@ -191,21 +218,31 @@
     });
   };
 
-  [search, position, status].forEach((control) => {
+  [search, position, status, nflTeam, fantasyTeam, projectionFilter].forEach((control) => {
     control?.addEventListener(control === search ? "input" : "change", applyFilters);
   });
-  document.querySelectorAll('input[name="add_id"]').forEach((radio) => radio.addEventListener("change", updateReviewState));
+  playerSort?.addEventListener("change", applySort);
+  document.querySelectorAll('input[name="add_id"]').forEach((radio) => radio.addEventListener("change", () => {
+    if (radio.checked && radio.dataset.marketStatus === "waiver" && modeSelect) modeSelect.value = "waiver";
+    if (radio.checked && radio.dataset.marketStatus === "open" && modeSelect?.value === "waiver") modeSelect.value = "fcfs";
+    updateModeFields();
+    updateReviewState();
+  }));
   rows.forEach((row) => row.addEventListener("click", (event) => {
     if (event.target.closest("input, a, button")) return;
     const radio = row.querySelector('input[name="add_id"]:not(:disabled)');
     if (radio) {
       radio.checked = true;
+      if (radio.dataset.marketStatus === "waiver" && modeSelect) modeSelect.value = "waiver";
+      if (radio.dataset.marketStatus === "open" && modeSelect?.value === "waiver") modeSelect.value = "fcfs";
+      updateModeFields();
       updateReviewState();
     }
   }));
   dropSelect?.addEventListener("change", updateReviewState);
   modeSelect?.addEventListener("change", updateModeFields);
   applyFilters();
+  applySort();
   updateModeFields();
   updateReviewState();
 

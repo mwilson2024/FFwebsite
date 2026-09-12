@@ -182,6 +182,7 @@ class AddDropPreview:
     franchise_id: str
     bid: int | None = None
     round: int | None = None
+    replace_existing: bool = False
 
 
 def _iter_key(value: Any, wanted: str) -> Iterator[Any]:
@@ -944,6 +945,7 @@ class MFLClient:
         mode: Literal["fcfs", "waiver", "blind-bid"] = "fcfs",
         bid: int | None = None,
         round_number: int | None = None,
+        replace_existing: bool = False,
     ) -> AddDropPreview:
         add_player = self.resolve_player(add)
         drop_player = self.resolve_player(drop)
@@ -960,9 +962,11 @@ class MFLClient:
         if drop_player.id not in self.roster_ids():
             raise ValueError(f"{drop_player.name} is not on franchise {self.config.franchise_id}")
         if mode == "blind-bid" and (bid is None or bid < 0):
-            raise ValueError("blind-bid mode requires a non-negative --bid")
+            raise ValueError("Blind-bid waivers require a non-negative FAAB bid")
         if mode == "waiver" and (round_number is None or round_number < 1):
-            raise ValueError("waiver mode requires a positive --round")
+            raise ValueError("Priority waivers require a positive claim round")
+        if replace_existing and mode == "fcfs":
+            raise ValueError("Immediate FCFS moves cannot replace waiver claims")
         return AddDropPreview(
             mode=mode,
             add=add_player,
@@ -971,6 +975,7 @@ class MFLClient:
             franchise_id=self.config.franchise_id,
             bid=bid,
             round=round_number,
+            replace_existing=replace_existing,
         )
 
     def submit_add_drop(

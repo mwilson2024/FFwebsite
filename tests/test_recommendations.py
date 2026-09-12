@@ -1,5 +1,5 @@
 from weekly_projections.mfl.client import MFLAvailability, MFLPlayer
-from weekly_projections.recommendations import rank_available_players
+from weekly_projections.recommendations import build_player_board, rank_available_players
 
 
 def test_recommendations_rank_roster_upgrades_first() -> None:
@@ -37,3 +37,26 @@ def test_locked_upgrade_is_kept_on_board_as_future_target() -> None:
     )
     assert board[0].recommendation == "Target when open"
     assert board[0].availability.claimable is False
+
+
+def test_full_player_board_labels_rostered_teams_without_making_them_addable() -> None:
+    own = MFLPlayer("mine", "My Receiver", "WR", "DET")
+    free_agent = MFLPlayer("free", "Free Receiver", "WR", "GB")
+    rostered = MFLPlayer("other", "Rival Receiver", "WR", "MIN")
+    board = build_player_board(
+        available_players=[free_agent],
+        availability={"free": MFLAvailability("free")},
+        rostered_players=[own, rostered],
+        rostered_by={"mine": "0001", "other": "0002"},
+        franchise_names={"0001": "My Team", "0002": "Rival Team"},
+        own_franchise_id="0001",
+        own_roster=[own],
+        projections={"mine": 8.0, "free": 12.0, "other": 14.0},
+    )
+    rows = {item.player.id: item for item in board}
+    assert rows["free"].is_claimable is True
+    assert rows["free"].market_status == "open"
+    assert rows["mine"].market_status == "mine"
+    assert rows["other"].market_status == "rostered"
+    assert rows["other"].fantasy_team_name == "Rival Team"
+    assert rows["other"].is_claimable is False

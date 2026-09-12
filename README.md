@@ -5,6 +5,14 @@ leagues, lineup changes, automatic lineup suggestions, add/drop reviews, live
 matchups, league standings, trades, the trade block, and league-scored weekly
 projections.
 
+The player market combines MFL free agents, waiver players, and every league
+roster. It can filter by name, position, NFL team, availability, fantasy team,
+and projection coverage, with multiple sort choices. Team defenses remain in
+the market while individual defensive players are intentionally hidden. Only
+claimable free agents can enter the add/drop builder; rostered players are
+clearly labeled for trade research. FCFS, priority-waiver, and blind-bid FAAB
+moves retain round, bid, append/replace, review, and kickoff-lock safeguards.
+
 ## Run locally
 
 Python 3.11 or newer is required.

@@ -82,6 +82,8 @@ button:hover,.login-card button:hover,.move-workspace button:hover,.review-shell
 .position-token,.position-token[data-position] { background:#e5f2fa; color:#005c90; border-color:#aecbde; }
 .recommendation.fair { background:#e5f2fa; color:#005c90; }
 .recommendation.good,.recommendation.strong,.availability-badge.open,.current-status.starting,.healthy-status { background:#e4f3eb; color:#17623f; }
+.availability-badge.waiver { background:#e5f2fa; color:#005c90; }
+.availability-badge.rostered { background:#e9edef; color:#435762; }
 .start-control { background:white; color:#425c6d; border-color:#aebfc9; }
 .start-control:has(input:checked) { background:#e5f2fa; color:#005c90; border-color:var(--lions-blue); }
 .lineup-editor-page .drag-handle { background:transparent; color:#526c7b; }

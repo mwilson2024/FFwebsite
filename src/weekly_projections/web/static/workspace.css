@@ -34,6 +34,8 @@ body { background: #f1f4f9; color: #172337; }
 .waiver-board,.lineup-intelligence,.board-summary,.projection-scorecard { background:#fff; border-color:#d8e1ed; box-shadow:0 3px 12px #21355a06; }
 .waiver-table th { color:#536780; background:#f3f6fb; border-color:#d8e1ed; }
 .waiver-table td { border-color:#e3e9f1; }
+.availability-badge.waiver { color:#315d9c; background:#e7effb; }
+.availability-badge.rostered { color:#69489a; background:#f0e9fb; }
 .waiver-row:hover { background:#f3f7ff; }
 .waiver-row:has(input:checked) { background:#eaf3ff; }
 .recommendation,.current-status,.availability-badge { background:#edf1f8; color:#526580; }

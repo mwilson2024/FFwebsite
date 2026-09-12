@@ -6,7 +6,10 @@ import pytest
 from weekly_projections.lineup import LineupPlayerRecommendation, LineupRecommendation
 from weekly_projections.mfl.client import (
     MFLAvailability,
+    MFLConfig,
+    MFLFranchise,
     MFLLeague,
+    MFLLeagueDetails,
     MFLLiveFranchise,
     MFLLiveMatchup,
     MFLLivePlayer,
@@ -96,6 +99,18 @@ def test_move_page_shows_full_board_projections_and_locks(monkeypatch) -> None:
             recommendation_tone="muted",
             reason="There is no projected roster player at the same position to compare.",
         ),
+        PlayerRecommendation(
+            player=MFLPlayer("o1", "Other Team Star", "QB", "DET"),
+            availability=MFLAvailability("o1", status="rostered"),
+            projection=22.0,
+            roster_delta=None,
+            suggested_drop=None,
+            recommendation="Rostered",
+            recommendation_tone="muted",
+            reason="Rostered by Division Rival. Use Trade Center to build an offer.",
+            fantasy_team_id="0002",
+            fantasy_team_name="Division Rival",
+        ),
     ]
     blend = ProjectionBlend(
         scores={"a1": 14.5, "a2": 10.0},
@@ -123,6 +138,62 @@ def test_move_page_shows_full_board_projections_and_locks(monkeypatch) -> None:
     assert 'value="a2"' in response.text and "disabled" in response.text
     assert "MFL league scoring" in response.text
     assert "Roster Bench · BUF · LOCKED" in response.text
+    assert "Other Team Star" in response.text
+    assert "Division Rival" in response.text
+    assert 'id="nfl-team-filter"' in response.text
+    assert 'id="fantasy-team-filter"' in response.text
+    assert 'id="projection-filter"' in response.text
+    assert 'id="player-sort"' in response.text
+    assert "Blind-bid waiver · FAAB" in response.text
+    assert 'name="replace_existing"' in response.text
+
+
+def test_player_market_keeps_team_defense_and_removes_idp() -> None:
+    assert web_app._include_on_player_board(MFLPlayer("def", "Lions Defense", "Def", "DET"))
+    assert web_app._board_position(MFLPlayer("def", "Lions Defense", "Def", "DET")) == "DEF"
+    for position in ("DE", "DT", "LB", "CB", "S", "DB", "DL", "EDGE"):
+        assert not web_app._include_on_player_board(MFLPlayer(position, "IDP", position, "DET"))
+    assert web_app._include_on_player_board(MFLPlayer("wr", "Receiver", "WR", "DET"))
+
+
+def test_player_market_loader_merges_all_rosters_and_free_agents(monkeypatch) -> None:
+    players = {
+        "mine": MFLPlayer("mine", "My Player", "WR", "DET"),
+        "free": MFLPlayer("free", "Free Player", "RB", "GB"),
+        "def": MFLPlayer("def", "Detroit Defense", "Def", "DET"),
+        "other": MFLPlayer("other", "Other Player", "QB", "MIN"),
+        "idp": MFLPlayer("idp", "Defensive Back", "DB", "NYG"),
+    }
+
+    class BoardClient:
+        config = MFLConfig(2026, "11111", "0001", user_cookie="test")
+        session = None
+        def __init__(self): self._players = dict(players)
+
+        def roster_ids(self): return {"mine"}
+        def free_agents(self): return {"free": MFLAvailability("free"), "def": MFLAvailability("def"), "idp": MFLAvailability("idp")}
+        def trade_rosters(self): return {"0001": {"mine"}, "0002": {"other"}}
+        def league_details(self): return MFLLeagueDetails((), {
+            "0001": MFLFranchise("0001", "My Team"),
+            "0002": MFLFranchise("0002", "Other Team"),
+        })
+        def players(self): return dict(self._players)
+        def current_week(self): return 1
+        def nfl_team_kickoffs(self, *, week): return {}
+        def projected_scores(self, **kwargs): return {key: 10.0 for key in self._players}
+
+    monkeypatch.setattr(
+        web_app,
+        "projection_blend",
+        lambda player_list, **kwargs: ProjectionBlend(kwargs["mfl_scores"], kwargs["mfl_scores"], {}, 0),
+    )
+    week, roster, board, _, _ = web_app._load_player_board(BoardClient())
+    rows = {item.player.id: item for item in board}
+    assert week == 1
+    assert [player.id for player in roster] == ["mine"]
+    assert set(rows) == {"mine", "free", "def", "other"}
+    assert rows["other"].fantasy_team_name == "Other Team"
+    assert rows["def"].is_claimable is True
 
 
 def test_lineup_page_shows_start_sit_recommendations(monkeypatch) -> None:
