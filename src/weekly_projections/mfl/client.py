@@ -239,8 +239,11 @@ class MFLClient:
             connect=3,
             read=3,
             backoff_factor=0.75,
-            status_forcelist=(429, 500, 502, 503, 504),
+            # Do not retry 429. Retrying a provider throttle immediately consumes
+            # more of the same rate limit and hides the actionable response.
+            status_forcelist=(500, 502, 503, 504),
             allowed_methods=frozenset({"GET"}),
+            respect_retry_after_header=True,
         )
         session.mount("https://", HTTPAdapter(max_retries=retry))
         return session
@@ -294,6 +297,12 @@ class MFLClient:
         try:
             response.raise_for_status()
         except requests.RequestException as error:
+            if response.status_code == 429:
+                retry_after = str(response.headers.get("Retry-After") or "").strip()
+                wait = f" Wait {retry_after} seconds before refreshing." if retry_after.isdecimal() else " Wait a few minutes before refreshing."
+                raise MFLApiError(
+                    "MFL's request limit was reached (HTTP 429)." + wait
+                ) from error
             raise MFLApiError(f"MFL request failed: {error}") from error
         try:
             payload = response.json()

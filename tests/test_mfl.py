@@ -50,6 +50,23 @@ class JsonResponse:
         return self.payload
 
 
+def test_http_429_returns_actionable_message_without_retrying():
+    response = requests.Response()
+    response.status_code = 429
+    response.url = "https://api.myfantasyleague.com/2026/export?TYPE=playerRosterStatus"
+    response.headers["Retry-After"] = "45"
+    client = MFLClient(_config())
+    with pytest.raises(Exception, match="HTTP 429.*45 seconds"):
+        client._decode(response)
+
+
+def test_default_transport_does_not_retry_http_429():
+    client = MFLClient(_config())
+    retries = client.session.get_adapter("https://").max_retries
+    assert 429 not in retries.status_forcelist
+    assert 500 in retries.status_forcelist
+
+
 class LeagueSession(LoginSession):
     def get(self, url: str, **kwargs: Any) -> JsonResponse:
         return JsonResponse(

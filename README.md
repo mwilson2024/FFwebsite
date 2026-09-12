@@ -48,8 +48,11 @@ MFL login details in the repository.
 - Kickoff locks are checked before lineup or player-move submissions.
 - Live scoring automatically polls only while an NFL game is in progress.
 - MFL scores remain authoritative when detailed stat feeds differ.
-- Safe diagnostic records rotate under `logs/errors.log`; credentials, cookies,
-  request bodies, and raw exception messages are excluded.
+- Detailed diagnostic records rotate under `logs/errors.log` and are also sent
+  to standard output for Railway Deploy Logs. They include the complete
+  exception chain, stack frames, HTTP status, safe endpoint details, and rate
+  limit headers. Credentials, cookies, authorization values, and request bodies
+  are redacted or excluded.
 
 ## Tests
 

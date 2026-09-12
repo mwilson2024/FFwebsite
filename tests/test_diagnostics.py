@@ -24,7 +24,7 @@ def test_error_log_does_not_capture_credentials_or_query_values(monkeypatch, tmp
     assert "password" not in text
 
 
-def test_exception_details_log_frames_but_not_messages(monkeypatch, tmp_path):
+def test_exception_details_log_full_chain_but_redacts_sensitive_messages(monkeypatch, tmp_path):
     logger = logging.Logger("isolated-exception")
     monkeypatch.setattr(diagnostics, "_logger", logger)
     path = tmp_path / "errors.log"
@@ -39,6 +39,28 @@ def test_exception_details_log_frames_but_not_messages(monkeypatch, tmp_path):
     text = path.read_text()
     assert "ValueError" in text and "test_diagnostics.py" in text
     assert "secret-cookie-value" not in text
+
+
+def test_exception_details_keep_useful_provider_failure(monkeypatch, tmp_path):
+    logger = logging.Logger("isolated-provider-error")
+    monkeypatch.setattr(diagnostics, "_logger", logger)
+    path = tmp_path / "errors.log"
+    monkeypatch.setattr(diagnostics, "LOG_PATH", path)
+    try:
+        try:
+            raise TimeoutError("MFL returned HTTP 429 after retries")
+        except TimeoutError as cause:
+            raise RuntimeError("Could not load lineup") from cause
+    except RuntimeError as error:
+        diagnostics.log_error("lineup_load_failed", error)
+    for handler in logger.handlers:
+        handler.flush()
+        handler.close()
+    text = path.read_text()
+    assert "Could not load lineup" in text
+    assert "MFL returned HTTP 429 after retries" in text
+    assert '"chain"' in text
+    assert "RuntimeError" in text and "TimeoutError" in text
 
 
 def test_browser_error_reports_require_session_and_csrf(monkeypatch):
