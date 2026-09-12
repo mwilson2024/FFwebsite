@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Review trade · {{ league.name }}</title>
+  <link rel="stylesheet" href="/static/app.css?v=20260910-modern"><link rel="stylesheet" href="/static/workspace.css?v=2">
+  <link rel="stylesheet" href="/static/trades.css?v=1"><link rel="stylesheet" href="/static/lions.css?v=1">
+  {% include '_theme_assets.html' %}
+</head>
+<body>
+  {% set active_tool = 'trades' %}{% include '_league_header.html' %}
+  <main class="review-shell">
+    <p class="eyebrow">{{ league.name }} · TRADE OFFER</p>
+    {% if validation_error %}<h1>Offer not ready</h1><div class="error" role="alert">{{ validation_error }}{% include '_error_reference.html' %}</div>
+    {% elif draft.status == 'draft' %}<h1>Review your offer to {{ draft.target_name }}</h1><p class="helper">Confirm the exact players and message below. This review expires after 20 minutes.</p>
+    {% elif draft.status == 'sent' %}<h1>Offer sent to {{ draft.target_name }}</h1><p class="helper" role="status">{{ draft.message }}</p>
+    {% elif draft.status == 'sending' %}<h1>Sending your offer</h1><p class="helper">Refresh this page to check the result. Do not create the same offer again.</p>
+    {% else %}<h1>{{ 'Offer not sent' if draft.status == 'failed' else 'Offer not confirmed' }}</h1><div class="error" role="alert">{{ draft.message }}{% include '_error_reference.html' %}</div>{% endif %}
+    {% if draft %}
+    <div class="trade-rosters trade-review-rosters">
+      {% for title, players in [('You send', draft.give), ('You receive', draft.receive)] %}<section class="trade-roster"><header><h2>{{ title }}</h2></header><ul>{% for player in players %}<li><strong>{{ player.name }}</strong><small>{{ player.position }} · {{ player.team }}</small></li>{% endfor %}</ul></section>{% endfor %}
+    </div>
+    {% if draft.comments %}<section class="trade-message"><h2>Your message</h2><p>{{ draft.comments }}</p></section>{% endif %}
+    {% if draft.status == 'draft' %}
+    <div class="warning"><strong>This sends an offer to the other owner on MFL.</strong><span>It does not immediately swap players. The offer uses MFL’s default one-week expiration. The other owner must respond; league approval rules may also apply.</span></div>
+    <form method="post" action="/trades/send/{{ pending_id }}" class="trade-confirm"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button type="submit">Confirm &amp; send offer to MFL</button></form>
+    {% endif %}
+    {% endif %}
+    <a class="secondary-action" href="/trades?league={{ league.id }}{% if draft %}&target={{ draft.target }}{% endif %}">Back to trade builder</a>
+  </main>
+</body>
+</html>

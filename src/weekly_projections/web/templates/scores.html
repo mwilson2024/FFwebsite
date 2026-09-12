@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  
+  <title>{{ league.name }} · Week {{ week or '—' }} Scores</title>
+  <link rel="stylesheet" href="/static/app.css?v=20260910-modern">
+  <link rel="stylesheet" href="/static/workspace.css?v=2">
+  <link rel="stylesheet" href="/static/fantasy.css?v=status-5">
+  <link rel="stylesheet" href="/static/lions.css?v=1">
+  <meta name="csrf-token" content="{{ session.csrf_token }}">
+  <script src="/static/diagnostics.js" defer></script><script src="/static/app.js?v=scoring-6" defer></script>
+  {% include '_theme_assets.html' %}
+</head>
+<body class="gameday-page" data-live-refresh="{{ refresh_seconds }}" data-next-kickoff="{{ next_kickoff or '' }}" data-live-window="/api/live-window?league={{ league.id }}&week={{ week or 1 }}">
+  {% set active_tool = 'scores' %}{% include '_league_header.html' %}
+  <main class="gameday-shell">
+    <div class="gameday-toolbar">
+      <div><p class="eyebrow">GAME DAY</p><h1>Matchup</h1></div>
+      <form class="week-picker score-filters" method="get" action="/scores">
+        <input type="hidden" name="league" value="{{ league.id }}">
+        <label>View week<select name="week" id="score-week">{% for item in weeks %}<option value="{{ item }}" {% if item == week %}selected{% endif %}>Week {{ item }}{% if item == current_week %} · Current{% endif %}</option>{% endfor %}</select></label>
+        {% if live %}<label>Matchup<select id="matchup-picker" name="matchup"><option value="">My matchup</option>{% for game in live.matchups %}<option value="{{ loop.index0 }}" {% if viewed_matchup == loop.index0 %}selected{% endif %}>{% for team in game.franchises %}{{ franchise_names.get(team.franchise_id, 'Team ' ~ team.franchise_id) }}{{ ' vs ' if not loop.last }}{% endfor %}</option>{% endfor %}</select></label>{% endif %}<button type="submit">View</button>
+      </form>
+    </div>
+    {% if error %}<div class="error" role="alert">{{ error }}{% include '_error_reference.html' %}</div>{% endif %}
+    {% if head_to_head %}
+    <section class="matchup-arena" aria-label="Week {{ week }} matchup">
+      <div class="arena-strip"><span>WEEK {{ week }}</span><strong>{{ head_to_head.game_state }}</strong><span>MFL LIVE SCORING</span></div>
+      {% set forecast = head_to_head.forecast %}
+      <div class="arena-scoreboard">
+        {% for team in head_to_head.teams %}
+        <article class="arena-team {{ 'your-team' if team.franchise_id == league.franchise_id else 'opponent-team' }}">
+          <span class="team-monogram" aria-hidden="true">{{ team.name[:2]|upper }}</span>
+          <h2>{{ team.name }}</h2><small>{{ 'YOUR TEAM' if team.franchise_id == league.franchise_id else 'LEAGUE TEAM' }}</small>
+          <strong class="arena-total">{{ '%.2f'|format(team.score) }}</strong>
+          <span class="win-probability">{% if forecast %}{% set chance = forecast.percentages[loop.index0] %}{% if chance is none %}Tie{% elif forecast.final %}{{ 'Won · 100%' if chance == 100 else 'Lost · 0%' }}{% else %}{{ chance }}% estimated win{% endif %}{% else %}Win estimate unavailable{% endif %}</span>
+          {% set starters = team.players|selectattr('is_starter')|list %}
+          {% set projected = starters|selectattr('projection','ne',none)|list %}
+          <span class="arena-projection">{% if projected|length == starters|length and starters %}{{ '%.1f'|format(projected|sum(attribute='projection')) }} projected{% else %}Projection incomplete{% endif %}</span>
+          <div class="starter-status-counts" aria-label="Starter game status">
+            <span class="game-status-badge live">{{ team.starters_playing }} playing</span>
+            <span class="game-status-badge upcoming">{{ team.starters_left }} yet to play</span>
+            <span class="game-status-badge final">{{ starters|selectattr('game_state', 'equalto', 'Final')|list|length }} final</span>
+            <small>Starters only</small>
+          </div>
+          <details class="team-points-breakdown">
+            <summary>Points breakdown</summary>
+            <dl>{% for starter in team.starters %}<div><dt>{{ starter.player.name }}</dt><dd>{{ '%.2f'|format(starter.score) }}</dd></div>{% endfor %}
+              <div class="breakdown-total"><dt>Starter total</dt><dd>{{ '%.2f'|format(team.starter_points) }}</dd></div>
+              {% if team.score_difference %}<div><dt>MFL total difference*</dt><dd>{{ '%+.2f'|format(team.score_difference) }}</dd></div>{% endif %}
+              <div class="breakdown-total"><dt>Official MFL total</dt><dd>{{ '%.2f'|format(team.score) }}</dd></div>
+            </dl>
+            {% if team.score_difference %}<small>*MFL’s team total differs from the listed starters. This may reflect a scoring adjustment or feed timing; bench points are not added.</small>{% endif %}
+          </details>
+        </article>
+        {% endfor %}
+      </div>
+      <div class="matchup-section-heading"><h2>Starters</h2><div>{% if week > 1 %}<a href="/scores?league={{ league.id }}&week={{ week - 1 }}" aria-label="Previous week">‹</a>{% endif %}<span>Week {{ week }}</span>{% if week < 18 %}<a href="/scores?league={{ league.id }}&week={{ week + 1 }}" aria-label="Next week">›</a>{% endif %}</div></div>
+      <div class="paired-boxscore">{% set paired_rows = head_to_head.rows() %}{% include '_matchup_rows.html' %}</div>
+      {% if not head_to_head.rows() %}<p class="empty">MFL has not published starter scoring for this matchup yet.</p>{% endif %}
+      <details class="matchup-bench"><summary>Bench players</summary>{% set paired_rows = head_to_head.rows(false) %}{% include '_matchup_rows.html' %}</details>
+      <details class="forecast-method"><summary>About the win estimate</summary><p>A rough, uncalibrated estimate from current MFL points, league-scored projections and game time remaining. It assumes independent player outcomes with a 65% projection-based spread. Missing starters or projections can make it unavailable; it is not MFL’s official probability.</p></details>
+      <footer class="scoring-attribution">Scores and projections use this league’s MFL scoring rules.<span id="refresh-status">{% if refresh_seconds %}Live · updates in <b id="refresh-countdown">{{ refresh_seconds }}</b>s{% elif next_kickoff %}Auto-updates paused until the next NFL kickoff.{% else %}Auto-updates paused · no NFL game confirmed live.{% endif %}</span><a href="/scores?league={{ league.id }}&week={{ week }}{% if viewed_matchup is not none and viewed_matchup is defined %}&matchup={{ viewed_matchup }}{% endif %}">Refresh now</a></footer>
+    </section>
+    {% endif %}
+    {% if live %}
+    <details class="other-matchups"><summary>All Week {{ week }} league matchups</summary><div class="other-matchup-grid">
+      {% for matchup in live.matchups %}<article>{% for team in matchup.franchises %}<div><span>{{ franchise_names.get(team.franchise_id, 'Franchise ' ~ team.franchise_id) }}</span><strong>{{ '%.2f'|format(team.score) }}</strong></div>{% endfor %}<a href="/scores?league={{ league.id }}&week={{ week }}&matchup={{ loop.index0 }}">View box score →</a></article>{% endfor %}
+    </div></details>
+    {% endif %}
+  </main>
+  {% include '_player_card.html' %}
+  <dialog id="points-card" class="points-card" aria-labelledby="points-card-title">
+    <header><div><p class="eyebrow">LEAGUE SCORING</p><h2 id="points-card-title">Points breakdown</h2></div><form method="dialog"><button aria-label="Close points breakdown">×</button></form></header>
+    <div id="points-card-content" class="starter-stat-content" aria-live="polite"></div>
+  </dialog>
+</body>
+</html>

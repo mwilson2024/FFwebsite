@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Trades · {{ league.name }}</title>
+  <link rel="stylesheet" href="/static/app.css?v=20260910-modern">
+  <link rel="stylesheet" href="/static/workspace.css?v=2">
+  <link rel="stylesheet" href="/static/fantasy.css?v=status-5">
+  <link rel="stylesheet" href="/static/trades.css?v=1">
+  <link rel="stylesheet" href="/static/hub.css?v=1">
+  <link rel="stylesheet" href="/static/lions.css?v=1">
+  <meta name="csrf-token" content="{{ session.csrf_token }}">
+  <script src="/static/app.js?v=scoring-7" defer></script><script src="/static/trades.js?v=1" defer></script><script src="/static/hub.js?v=1" defer></script>
+  {% include '_theme_assets.html' %}
+</head>
+<body>
+  {% set active_tool = 'trades' %}{% include '_league_header.html' %}
+  <main class="workspace trade-workspace">
+    <div class="page-heading"><div><p class="eyebrow">TRADE CENTER</p><h1>Build an offer</h1></div></div>
+    <div class="trade-tabs"><a href="#trade-builder">Build offer</a><a href="#trade-block">Trade block</a><a href="#trade-ideas">Suggested trades</a></div>
+    <form method="get" action="/trades" class="trade-selectors">
+      <input type="hidden" name="league" value="{{ league.id }}">
+      <label>Trade partner<select name="target"><option value="">Choose a team</option>{% for id, name in teams.items() %}<option value="{{ id }}" {% if id == target %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>
+      <button type="submit">Load rosters</button>
+    </form>
+    {% if error %}<div class="error" role="alert">{{ error }}{% include '_error_reference.html' %}</div>{% endif %}
+    {% if not error %}
+    <form method="post" action="/trades/preview" id="trade-builder">
+      <input type="hidden" name="league" value="{{ league.id }}"><input type="hidden" name="target" value="{{ target }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <div class="trade-submit-row"><p id="trade-selection-status" role="status">Choose at least one player from each team.</p><button type="submit" id="review-trade" {% if not target %}disabled{% endif %}>Review offer →</button></div>
+      <div class="trade-rosters">
+        {% for side, players, title, team_name in [('give', own_players, 'You send', 'Your team'), ('receive', other_players, 'You receive', teams.get(target, 'Choose a trade partner'))] %}
+        <section class="trade-roster" aria-label="{{ title }}">
+          <header><div><p class="eyebrow">{{ team_name }}</p><h2>{{ title }}</h2></div><span class="trade-count" data-count="{{ side }}">0 selected</span></header>
+          <div class="trade-player-list">
+            {% for player in players %}<div class="trade-player"><label class="trade-check"><input type="checkbox" name="{{ side }}" value="{{ player.id }}" {% if (side == 'give' and player.id in suggested_give) or (side == 'receive' and player.id == suggested_receive) %}checked{% endif %} aria-label="{{ title }} {{ player.name }}"></label>{% include '_player_identity.html' %}{% if side == 'receive' %}<a class="suggest-player-offer" href="/trades?league={{ league.id }}&target={{ target }}&wanted={{ player.id }}#trade-ideas" aria-label="Suggest offers for {{ player.name }}">Suggest offer</a>{% endif %}</div>{% else %}<p class="empty">{{ 'Choose a team above to see its roster.' if side == 'receive' and not target else 'No rostered players available.' }}</p>{% endfor %}
+          </div>
+        </section>
+        {% endfor %}
+      </div>
+      <div class="trade-compose">
+        <details class="trade-message-toggle"><summary>Add a message to the other owner</summary><label for="trade-comments">Optional message · 500 characters</label><textarea id="trade-comments" name="comments" maxlength="500" rows="3" placeholder="Add a note about your offer"></textarea></details>
+        <p class="fine-print">Nothing is sent until you confirm on the next screen. Player trades only; MFL applies trade deadlines, roster, salary and approval rules. Game-day lineup locks do not automatically prevent a trade proposal.</p>
+      </div>
+    </form>
+    {% endif %}
+    <section class="hub-panel" id="trade-block"><div class="hub-panel-heading"><h2>League trade block</h2><span>MFL</span></div><div data-hub-url="/hub/block?league={{ league.id }}" aria-live="polite"><p>Loading trade block…</p></div></section>
+    <section class="hub-panel" id="trade-ideas"><div class="hub-panel-heading"><h2>Trade suggestion engine</h2><span>League-scored lineup analysis</span></div>
+      {% if target and other_players %}<form class="target-offer-form" action="/trades#trade-ideas" method="get"><input type="hidden" name="league" value="{{ league.id }}"><input type="hidden" name="target" value="{{ target }}"><label>Player you want from {{ teams.get(target, 'this team') }}<select name="wanted" required><option value="">Choose a player</option>{% for player in other_players %}<option value="{{ player.id }}" {% if wanted == player.id %}selected{% endif %}>{{ player.name }} · {{ player.position }}</option>{% endfor %}</select></label><label>Offer size<select name="package_size"><option value="1" {% if package_size == 1 %}selected{% endif %}>One player</option><option value="2" {% if package_size == 2 %}selected{% endif %}>Up to two players</option></select></label><button>Find offers</button></form>{% else %}<p>Choose a trade partner above, then select a player you want or tap “Suggest offer” beside their name.</p>{% endif %}
+      <div data-hub-url="/hub/ideas?league={{ league.id }}{% if wanted and target %}&target={{ target }}&wanted={{ wanted }}&package_size={{ package_size }}{% endif %}" aria-live="polite"><p>Comparing legal lineups and offer packages…</p></div>
+    </section>
+  </main>
+  {% include '_player_card.html' %}
+</body>
+</html>

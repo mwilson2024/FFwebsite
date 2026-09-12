@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  
+  <title>Connect MFL · Weekly Projections</title>
+  <link rel="stylesheet" href="/static/app.css?v=20260910-modern">
+  <link rel="stylesheet" href="/static/workspace.css?v=2">
+  <link rel="stylesheet" href="/static/lions.css?v=1">
+  {% include '_theme_assets.html' %}
+</head>
+<body class="login-page">
+  <main class="login-shell">
+    <section class="brand-panel" aria-label="Weekly Projections">
+      <div class="brand-mark">WP</div>
+      <p class="eyebrow">WEEKLY PROJECTIONS</p>
+      <h1>Your leagues.<br><span>Your next move.</span></h1>
+      <p class="brand-copy">Your lineup, the waiver wire, and game day. Together in one place.</p>
+      <div class="login-features"><span>Smart lineups</span><span>Weekly projections</span><span>Live matchups</span></div>
+      <div class="trust-row">Connected to MyFantasyLeague</div>
+    </section>
+    <section class="login-card">
+      <div>
+        <p class="eyebrow muted">MYFANTASYLEAGUE</p>
+        <h2>Connect your account</h2>
+        <p class="helper">Your leagues will appear automatically after sign-in.</p>
+      </div>
+      {% if error %}<div class="error" role="alert">{{ error }}{% include '_error_reference.html' %}</div>{% endif %}
+      <form method="post" action="/login" class="stack" data-mfl-login>
+        <fieldset class="login-method"><legend>Connect with</legend><label><input type="radio" name="login_method" value="password" checked> Password</label><label><input type="radio" name="login_method" value="api-key"> API key</label></fieldset>
+        <div class="login-method-fields" data-login-fields="password"><label>Username or email
+          <input name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+        </label>
+        <label>Password
+          <input name="password" type="password" autocomplete="current-password" required>
+        </label></div>
+        <div class="login-method-fields" data-login-fields="api-key" hidden><label>MFL API key
+          <input name="api_key" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="512">
+        </label><p class="fine-print">Used only for this temporary session. It is never saved in your browser, cookies, or local files.</p></div>
+        <label>Season
+          <input name="year" type="number" min="2020" max="2100" value="{{ year }}" required>
+        </label>
+        <button type="submit">Connect MFL <span aria-hidden="true">→</span></button>
+      </form>
+      <p class="fine-print">Credentials are sent only to MFL and held in server memory for this session.</p>
+    </section>
+  </main>
+</body>
+</html>

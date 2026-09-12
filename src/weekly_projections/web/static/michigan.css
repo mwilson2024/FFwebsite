@@ -1,0 +1,97 @@
+/* Live Scores only: U-M Michigan Blue #00274c and Maize #ffcb05. */
+.gameday-page {
+  --michigan-blue:#00274c; --michigan-maize:#ffcb05;
+  --ink:#f7f9fc; --muted:#b8c9dc; --blue:#ffdc61; --acid:#ffcb05;
+  background:#001a33; color:#f7f9fc;
+}
+.gameday-page .topbar { background:#00274c; border-bottom:4px solid #ffcb05; }
+.gameday-page .brand-mark { background:#ffcb05; color:#00274c; border-color:#ffcb05; }
+.gameday-page .topbar .section-nav a.active { color:#00274c; background:#ffcb05; box-shadow:none; }
+.gameday-page .topbar .section-nav a:hover { color:#00274c; background:#ffe278; }
+.score-topbar { flex-wrap:wrap; }
+.score-topbar .header-league-picker { display:flex; gap:.5rem; margin-left:auto; flex:0 1 280px; min-width:0; }
+.header-league-picker label { flex:1; min-width:0; }
+.gameday-page .header-league-picker select { background:#0b385f; color:#fff; border-color:#a1b6ca; width:100%; }
+.gameday-page .header-league-picker button,.gameday-page .gameday-toolbar button { background:#ffcb05; color:#00274c; border-color:#ffcb05; }
+.gameday-page .header-league-picker button:hover,.gameday-page .gameday-toolbar button:hover { background:#ffe278; color:#00274c; }
+.gameday-shell { max-width:1280px; }
+.gameday-toolbar .week-picker { width:auto; min-width:260px; }
+.gameday-toolbar .week-picker select { min-width:190px; }
+.gameday-toolbar select { background:#0b385f; border-color:#597591; }
+.gameday-toolbar .eyebrow { color:#ffcb05; }
+.matchup-arena,.other-matchups { background:#00274c; border-color:#3e5f7b; }
+.arena-strip { background:#0b355a; border-color:#3e5f7b; }
+.arena-scoreboard { background:linear-gradient(115deg,#123f68,#00274c); border-bottom:3px solid #ffcb05; }
+.arena-team .team-monogram { background:#ffcb05; color:#00274c; border-color:#ffdf68; }
+.opponent-team .team-monogram { background:#00274c; color:#ffcb05; border-color:#ffcb05; }
+.your-team .arena-total { color:#ffcb05; }
+.win-probability,.matchup-section-heading > div { color:#ffe278; }
+.matchup-section-heading a { background:#123f68; color:#ffcb05; border-color:#748b9f; }
+.matchup-position { color:#00274c; background:#ffcb05; }
+.matchup-player-row { border-color:#355672; align-items:start; padding-bottom:.55rem; }
+.matchup-player-side[data-game-state] { border-bottom:0; padding-bottom:0; }
+.matchup-player-info { flex:1; }
+.matchup-identity-line { display:flex; align-items:center; gap:.6rem; min-width:0; }
+.matchup-identity-line .player-identity { flex:1; min-width:0; }
+.matchup-identity-line .game-status-badge { flex-shrink:0; font-size:.875rem; }
+.away-side .matchup-identity-line { flex-direction:row-reverse; }
+.matchup-player-points { min-width:54px; }
+.matchup-stat-row { gap:calc(44px + 1.6rem); padding-bottom:1rem; }
+.player-stat-line { padding:.45rem 0 .7rem; color:#dce8f5; font-size:.875rem; line-height:1.5; min-height:70px; }
+.player-stat-line h3,.player-stat-line > strong { display:block; margin:0 0 .3rem; font-size:.875rem; color:#ffdf68; font-weight:600; }
+.player-stat-line p { margin:.25rem 0; }
+.starter-stat-details { background:#092f52; border:1px solid #597591; border-radius:9px; overflow:hidden; }
+.starter-stat-details summary { padding:.65rem .8rem; min-height:44px; }
+.starter-stat-content { border:0; border-top:1px solid #3e5f7b; border-radius:0; background:#0d3658; }
+.team-points-breakdown summary,.starter-stat-details summary { color:#ffe278; }
+.gameday-page .headshot-wrap { background:#23496a; }
+.other-matchup-grid article { background:#0d3658; }
+.scoring-attribution { background:#0b355a; }
+.matchup-bench { border-color:#597591; }
+.starter-stat-details summary:focus-visible,.team-points-breakdown summary:focus-visible { outline-color:#ffcb05; outline-offset:-3px; }
+.gameday-page .player-card { border-top-color:#ffcb05; --acid:#00274c; --blue:#00274c; }
+.gameday-page .player-card .card-points { background:#fff5cc; }
+.gameday-page .player-card .card-points strong { color:#00274c; }
+.gameday-page ::selection { background:#ffcb05; color:#00274c; }
+.gameday-page .league-topbar .header-league-picker { margin:0; }
+.gameday-page .league-topbar .header-league-picker select { background:#0b385f; border-color:#8198af; }
+.matchup-identity-line .player-identity { justify-content:flex-start; padding:0; text-align:left; }
+.away-side .matchup-identity-line .player-identity { justify-content:flex-end; text-align:right; }
+.matchup-player-info { align-self:center; }
+.stat-line-heading { display:flex; align-items:center; justify-content:space-between; gap:.5rem; flex-wrap:wrap; color:#ffdf68; font-size:.8rem; }
+.gameday-page .points-trigger { display:inline-flex; min-height:44px; padding:.25rem .4rem; margin:0; border:0; background:transparent; color:#ffdf68; font-weight:500; font-size:.8rem; text-align:right; }
+.gameday-page .points-trigger:hover { background:#123f68; color:#fff; }
+.gameday-page .points-trigger:focus-visible { outline:2px solid #ffcb05; outline-offset:2px; }
+.player-stat-line { min-height:0; padding:0 0 .4rem; }
+.points-card { width:min(560px,calc(100vw - 1.5rem)); max-height:85dvh; padding:1.3rem; color:#f7f9fc; background:#00274c; border:1px solid #7890a8; border-top:4px solid #ffcb05; border-radius:16px; overflow:auto; box-shadow:0 24px 80px #0008; }
+.points-card::backdrop { background:#000b; }
+.points-card > header { display:flex; align-items:start; justify-content:space-between; gap:1rem; }
+.points-card h2 { font-size:1.2rem; line-height:1.4; margin:.3rem 0 1rem; }
+.points-card .eyebrow { color:#ffcb05; margin:0; }
+.points-card header button { color:#ffcb05; background:#123f68; width:44px; height:44px; border:1px solid #7890a8; padding:0; font-size:1.5rem; }
+.points-card .starter-stat-content { padding:1rem; border-radius:10px; border:1px solid #3e5f7b; }
+.points-card dl { margin:0 0 1rem; }
+.points-card dl > div { display:flex; justify-content:space-between; gap:1rem; padding:.6rem 0; }
+.points-card dd { margin:0; white-space:nowrap; font-variant-numeric:tabular-nums; }
+@media(max-width:900px) {
+  .score-topbar .section-nav { order:3; width:100%; margin:0; }
+  .score-topbar .header-league-picker { margin-left:auto; }
+  .matchup-player-side { flex-direction:column; align-items:stretch; }
+  .matchup-player-points { display:flex; align-items:baseline; justify-content:space-between; }
+  .away-side .matchup-player-points { flex-direction:row-reverse; }
+}
+@media(max-width:700px) {
+  .gameday-toolbar { flex-direction:row; align-items:end; }
+  .gameday-toolbar .week-picker { min-width:0; width:auto; flex-wrap:nowrap; }
+  .gameday-toolbar .week-picker select { min-width:0; }
+  .gameday-toolbar .week-picker label { max-width:180px; }
+  .gameday-toolbar h1 { font-size:1.4rem; }
+  .matchup-stat-row { gap:.7rem; }
+  .matchup-identity-line { gap:.3rem; }
+  .matchup-identity-line .game-status-badge { max-width:68px; padding:.2rem .3rem; line-height:1.25; }
+  .matchup-identity-line .game-status-badge::before { display:none; }
+  .matchup-player-row .player-identity { flex-wrap:wrap; }
+  .away-side .player-identity { justify-content:flex-end; }
+  .player-stat-line { min-height:0; }
+  .starter-stat-details summary { padding:.6rem; }
+}

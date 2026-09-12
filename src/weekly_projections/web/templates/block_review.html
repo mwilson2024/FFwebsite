@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Review trade block · {{ league.name }}</title>
+  <link rel="stylesheet" href="/static/app.css?v=20260910-modern"><link rel="stylesheet" href="/static/workspace.css?v=2"><link rel="stylesheet" href="/static/hub.css?v=1"><link rel="stylesheet" href="/static/lions.css?v=1">
+  {% include '_theme_assets.html' %}
+</head><body>
+  {% set active_tool = 'trades' %}{% include '_league_header.html' %}
+  <main class="review-shell"><p class="eyebrow">{{ league.name }} · YOUR TRADE BLOCK</p>
+  {% if error %}<h1>Update not ready</h1><p role="alert">{{ error }}</p>
+  {% elif draft.status == 'draft' %}<h1>Review your trade-block update</h1><p>Adding {% for player in draft.players %}{{ player.name }}{{ ', ' if not loop.last }}{% endfor %}. This preview expires in 20 minutes.</p>
+  {% else %}<h1>{{ 'Trade block updated' if draft.status == 'sent' else 'Update not confirmed' }}</h1><p role="status">{{ draft.message or 'An update is running. Refresh to check; do not post again.' }}</p>{% endif %}
+  {% if draft %}<section class="hub-panel"><h2>Your complete resulting block</h2><ul>{% for asset in draft.assets %}<li>{{ asset }}</li>{% endfor %}</ul><h3>Looking for</h3><p>{{ draft.wanted or 'No request text' }}</p>{% if draft.expected.wanted != draft.wanted %}<small>Replaces: {{ draft.expected.wanted or 'No request text' }}</small>{% endif %}</section>
+  {% if draft.status == 'draft' %}<p>This updates the listing visible to your league. It does not send an offer. Existing players, picks and bid-money listings are retained. If the block has changed since this preview, the update will stop.</p><form method="post" action="/trade-block/send/{{ pending_id }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button>Confirm &amp; post to MFL trade block</button></form>{% endif %}{% endif %}
+  <p><a href="/trades?league={{ league.id }}#trade-block">Back to trade center</a></p></main>
+</body></html>

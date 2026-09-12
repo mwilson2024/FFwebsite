@@ -1,0 +1,4 @@
+<button type="button" class="player-identity" data-player-card="{{ player.id }}" data-league="{{ league.id }}" data-week="{{ week or session.selected_week or '' }}" aria-label="Player card: {{ player.name }}">
+  <span class="headshot-wrap"><span aria-hidden="true">{{ player.position or 'NFL' }}</span>{% if player.photo_url %}<img class="player-headshot" src="{{ player.photo_url }}" alt="" loading="lazy" width="48" height="48" referrerpolicy="no-referrer">{% endif %}</span>
+  <span><strong>{{ player.name }}</strong><small>{{ player.team or 'FA' }} · {{ player.position }}{% if player.jersey %} · #{{ player.jersey }}{% endif %}</small></span>
+</button>

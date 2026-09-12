@@ -1,0 +1,21 @@
+{% set nav_week = session.selected_week or week|default(none) %}
+<nav class="section-nav" aria-label="League tools">
+  <a {% if active_tool == 'home' %}class="active" aria-current="page"{% endif %} href="/home?league={{ league.id }}"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7M5 9v11h5v-6h4v6h5V9"/></svg><span>Home</span></a>
+  <a {% if active_tool == 'lineup' %}class="active" aria-current="page"{% endif %} href="/lineup?league={{ league.id }}{% if nav_week %}&week={{ nav_week }}{% endif %}">
+    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 4v16M9 10h11M9 15h11"/></svg>
+    <span>Lineup</span>
+  </a>
+  <a {% if active_tool == 'moves' %}class="active" aria-current="page"{% endif %} href="/moves?league={{ league.id }}">
+    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h15m-4-4 4 4-4 4M20 16H5m4-4-4 4 4 4"/></svg>
+    <span>Players</span>
+  </a>
+  <a {% if active_tool == 'scores' %}class="active" aria-current="page"{% endif %} href="/scores?league={{ league.id }}{% if nav_week %}&week={{ nav_week }}{% endif %}">
+    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17h3l3-9 4 12 3-8h5M4 4h16"/></svg>
+    <span>Scores</span>
+  </a>
+  <a {% if active_tool == 'trades' %}class="active" aria-current="page"{% endif %} href="/trades?league={{ league.id }}">
+    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h17m-4-4 4 4-4 4M21 17H4m4-4-4 4 4 4"/></svg>
+    <span>Trades</span>
+  </a>
+  <a aria-label="League standings" {% if active_tool == 'standings' %}class="active" aria-current="page"{% endif %} href="/standings?league={{ league.id }}"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V10h4v10M10 20V4h4v16M15 20v-7h4v7M3 20h18"/></svg><span>Standings</span></a>
+</nav>

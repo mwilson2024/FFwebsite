@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  
+  <title>Review Week {{ preview.week }} Lineup · {{ league.name }}</title><link rel="stylesheet" href="/static/app.css?v=20260910-modern">
+  <link rel="stylesheet" href="/static/workspace.css?v=2">
+  <link rel="stylesheet" href="/static/lions.css?v=1">
+  {% include '_theme_assets.html' %}
+</head>
+<body>
+  <header class="topbar"><a href="/dashboard" class="brand-mark small">WP</a><strong>{{ league.name }}</strong><span class="season">Week {{ preview.week }} · League {{ league.id }}</span></header>
+  <main class="review-shell lineup-review-shell">
+    {% if success %}
+      <p class="eyebrow">LINEUP SENT</p><h1>{{ success }}</h1>
+      <div class="success-mark" aria-hidden="true">✓</div>
+      <div class="review-actions"><a class="secondary-action" href="/lineup?league={{ league.id }}&week={{ preview.week }}">Back to lineup</a></div>
+    {% elif error %}
+      <p class="eyebrow danger-text">MFL DID NOT CONFIRM</p><h1>The lineup was not confirmed.</h1><div class="error" role="alert">{{ error }}{% include '_error_reference.html' %}</div>
+      <p class="helper">MFL may have locked a player whose game started. Check the lineup on MFL before trying again.</p><div class="review-actions"><a class="secondary-action" href="/lineup?league={{ league.id }}&week={{ preview.week }}">Back to lineup</a></div>
+    {% else %}
+      <div class="page-heading"><div><p class="eyebrow">WEEK {{ preview.week }} LINEUP</p><h1>Confirm your starters.</h1></div><div class="step-chip">Review</div></div>
+      <div class="lineup-change-summary">
+        <article><span class="move-label add-label">START</span>{% if starts %}{% for player in starts %}<strong>{{ player.name }}</strong><small>{{ player.position }} · {{ player.team }}</small>{% endfor %}{% else %}<p>No new starters</p>{% endif %}</article>
+        <article><span class="move-label drop-label">SIT</span>{% if sits %}{% for player in sits %}<strong>{{ player.name }}</strong><small>{{ player.position }} · {{ player.team }}</small>{% endfor %}{% else %}<p>No new bench players</p>{% endif %}</article>
+      </div>
+      <div class="lineup-total"><span>Current projection <strong>{{ '%.1f'|format(preview.current_projection) }}</strong></span><span>New projection <strong>{{ '%.1f'|format(preview.projected_total) }}</strong></span><span>Change <strong class="{% if preview.projected_total > preview.current_projection %}positive{% endif %}">{% if preview.projected_total > preview.current_projection %}+{% endif %}{{ '%.1f'|format(preview.projected_total - preview.current_projection) }}</strong></span></div>
+      <section class="final-starters"><p class="eyebrow muted">FINAL STARTERS</p><div>{% for player in preview.starters %}<span><b>{{ player.position }}</b> {{ player.name }}</span>{% endfor %}</div></section>
+      <div class="warning"><strong>This changes your MFL starting lineup.</strong><span>MFL applies kickoff locks and all league lineup rules when you submit.</span></div>
+      <div class="review-actions"><a class="secondary-action" href="/lineup?league={{ league.id }}&week={{ preview.week }}">Go back</a><form method="post" action="/lineup/submit/{{ pending_id }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="confirm-button" type="submit">Confirm lineup on MFL <span>→</span></button></form></div>
+    {% endif %}
+  </main>
+</body>
+</html>

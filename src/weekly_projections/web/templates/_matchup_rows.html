@@ -1,0 +1,27 @@
+{% for left, right, position in paired_rows %}
+<div class="matchup-player-row">
+  {% for item in [left, right] %}
+  {% if loop.index == 2 %}<span class="matchup-position">{{ position or '—' }}</span>{% endif %}
+  <div class="matchup-player-side {{ 'away-side' if loop.index == 2 else 'own-side' }}"{% if item %} data-game-state="{{ item.game_state|lower }}"{% endif %}>
+    {% if item %}
+    <div class="matchup-player-info"><div class="matchup-identity-line">{% set player = item.player %}{% include '_player_identity.html' %}<span class="game-status-badge {{ item.game_state|lower }}">{{ 'Playing' if item.game_state == 'Live' else 'Yet to play' if item.game_state == 'Upcoming' else 'Final' }}</span></div></div>
+    <div class="matchup-player-points"><strong>{{ '%.2f'|format(item.score) }}</strong><small>{% if item.projection is not none %}{{ '%.1f'|format(item.projection) }} proj{% else %}— proj{% endif %}</small></div>
+    {% else %}<span class="empty-slot">No player</span>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% if (left and left.is_starter) or (right and right.is_starter) %}
+<div class="matchup-stat-row">
+  {% for item in [left, right] %}
+  <div>
+    {% if item and item.is_starter %}
+    <section class="player-scoring-panel" aria-label="{{ item.player.name }} stats and points">
+    <div class="stat-line-heading"><strong>{{ 'Final stat line' if item.game_state == 'Final' else 'Stat line' }}</strong><button type="button" class="points-trigger" aria-haspopup="dialog" aria-controls="points-card" data-player-name="{{ item.player.name }}" data-scoring-player="{{ item.player.id }}" data-game-state="{{ item.game_state|lower }}" data-stat-line="stat-line-{{ head_to_head.teams[loop.index0].franchise_id }}-{{ item.player.id }}" data-league="{{ league.id }}" data-week="{{ week }}" data-franchise="{{ head_to_head.teams[loop.index0].franchise_id }}" data-official-points="{{ item.score }}">Points breakdown<span class="sr-only"> for {{ item.player.name }}</span> ↗</button></div>
+    <div class="player-stat-line" id="stat-line-{{ head_to_head.teams[loop.index0].franchise_id }}-{{ item.player.id }}" aria-live="polite"><p>{{ 'Stats will appear after kickoff.' if item.game_state == 'Upcoming' else 'Loading stats…' }}</p></div>
+    </section>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endfor %}

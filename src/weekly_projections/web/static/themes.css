@@ -1,0 +1,88 @@
+/* One surface system across every league and route. Only the palette changes. */
+:root,html[data-theme="michigan"] {
+  color-scheme:dark;
+  --site-bg:#001a33; --site-panel:#00274c; --site-raised:#10385e; --site-hover:#19466e;
+  --site-line:#466580; --site-text:#f5f8fc; --site-muted:#bfd0e2;
+  --site-accent:#ffcb05; --site-on-accent:#00274c; --site-link:#ffe278;
+  --site-header:#00274c; --site-trim:#ffcb05; --site-input:#0b3155;
+}
+html[data-theme="lions"] {
+  --site-bg:#fff; --site-panel:#fff; --site-raised:#edf3f7; --site-hover:#e2f1fa;
+  --site-line:#b0bec8; --site-text:#152b3b; --site-muted:#4b6373;
+  --site-accent:#0076b6; --site-on-accent:#fff; --site-link:#005c90;
+  --site-header:#0076b6; --site-trim:#b0b7bc; --site-input:#fff;
+}
+html[data-theme],html[data-theme] body {
+  background:var(--site-bg); color:var(--site-text); color-scheme:dark;
+  --ink:var(--site-text); --muted:var(--site-muted); --panel:var(--site-panel); --panel-2:var(--site-raised);
+  --line:var(--site-line); --acid:var(--site-accent); --blue:var(--site-link); --accent-soft:var(--site-raised);
+}
+html[data-theme] :is(.move-workspace,.workspace,.review-shell,.editor-shell,.login-card,.player-card) {
+  --ink:var(--site-text); --muted:var(--site-muted); --panel:var(--site-panel); --panel-2:var(--site-raised);
+  --line:var(--site-line); --acid:var(--site-accent); --blue:var(--site-link); --accent-soft:var(--site-raised); color:var(--site-text);
+}
+html[data-theme] :is(h1,h2,h3,.editor-player-info strong,.player-identity,.starter-stat-content h3,.starter-stat-content .stat-line,.starter-stat-content dd,.player-card dd) { color:var(--site-text) !important; }
+html[data-theme] :is(a,.eyebrow,.reload-mfl,.roster-game,.editor-player-projection,.editor-projected strong,.editor-count strong,.player-actions>summary,.matchup-section-heading>div,.win-probability,.stat-line-heading) { color:var(--site-link); }
+html[data-theme] :is(label,.helper,.fine-print,.hub-footnote,.hub-panel-heading>span,.player-identity small,.editor-player-info small,.roster-game small,.player-card dt,.player-card .helper,.empty-slot,.arena-projection,.arena-team>small,.starter-stat-content small,.starter-stat-content .stat-note,.forecast-method,.forecast-method summary,.forecast-method p,.trade-review-rosters li small,.league-rail .eyebrow,.rail-link small,.player-stat-line,.hub-player-list small,.hub-player-list p,.hub-scoreboard small,.matchup-player-points small) { color:var(--site-muted); }
+html[data-theme] :is(input,select,textarea,.trade-compose textarea,.login-card input,.move-workspace input,.move-workspace select,.editor-shell select,.editor-shell input:not([type="checkbox"])) { background:var(--site-input); color:var(--site-text); border-color:var(--site-line); }
+html[data-theme] input::placeholder,html[data-theme] textarea::placeholder { color:var(--site-muted); }
+html[data-theme] input:is([type="checkbox"],[type="radio"]) { accent-color:var(--site-accent); }
+html[data-theme] :is(button,.login-card button,.move-workspace button,.review-shell button,.editor-shell button,.lineup-control-panel .editor-primary,.league-card .league-actions a,.mobile-move-shortcut,.gameday-toolbar button,.hub-quick-links a) { background:var(--site-accent); border-color:var(--site-accent); color:var(--site-on-accent); }
+html[data-theme] :is(button:hover,.hub-quick-links a:hover) { filter:brightness(1.08); }
+html[data-theme] :is(.secondary-button,.quiet-button,.secondary-action,.secondary-card-action,.card-close,.start-control,.matchup-section-heading a,.gameday-page .points-trigger) { background:var(--site-raised) !important; border-color:var(--site-line) !important; color:var(--site-link) !important; }
+html[data-theme] :is(.player-identity,.lineup-editor-page .drag-handle,.lineup-editor-page .player-action-menu button) { background:transparent !important; border-color:transparent !important; color:var(--site-text) !important; }
+html[data-theme] :is(.league-card,.league-card:nth-child(even),.login-shell,.waiver-board,.lineup-intelligence,.board-summary,.projection-scorecard,.move-builder,.roster-editor,.lineup-control-panel,.swap-card,.lineup-change-summary,.final-starters,.player-card,.hub-panel,.trade-roster,.trade-compose,.trade-message,.player-action-menu,.matchup-arena,.other-matchups,.points-card,.waiver-table tr) { background:var(--site-panel); border-color:var(--site-line); }
+html[data-theme] :is(.roster-section-title,.roster-column-head,.editor-column-head,.editor-roster-footer,.waiver-table th,.trade-roster header,.block-grid article,.arena-strip,.scoring-attribution,.starter-stat-content,.other-matchup-grid article,.league-rail,.player-card .card-points) { background:var(--site-raised); border-color:var(--site-line); color:var(--site-text); }
+html[data-theme] :is(.editor-player,.waiver-table td,.matchup-player-row,.matchup-bench,.hub-player-list>li,.hub-standings th,.hub-standings td,.trade-player,.trade-review-rosters li,.block-form,.breakdown-total) { border-color:var(--site-line); }
+html[data-theme] :is(.waiver-row:hover,.editor-player:hover,.rail-link:hover,.player-actions[open]>summary,.lineup-editor-page .drag-handle:hover,.lineup-editor-page .player-action-menu button:hover) { background:var(--site-hover); }
+html[data-theme] :is(.waiver-row:has(input:checked),.editor-player:has(input:checked),.waiver-table tr:has(input:checked),.trade-player:has(input:checked),.rail-link.active,.start-control:has(input:checked),.hub-standings .your-standing) { background:var(--site-raised); color:var(--site-link); box-shadow:inset 3px 0 var(--site-accent); }
+html[data-theme] :is(.league-number,.connection-chip,.step-chip,.draft-badge,.final-starters span,.editor-details .lineup-rules span,.position-token,.position-token[data-position],.trade-count,.idea-gains span) { background:var(--site-raised); color:var(--site-link); border-color:var(--site-line); }
+html[data-theme] :is(.topbar,.gameday-page .topbar) { background:var(--site-header); border-bottom:3px solid var(--site-trim); }
+html[data-theme] .topbar .section-nav a { color:#fff; }
+html[data-theme] .topbar .section-nav a:is(.active,:hover) { background:var(--site-trim); color:var(--site-on-accent); box-shadow:none; }
+html[data-theme="lions"] .topbar .section-nav a:is(.active,:hover) { color:#101820; }
+html[data-theme] :is(.brand-mark,.topbar .brand-mark) { background:var(--site-accent); color:var(--site-on-accent); border-color:var(--site-trim); }
+html[data-theme] .topbar .header-league-picker select { background:var(--site-input); border-color:var(--site-line); color:var(--site-text); }
+html[data-theme] .brand-panel { background:var(--site-header); border-color:var(--site-trim); }
+html[data-theme] .brand-panel h1 span { color:var(--site-trim); }
+html[data-theme] :is(.login-shell,.player-card,.trade-roster,.points-card,.league-card) { border-top-color:var(--site-accent); }
+html[data-theme] .arena-scoreboard { background:linear-gradient(115deg,var(--site-raised),var(--site-panel)); border-bottom-color:var(--site-trim); }
+html[data-theme] :is(.matchup-position,.arena-team .team-monogram) { background:var(--site-accent); color:var(--site-on-accent); border-color:var(--site-trim); }
+html[data-theme] :is(.arena-total,.your-team .arena-total,.hub-scoreboard>div:first-child .hub-score,.player-card .card-points strong,.hub-scoreboard p) { color:var(--site-link); }
+html[data-theme] .opponent-team .team-monogram { background:var(--site-raised); color:var(--site-text); }
+html[data-theme] :is(.headshot-wrap,.gameday-page .headshot-wrap,.hub-player-name img) { background:var(--site-raised); }
+html[data-theme] :is(.team-points-breakdown summary,.matchup-bench summary,.other-matchups summary,.hub-panel a,.matchup-section-heading a,.points-trigger,.hub-hero .eyebrow) { color:var(--site-link); }
+html[data-theme] .hub-scoreboard { border-color:var(--site-trim); }
+html[data-theme] .points-card header button { background:var(--site-accent); color:var(--site-on-accent); }
+html[data-theme] .points-card .starter-stat-content { border-color:var(--site-line); }
+html[data-theme] :focus-visible { outline-color:var(--site-link); }
+html[data-theme] ::selection { background:var(--site-accent); color:var(--site-on-accent); }
+html[data-theme="lions"],html[data-theme="lions"] body,html[data-theme="lions"] .gameday-page { color-scheme:light; }
+html[data-theme="lions"] .brand-panel :is(h1,.eyebrow),html[data-theme="lions"] .theme-picker>span { color:#fff !important; }
+html[data-theme="lions"] .standalone-theme-picker>span { color:var(--site-text) !important; }
+html[data-theme="lions"] .hub-hero button { color:var(--site-link); }
+html[data-theme="lions"] :is(.player-stat-line h3,.player-stat-line>strong,.stat-line-heading>strong) { color:var(--site-link); }
+.theme-picker { display:flex; align-items:center; gap:.5rem; margin-left:auto; flex-shrink:0; font-size:.875rem; }
+.theme-picker > span { color:#fff; }
+.theme-picker select { width:auto; min-height:44px; padding:.5rem 1.7rem .5rem .6rem; font-size:.875rem; }
+.standalone-theme-picker { justify-content:flex-end; padding:1rem; }
+.matchup-picker { display:flex; align-items:end; gap:.75rem; margin:0 0 1.25rem; }
+.matchup-picker label { display:grid; gap:.4rem; flex:1; max-width:580px; min-width:0; }
+.matchup-picker select { width:100%; }
+.trade-player .player-identity { display:flex; flex-direction:row; flex-wrap:nowrap; align-items:center; justify-content:flex-start; gap:.7rem; text-align:left; min-width:0; }
+.trade-player .headshot-wrap > span { color:var(--site-muted); }
+.scoring-attribution { flex-wrap:wrap; gap:.7rem; }
+@media(max-width:1200px) {
+  .topbar.league-topbar .section-nav { order:3; width:100%; margin:0; overflow-x:auto; }
+  .topbar.league-topbar .section-nav a { flex:1 0 auto; }
+}
+@media(max-width:480px) {
+  .topbar.league-topbar .section-nav { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); overflow:visible; gap:.2rem; }
+  .topbar.league-topbar .section-nav a { min-width:0; padding:.5rem .25rem; font-size:.875rem; }
+  .theme-picker > span { display:none; }
+  .theme-picker select { max-width:135px; }
+  .league-topbar .header-league-picker { flex:1 1 140px; }
+  .league-topbar .brand-mark { display:none; }
+  .matchup-picker { align-items:end; }
+  .matchup-picker button { padding:.7rem; }
+}

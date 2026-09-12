@@ -1,0 +1,137 @@
+/* Layout only: both palettes share the same control and spacing system. */
+html { scroll-padding-top:10rem; }
+html body { font-size:1rem; line-height:1.5; }
+html body :is(button,select,input:not([type=checkbox]):not([type=radio]),summary,a.primary-link) { touch-action:manipulation; }
+html body :is(button,select,input:not([type=checkbox]):not([type=radio])) { min-height:44px; font:inherit; font-size:1rem; border-radius:10px; }
+html body button { cursor:pointer; }
+html body button:disabled { cursor:not-allowed; opacity:.48; filter:none; }
+html body :focus-visible { outline:3px solid var(--site-link); outline-offset:3px; }
+.skip-to-content { position:fixed; left:1rem; top:-6rem; z-index:200; padding:.75rem 1rem; background:var(--site-panel); }
+.skip-to-content:focus { top:1rem; }
+html body .topbar.league-topbar { display:grid; grid-template-columns:40px minmax(0,340px) 1fr auto; gap:.65rem 1rem; padding:.85rem max(1rem,calc((100vw - 1320px)/2)) 0; min-height:0; backdrop-filter:none; }
+html body .league-topbar .header-league-picker { grid-column:2; display:flex; min-width:0; width:100%; margin:0; }
+html body .header-league-picker label,html body .header-league-picker select { width:100%; min-width:0; max-width:none; }
+html body .league-topbar .brand-mark { display:grid; width:38px; height:38px; }
+html body .topbar.league-topbar .section-nav { grid-column:1/-1; order:initial; display:flex; gap:.5rem; width:100%; padding:0; margin:0; overflow:visible; background:transparent; }
+html body .topbar.league-topbar .section-nav a { flex:0 1 auto; min-height:48px; border-radius:10px 10px 0 0; padding:.7rem 1.05rem; font-size:.875rem; }
+.site-options { grid-column:4; position:relative; }
+.site-options>summary { display:flex; align-items:center; gap:.5rem; min-height:44px; padding:.5rem .75rem; color:white; cursor:pointer; list-style:none; border:1px solid #ffffff45; border-radius:10px; font-size:.875rem; }
+.site-options>summary::-webkit-details-marker { display:none; }
+.site-options-panel { position:absolute; top:calc(100% + .6rem); right:0; width:min(280px,calc(100vw - 2rem)); padding:1rem; display:grid; gap:1rem; border:1px solid var(--site-line); background:var(--site-panel); border-radius:14px; box-shadow:0 16px 45px #0004; z-index:80; }
+html body .site-options-panel .theme-picker { display:grid; margin:0; gap:.5rem; }
+html[data-theme] body .site-options-panel .theme-picker>span { display:block; color:var(--site-muted) !important; }
+html body .site-options-panel :is(select,button) { width:100%; max-width:none; }
+.api-key-settings { border-block:1px solid var(--site-line); padding:.5rem 0; }
+.api-key-settings>summary { display:flex; align-items:center; justify-content:space-between; min-height:44px; cursor:pointer; color:var(--site-text); font-weight:650; }
+.api-key-settings>summary span { padding:.2rem .45rem; border-radius:999px; background:var(--site-raised); color:var(--site-link); font-size:.75rem; }
+.api-key-settings form { display:grid; gap:.7rem; padding:.5rem 0; }
+.api-key-settings label { display:grid; gap:.35rem; }
+.api-key-settings small { color:var(--site-muted); line-height:1.45; }
+.login-method { display:grid; grid-template-columns:1fr 1fr; gap:.5rem; margin:0; padding:0; border:0; }
+.login-method legend { margin-bottom:.45rem; color:var(--site-muted); font-size:.875rem; }
+.login-method label { display:flex; align-items:center; gap:.45rem; min-height:44px; padding:.55rem .7rem; border:1px solid var(--site-line); border-radius:10px; cursor:pointer; }
+.login-method label:has(input:checked) { border-color:var(--site-accent); background:var(--site-raised); color:var(--site-link); }
+.login-method-fields { display:grid; gap:1rem; }
+.connection-notice { margin:0 0 1rem; padding:.8rem 1rem; border:1px solid var(--site-line); border-left:4px solid var(--site-accent); border-radius:10px; background:var(--site-raised); color:var(--site-text); }
+.primary-link { display:inline-flex; align-items:center; justify-content:center; padding:.7rem 1.15rem; background:var(--site-accent); color:var(--site-on-accent); border-radius:10px; font-weight:700; min-height:46px; text-align:center; }
+html[data-theme] body a.primary-link { color:var(--site-on-accent); }
+html body .score-filters { width:min(690px,70%); }
+html body .score-filters label:first-of-type { flex:0 1 170px; }
+html body .score-filters label:nth-of-type(2) { flex:1 1 230px; }
+html body .score-filters select { width:100%; min-width:0; }
+html body :is(.workspace,.editor-shell,.gameday-shell,.hub-shell,.move-workspace) { width:min(1320px,calc(100% - 48px)); max-width:1320px; margin-inline:auto; padding:1.75rem 0 4rem; }
+html body .move-shell { display:block; min-height:0; }
+html body :is(.page-heading,.editor-heading,.gameday-toolbar,.hub-hero) { display:flex; flex-direction:row; align-items:center; justify-content:space-between; gap:1.25rem; margin:0 0 1.5rem; padding:0; }
+html body :is(.page-heading,.editor-heading,.gameday-toolbar,.hub-hero) h1 { font-size:clamp(1.65rem,2.5vw,2.15rem); line-height:1.2; letter-spacing:-.035em; margin:0; }
+html body .eyebrow { font-size:.75rem; letter-spacing:.1em; }
+html body :is(.week-picker,.editor-selectors,.trade-selectors,.score-filters) { display:flex; align-items:end; flex-wrap:nowrap; gap:.65rem; }
+html body :is(.week-picker,.editor-selectors) label { flex:1; min-width:0; max-width:none; }
+html body :is(.week-picker,.editor-selectors) button { width:auto; margin:0; }
+html body :is(.hub-panel,.trade-roster,.roster-editor,.matchup-arena,.waiver-board) { border-radius:16px; box-shadow:0 2px 5px #00000006; }
+html body .hub-panel { margin-bottom:1.25rem; }
+html body .hub-panel-heading { flex-wrap:wrap; gap:.65rem; }
+html body .hub-panel-heading a { display:inline-flex; align-items:center; min-height:44px; font-size:.875rem; font-weight:650; }
+html body .board-summary { border:0; background:transparent; box-shadow:none; padding:0; gap:1.25rem; }
+html body .waiver-intelligence { padding:.7rem 1rem; margin-bottom:1rem; }
+html body .board-toolbar { padding:1rem; align-items:end; flex-wrap:wrap; }
+html body .board-filters { flex:1; display:grid; grid-template-columns:minmax(160px,2fr) minmax(100px,1fr) minmax(130px,1fr); gap:.75rem; }
+html body .board-filters label { min-width:0; }
+html body .board-filters :is(input,select) { width:100%; }
+html body .editor-layout { display:flex; flex-direction:column; gap:1rem; }
+html body .lineup-control-panel { display:block; position:static; width:100%; padding:1.1rem 1.25rem; border-radius:14px; }
+html body .lineup-control-panel .control-panel-heading { margin-bottom:.8rem; }
+html body.lineup-editor-page #lineup-validation { margin:.65rem 0 .9rem; }
+html body .lineup-summary { display:flex; align-items:center; flex-wrap:wrap; gap:.5rem 2rem; }
+html body .lineup-summary .editor-count { margin:0; }
+html body .lineup-summary .editor-count strong { font-size:1.8rem; }
+html body .lineup-summary .editor-projected { display:flex; align-items:center; gap:.75rem; margin:0; padding:0; border:0; }
+html body .lineup-summary .editor-projected strong { font-size:1.5rem; }
+html body .lineup-actions { display:flex; align-items:center; flex-wrap:wrap; gap:.6rem; padding-top:.8rem; border-top:1px solid var(--site-line); }
+html body .lineup-actions button { width:auto; margin:0; min-height:46px; }
+html body .lineup-actions .editor-primary { margin-left:auto; }
+html body .lineup-control-panel .editor-details { border:0; margin:.8rem 0 0; padding:0; }
+html body .lineup-control-panel .editor-details summary { min-height:44px; display:flex; align-items:center; }
+html body .roster-editor { width:100%; overflow:visible; }
+html body .player-actions>summary { min-height:44px; min-width:44px; display:grid; place-items:center; cursor:pointer; }
+html body .player-actions { position:relative; }
+html body .player-action-menu { z-index:40; right:0; min-width:185px; box-shadow:0 8px 28px #0003; }
+html body .player-action-menu button { width:100%; text-align:left; min-height:44px; }
+html body .trade-tabs { display:flex; flex-wrap:wrap; gap:.35rem; padding:.3rem; border:1px solid var(--site-line); border-radius:12px; width:fit-content; background:var(--site-raised); margin:0 0 1.25rem; }
+html body .trade-tabs a { min-height:44px; padding:.65rem 1rem; display:flex; align-items:center; border-radius:8px; font-size:.875rem; }
+html body .trade-tabs a:hover { background:var(--site-hover); }
+html body .trade-selectors label { max-width:480px; }
+html body .trade-selectors button { margin:0; }
+html body .trade-rosters { align-items:start; }
+html body .trade-player-list { max-height:65vh; overflow:auto; overscroll-behavior:contain; }
+html body .trade-check { display:grid; place-items:center; min-height:44px; min-width:44px; cursor:pointer; }
+html body .trade-player { gap:.5rem; padding:.7rem; }
+html body .trade-player .suggest-player-offer { font-size:.875rem; border:1px solid var(--site-line); padding:.5rem .65rem; border-radius:8px; min-height:44px; white-space:normal; text-align:center; }
+html body .trade-compose { margin:1rem 0; padding:1rem 1.25rem; }
+.trade-message-toggle { margin-top:1rem; }
+.trade-message-toggle>summary { cursor:pointer; min-height:44px; font-size:.875rem; color:var(--site-link); }
+html body .trade-submit-row { display:flex; align-items:center; justify-content:space-between; gap:1rem; position:sticky; top:132px; padding:.8rem 1rem; margin:0 0 1rem; background:var(--site-panel); border:1px solid var(--site-line); border-radius:12px; z-index:10; }
+html body .trade-submit-row p { margin:0; font-size:.875rem; }
+html body .trade-submit-row button { flex-shrink:0; margin:0; }
+html body .target-offer-form { padding:1rem 0; }
+html body :is(.review-actions,.confirmation-actions) { display:flex; flex-wrap:wrap; gap:.75rem; }
+@media(max-width:760px) {
+  html { scroll-padding-top:6rem; scroll-padding-bottom:10rem; }
+  html body:has(.league-topbar) { padding-bottom:calc(86px + env(safe-area-inset-bottom)); }
+  html body .topbar.league-topbar { grid-template-columns:minmax(0,1fr) auto; padding:.65rem 1rem; gap:.75rem; position:sticky; top:0; }
+  html body .league-topbar .brand-mark { display:none; }
+  html body .league-topbar .header-league-picker { grid-column:1; }
+  html body .site-options { grid-column:2; }
+  html body .site-options>summary { width:44px; padding:.6rem; }
+  .site-options>summary>span { display:none; }
+  html body .topbar.league-topbar .section-nav { position:fixed; inset:auto 0 0; display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); width:100%; margin:0; padding:.4rem .2rem calc(.4rem + env(safe-area-inset-bottom)); gap:.15rem; background:var(--site-panel); border-top:1px solid var(--site-line); box-shadow:0 -4px 18px #0001; z-index:50; }
+  html[data-theme] body .topbar.league-topbar .section-nav a { flex-direction:column; gap:.25rem; padding:.4rem .1rem; min-width:0; min-height:58px; font-size:.8125rem; border-radius:10px; color:var(--site-muted); white-space:normal; text-align:center; }
+  html[data-theme] body .topbar.league-topbar .section-nav a:is(.active,:hover) { color:var(--site-link); background:var(--site-raised); box-shadow:inset 0 3px var(--site-accent); }
+  html body .section-nav a span { min-width:0; overflow-wrap:anywhere; }
+  html body .section-nav .nav-icon { width:21px; height:21px; }
+  html body :is(.workspace,.editor-shell,.gameday-shell,.hub-shell,.move-workspace) { width:calc(100% - 24px); padding:1.25rem 0 2rem; }
+  html body :is(.page-heading,.editor-heading,.gameday-toolbar,.hub-hero) { flex-wrap:wrap; gap:1rem; margin-bottom:1.1rem; }
+  html body :is(.editor-selectors,.week-picker,.score-filters) { width:100%; }
+  html body .editor-selectors>label { flex:1; }
+  html body .hub-hero .primary-link { min-height:44px; }
+  html body .lineup-control-panel { padding:1rem; }
+  html body .lineup-summary { gap:.6rem 1rem; }
+  html body .lineup-actions { position:fixed; inset:auto .5rem calc(80px + env(safe-area-inset-bottom)); padding:.65rem; background:var(--site-panel); border:1px solid var(--site-line); border-radius:14px; box-shadow:0 4px 24px #0003; z-index:18; display:grid; grid-template-columns:1fr 1.25fr; }
+  html body .lineup-actions button { width:100%; font-size:.875rem; margin:0; }
+  html body.lineup-editor-page .lineup-actions #review-lineup { width:100%; }
+  html body.lineup-editor-page { padding-bottom:calc(172px + env(safe-area-inset-bottom)); }
+  html body .board-filters { grid-template-columns:1fr 1fr; width:100%; }
+  html body .board-filters label:first-child { grid-column:1/-1; }
+  html body .board-summary { flex-wrap:wrap; }
+  html body .trade-rosters { grid-template-columns:1fr; }
+  html body .trade-player-list { max-height:52vh; }
+  html body .trade-submit-row { top:80px; bottom:auto; padding:.75rem; flex-wrap:nowrap; }
+  html body .trade-submit-row button { width:auto; font-size:.875rem; }
+  html body .trade-selectors { flex-wrap:nowrap; }
+  html body .trade-selectors label { min-width:0; flex:1; }
+  html body .trade-selectors button { width:auto; font-size:.875rem; padding:.65rem; }
+  html body .mobile-move-shortcut { bottom:calc(88px + env(safe-area-inset-bottom)); z-index:15; }
+  html body .move-builder { position:static; padding:1rem; }
+  html body .trade-tabs { width:100%; }
+  html body .trade-tabs a { flex:1; padding:.55rem .3rem; justify-content:center; text-align:center; }
+}
+@media(prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } html body *,html body *::before,html body *::after { animation:none !important; transition:none !important; } }

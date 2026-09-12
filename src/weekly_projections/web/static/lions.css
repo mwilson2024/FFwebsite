@@ -1,0 +1,170 @@
+/* Detroit palette: Honolulu blue, silver, white and charcoal.
+   Shared final theme layer; layout and semantic status colors stay intact. */
+:root {
+  color-scheme:light;
+  --lions-blue:#0076b6;
+  --lions-blue-hover:#005c90;
+  --lions-silver:#b0b7bc;
+  --lions-black:#101820;
+  --lions-tint:#e5f2fa;
+  --ink:#18242e; --muted:#52616d; --panel:#fff; --panel-2:#eef1f3;
+  --line:#cbd1d5; --acid:var(--lions-blue); --blue:#00689f;
+  --danger:#b12d42; --accent-soft:var(--lions-tint);
+}
+html,body { background:#edf0f2; color:var(--ink); }
+body { background:linear-gradient(180deg,#dce2e6 0,#edf0f2 320px); }
+.move-workspace,.workspace,.review-shell,.editor-shell,.login-card,.player-card {
+  --ink:#18242e; --muted:#52616d; --panel:#fff; --panel-2:#eef1f3;
+  --line:#cbd1d5; --acid:#0076b6; --blue:#00689f; --danger:#b12d42;
+  --accent-soft:#e5f2fa; color:var(--ink);
+}
+label,.editor-selectors label { color:#415361; }
+input,select,.login-card input,.move-workspace input,.move-workspace select,
+.editor-shell select,.editor-shell input:not([type="checkbox"]) {
+  color:#18242e; background:#fff; border-color:#aebac2;
+}
+input::placeholder { color:#627581; }
+input:focus,select:focus { border-color:var(--lions-blue); }
+input[type="checkbox"],input[type="radio"],.start-control input { accent-color:var(--lions-blue); }
+button,.login-card button,.move-workspace button,.review-shell button,.editor-shell button,
+.lineup-control-panel .editor-primary,.league-card .league-actions a,.mobile-move-shortcut,
+.gameday-toolbar button { background:var(--lions-blue); color:white; border-color:var(--lions-blue); }
+button:hover,.login-card button:hover,.move-workspace button:hover,.review-shell button:hover,
+.editor-shell button:hover,.league-card .league-actions a:hover,.gameday-toolbar button:hover {
+  background:var(--lions-blue-hover); color:white;
+}
+.quiet-button,.secondary-button,.secondary-action,.move-workspace .secondary-button,
+.editor-shell .secondary-button,.review-shell .secondary-action,.league-card .league-actions .secondary-card-action,
+.card-close { background:white; color:#005c90; border-color:#a8b8c3; }
+.secondary-button:hover,.secondary-action:hover,.league-card .league-actions .secondary-card-action:hover,
+.editor-shell .secondary-button:hover,.move-workspace .secondary-button:hover,.card-close:hover { background:#e5f2fa; color:#005c90; }
+.topbar,.gameday-page .topbar { background:var(--lions-blue); border-bottom:4px solid var(--lions-silver); box-shadow:0 3px 16px #10182018; }
+.topbar > strong,.topbar .season,.topbar .section-nav a { color:#fff; }
+.topbar .brand-mark,.brand-mark { background:var(--lions-black); border-color:var(--lions-silver); color:#fff; border-radius:8px; }
+.topbar .section-nav a.active { background:#fff; color:#005c90; box-shadow:inset 0 -3px var(--lions-silver); }
+.topbar .section-nav a:hover { background:#005c90; color:white; }
+.topbar .quiet-button { background:transparent; border-color:#b3d9ed; color:#fff; }
+.topbar .quiet-button:hover { background:#005c90; }
+.league-rail { background:#e0e5e8; border-color:#bec8ce; }
+.league-rail .eyebrow,.rail-link,.rail-link small { color:#4c606e; }
+.rail-link.active { color:#005c90; border-color:#a6bfcf; background:white; box-shadow:inset 4px 0 var(--lions-blue); }
+.rail-link:hover { background:#fff; }
+.eyebrow,.move-workspace .eyebrow,.workspace .eyebrow { color:#00689f; }
+.move-workspace h1,.workspace h1,.league-card h2,.editor-heading h1 { color:var(--lions-black); }
+.league-card,.league-card:nth-child(even),.login-shell,.waiver-board,.lineup-intelligence,
+.board-summary,.projection-scorecard,.move-builder,.roster-editor,.lineup-control-panel,
+.swap-card,.lineup-change-summary,.final-starters,.player-card {
+  background:#fff; border-color:#c6cfd5; box-shadow:0 6px 22px #1018200a;
+}
+.league-card,.league-card:nth-child(even) { border-top:5px solid var(--lions-blue); }
+.league-number,.connection-chip,.step-chip,.draft-badge,.final-starters span,
+.editor-details .lineup-rules span { background:#e5f2fa; color:#005c90; }
+.league-card .league-number,.league-card:nth-child(even) .league-number { background:#e5f2fa; color:#005c90; border-color:#aecbde; }
+.brand-panel { background:linear-gradient(145deg,#0076b6,#005c90); border-color:var(--lions-silver); color:#fff; }
+.brand-panel h1 span { color:#e1e6ea; }
+.brand-panel .eyebrow,.brand-copy,.login-features span,.trust-row { color:#fff; }
+.login-features span { border-color:#8ec1dc; background:#005c9033; }
+.login-shell { border-bottom:6px solid var(--lions-silver); }
+.login-card label { color:#415361; }
+.waiver-table th,.roster-column-head,.editor-column-head,.roster-section-title,
+.editor-roster-footer { background:#e9edef; border-color:#cbd3d8; color:#435762; }
+.waiver-table td,.editor-player { border-color:#dbe1e5; }
+.waiver-row:hover,.editor-player:hover { background:#f0f7fb; }
+.waiver-row:has(input:checked),.editor-player:has(input:checked),
+.waiver-table tr:has(input:checked) { background:#e5f2fa; }
+.editor-count strong,.editor-projected strong,.editor-player-projection,.roster-game,
+.final-starters b { color:#00689f; }
+.editor-player-info strong { color:#18242e; }
+.player-identity small,.editor-player-info small,.roster-game small,.player-card dt,
+.player-card .helper { color:#526876; }
+.headshot-wrap { background:#e1e7eb; }
+.headshot-wrap > span { color:#536976; }
+.position-token,.position-token[data-position] { background:#e5f2fa; color:#005c90; border-color:#aecbde; }
+.recommendation.fair { background:#e5f2fa; color:#005c90; }
+.recommendation.good,.recommendation.strong,.availability-badge.open,.current-status.starting,.healthy-status { background:#e4f3eb; color:#17623f; }
+.start-control { background:white; color:#425c6d; border-color:#aebfc9; }
+.start-control:has(input:checked) { background:#e5f2fa; color:#005c90; border-color:var(--lions-blue); }
+.lineup-editor-page .drag-handle { background:transparent; color:#526c7b; }
+.lineup-editor-page .drag-handle:hover { background:#e5f2fa; color:#005c90; }
+.editor-player.dragging { outline-color:var(--lions-blue); }
+.editor-player-list.drop-target { outline-color:var(--lions-blue); background:#e5f2fa; }
+.player-actions > summary { color:#005c90; }
+.player-actions[open] > summary { background:#e5f2fa; }
+.player-action-menu { border-color:#bdcbd4; background:white; }
+.lineup-editor-page .player-action-menu button { color:#005c90; background:transparent; border-color:transparent; }
+.lineup-editor-page .player-action-menu button:hover { color:#005c90; background:#e5f2fa; }
+.drop-active { outline-color:var(--lions-blue); background:#e5f2fa !important; }
+.reload-mfl { color:#00689f; }
+.player-card { border-top:5px solid var(--lions-blue); }
+.player-card::backdrop { background:#101820b8; }
+.player-card .card-points { background:#e5f2fa; border-color:#c5dbe8; }
+.player-card .card-points strong { color:#005c90; }
+.player-card .card-points span,.player-card .card-points small { color:#425d6d; }
+
+/* Game day: black alternate jersey, blue field, silver trim. */
+.gameday-page {
+  color-scheme:dark; background:#101820; color:#f4f6f8;
+  --ink:#f4f6f8; --muted:#b0b7bc; --panel:#18242e; --panel-2:#24343f;
+  --line:#384b57; --acid:#83cbf2; --blue:#83cbf2; --accent-soft:#123c55;
+}
+.gameday-toolbar .eyebrow { color:#83cbf2; }
+.gameday-toolbar select { background:#1b2b36; color:#fff; border-color:#607381; }
+.gameday-toolbar label { color:#c0ccd4; }
+.matchup-arena,.other-matchups { background:#18242e; border-color:#4c606d; }
+.arena-strip { background:#24343f; color:#c3cbd1; border-bottom:1px solid #4c606d; }
+.arena-strip strong { color:#fff; }
+.arena-scoreboard { background:linear-gradient(115deg,#005c90 0,#133449 55%,#18242e 100%); border-bottom:3px solid var(--lions-silver); }
+.arena-team .team-monogram { background:#0076b6; color:white; border-color:#d2d9de; }
+.opponent-team .team-monogram { background:var(--lions-silver); color:#101820; border-color:#e5e9ec; }
+.your-team .arena-total,.arena-total { color:#fff; }
+.arena-projection,.arena-team > small { color:#d2dce2; }
+.win-probability { color:#e0f1fc; }
+.matchup-section-heading > div,.matchup-section-heading a { color:#9edbff; }
+.matchup-section-heading a { background:#203746; border-color:#537183; }
+.matchup-position { background:#005c90; color:#fff; }
+.matchup-player-row { border-color:#364852; }
+.gameday-page .player-identity { color:#f4f6f8 !important; }
+.gameday-page .headshot-wrap { background:#29404e; }
+.gameday-page .player-identity small,.matchup-player-points small { color:#b9c8d2; }
+.gameday-page .headshot-wrap > span { color:#c1d0d9; }
+.empty-slot { color:#a1b2bd; }
+.matchup-bench { border-color:#4c606d; }
+.matchup-bench summary,.other-matchups summary { color:#d0dbe2; }
+.team-points-breakdown summary,.starter-stat-details summary { color:#b3e0fa; }
+.starter-stat-content,.other-matchup-grid article { background:#233540; border-color:#4c6574; }
+.starter-stat-content h3,.starter-stat-content .stat-line,.starter-stat-details dd,
+.team-points-breakdown dd { color:#f4f6f8; }
+.team-points-breakdown small,.starter-stat-content small,.starter-stat-content .stat-note,
+.starter-status-counts small { color:#c0cbd3; }
+.breakdown-total { border-color:#70828e; }
+.scoring-attribution { background:#24343f; color:#becbd3; }
+.forecast-method,.forecast-method summary,.forecast-method p { color:#bdccd6; }
+.starter-stat-details summary:focus-visible,.team-points-breakdown summary:focus-visible { outline-color:#9edbff; }
+.game-status-badge.live { color:#8af0b0; background:#103b2b; border-color:#2d7950; }
+.game-status-badge.upcoming { color:#b8e5ff; background:#123f5b; border-color:#4b95bd; }
+.game-status-badge.final { color:#e0e5e9; background:#333e46; border-color:#7e8b95; }
+.matchup-player-side[data-game-state="upcoming"] { border-color:#5eb7e8; }
+.matchup-player-side[data-game-state="final"] { border-color:var(--lions-silver); }
+::selection { background:#0076b6; color:white; }
+/* One consistent, left-anchored league selector across league workspaces. */
+.topbar.league-topbar { display:flex; flex-wrap:wrap; gap:.85rem; padding:.65rem max(1rem,env(safe-area-inset-left)); min-width:0; }
+.league-topbar .brand-mark { flex-shrink:0; }
+.league-topbar .header-league-picker { display:flex; gap:.5rem; flex:0 1 255px; margin:0; min-width:0; }
+.league-topbar .header-league-picker label { min-width:0; flex:1; }
+.league-topbar .header-league-picker select { width:100%; min-width:0; height:44px; background:#005c90; color:#fff; border-color:#8ebbd5; font-weight:700; }
+.league-topbar .section-nav { margin-left:auto; min-width:0; display:flex; gap:.25rem; flex-wrap:nowrap; }
+.league-topbar .section-nav a { display:flex; align-items:center; justify-content:center; white-space:nowrap; min-height:44px; padding:.65rem .7rem; flex-shrink:0; }
+@media(max-width:1050px) {
+  .topbar.league-topbar .section-nav { order:3; width:100%; margin:0; overflow-x:auto; padding-bottom:.2rem; }
+  .topbar.league-topbar .section-nav a { flex:1 0 auto; }
+}
+@media(max-width:480px) {
+  .topbar .section-nav a { min-width:0; white-space:normal; text-align:center; padding:.5rem .2rem; font-size:.8125rem; }
+  .topbar .section-nav .nav-icon { display:none; }
+}
+@media(max-width:700px) {
+  .topbar .section-nav { background:transparent; }
+  .waiver-table tr { background:white; border-color:#cbd3d8; }
+  .waiver-table tr:has(input:checked) { background:#e5f2fa; }
+  .mobile-move-shortcut { background:var(--lions-blue); color:white; border-color:#92c6e2; }
+}

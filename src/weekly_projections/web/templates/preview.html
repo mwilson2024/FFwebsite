@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  
+  <title>Review Move · {{ league.name }}</title><link rel="stylesheet" href="/static/app.css?v=20260910-modern">
+  <link rel="stylesheet" href="/static/workspace.css?v=2">
+  <link rel="stylesheet" href="/static/lions.css?v=1">
+  {% include '_theme_assets.html' %}
+</head>
+<body>
+  <header class="topbar"><a href="/dashboard" class="brand-mark small">WP</a><strong>{{ league.name }}</strong><span class="season">League {{ league.id }}</span></header>
+  <main class="review-shell">
+    {% if success %}
+      <p class="eyebrow">TRANSACTION SENT</p><h1>{{ success }}</h1>
+      <div class="success-mark" aria-hidden="true">✓</div>
+      <div class="review-actions"><a class="secondary-action" href="/moves?league={{ league.id }}">Back to roster</a></div>
+    {% elif error %}
+      <p class="eyebrow danger-text">MFL DID NOT CONFIRM</p><h1>The move was not confirmed.</h1><div class="error" role="alert">{{ error }}{% include '_error_reference.html' %}</div>
+      <p class="helper">Check MFL’s transaction report before staging this move again.</p><div class="review-actions"><a class="secondary-action" href="/moves?league={{ league.id }}">Back to roster</a></div>
+    {% else %}
+      <div class="page-heading"><div><p class="eyebrow">ADD / DROP</p><h1>Confirm the swap.</h1></div><div class="step-chip">2 · Review</div></div>
+      <p class="review-context">{{ league.name }} · Franchise {{ preview.franchise_id }} · {{ preview.mode }}</p>
+      <div class="swap-card"><div><span class="move-label add-label">ADD</span><strong>{{ preview.add.name }}</strong><small>{{ preview.add.position }} · {{ preview.add.team }} · MFL {{ preview.add.id }}</small></div><span class="swap-arrow">→</span><div><span class="move-label drop-label">DROP</span><strong>{{ preview.drop.name }}</strong><small>{{ preview.drop.position }} · {{ preview.drop.team }} · MFL {{ preview.drop.id }}</small></div></div>
+      {% if preview.bid is not none or preview.round is not none %}<div class="move-meta">{% if preview.bid is not none %}<span>FAAB bid <strong>{{ preview.bid }}</strong></span>{% endif %}{% if preview.round is not none %}<span>Waiver round <strong>{{ preview.round }}</strong></span>{% endif %}</div>{% endif %}
+      <div class="warning"><strong>This changes your MFL roster.</strong><span>MFL applies league locking, waiver, salary, and roster rules when you submit.</span></div>
+      <div class="review-actions"><a class="secondary-action" href="/moves?league={{ league.id }}">Go back</a><form method="post" action="/submit/{{ pending_id }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><button class="confirm-button" type="submit">Confirm on MFL <span>→</span></button></form></div>
+    {% endif %}
+  </main>
+</body>
+</html>

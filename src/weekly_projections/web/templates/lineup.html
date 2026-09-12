@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  
+  <meta name="csrf-token" content="{{ session.csrf_token }}">
+  <title>{{ league.name }} · Lineup</title>
+  <link rel="stylesheet" href="/static/app.css?v=lineup-workspace-2">
+  <link rel="stylesheet" href="/static/workspace.css?v=2">
+  <link rel="stylesheet" href="/static/fantasy.css?v=3">
+  <link rel="stylesheet" href="/static/lions.css?v=1">
+  <script src="/static/diagnostics.js" defer></script>
+  <script src="/static/app.js?v=lineup-2" defer></script>
+  {% include '_theme_assets.html' %}
+</head>
+<body class="lineup-editor-page">
+  {% set active_tool = 'lineup' %}{% include '_league_header.html' %}
+  <main class="editor-shell">
+    <div class="editor-heading">
+      <div><p class="eyebrow">{{ league.name }}</p><h1>My lineup</h1></div>
+      <form method="get" action="/lineup" class="editor-selectors compact-selectors">
+        <input type="hidden" name="league" value="{{ league.id }}">
+        <label>Week<select name="week" id="lineup-week">{% for number in range(1,19) %}<option value="{{ number }}" {% if number == week %}selected{% endif %}>Week {{ number }}</option>{% endfor %}</select></label><button type="submit" class="secondary-button">View week</button>
+      </form>
+    </div>
+    {% if error %}<div class="error" role="alert">{{ error }}{% include '_error_reference.html' %}</div>{% endif %}
+    {% if recommendation and settings %}
+    <form method="post" action="/lineup/preview" id="lineup-form" data-starter-count="{{ settings.starter_count }}" data-slot-specs='{{ slot_specs|tojson }}' data-saved-visible="{{ 'true' if lineup_visible else 'false' }}">
+      <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+      <input type="hidden" name="league_id" value="{{ league.id }}">
+      <input type="hidden" name="week" value="{{ week }}">
+      <div class="editor-layout">
+        <aside class="lineup-control-panel">
+          <div class="control-panel-heading"><span>WEEK {{ week }}</span><span class="draft-badge" id="lineup-draft-status">Saved lineup</span></div>
+          <div class="lineup-summary">
+          <div class="editor-count"><strong id="starter-count">{{ recommendation.current_starters|length }}</strong><span>/ {{ settings.starter_count }} starters</span></div>
+          <div class="editor-projected"><span>Selected projection</span><strong id="selected-projection">{{ '%.1f'|format(recommendation.current_projection) }}</strong></div>
+          </div>
+          <p id="lineup-validation" role="status" aria-live="polite">Choose your starters below.</p>
+          <div class="lineup-actions" aria-label="Lineup actions">
+          <button type="button" class="secondary-button accent" id="use-recommended" {% if not recommendation.used_league_rules %}disabled{% endif %}>Apply best lineup</button>
+          <button type="submit" id="review-lineup" class="editor-primary">Review lineup <span aria-hidden="true">→</span></button>
+          </div>
+          {% if not recommendation.used_league_rules %}<p class="editor-note">No legal recommendation is available with these players and locks. You can still edit the lineup manually.</p>{% endif %}
+          <details class="editor-details"><summary>Lineup options &amp; rules</summary>
+            <button type="button" class="secondary-button" id="restore-current">Reset to saved lineup</button>
+            <a class="reload-mfl" href="/lineup?league={{ league.id }}&week={{ week }}">Reload from MFL</a>
+            <p class="lineup-sync-note">{% if lineup_visible %}Loaded from MFL for Week {{ week }}. Changes stay here until you review and confirm.{% else %}MFL has not exposed a saved lineup for this week. This is an unsubmitted draft.{% endif %}</p>
+            <div class="lineup-rules">{% for rule in settings.rules %}<span>{{ rule.name }} <strong>{{ rule.minimum }}{% if rule.minimum != rule.maximum %}–{{ rule.maximum }}{% endif %}</strong></span>{% endfor %}</div>
+            <p>{{ projection_source }} · {{ locked_count }} kickoff locks. Locked players cannot move.</p>
+          </details>
+        </aside>
+        <section class="roster-editor" aria-label="Roster and start sit controls">
+          <header class="roster-editor-heading"><div><h2>Roster</h2><p id="drag-status" role="status" aria-live="polite">Drag between starters and bench, or use ⋯.</p></div><span>{{ recommendation.players|length }} players · Week {{ week }}</span></header>
+          <div class="roster-column-head"><span>SLOT</span><span>PLAYER</span><span>OPP / STATUS</span><span>PROJ</span><span>SCORE</span><span aria-label="Actions">⋯</span></div>
+          {% for group in ['starters','bench'] %}
+          <h3 class="roster-section-title" data-roster-target="{{ group }}">{{ 'Starters' if group == 'starters' else 'Bench / Reserve' }}</h3>
+          <div class="editor-player-list" data-roster-section="{{ group }}">
+            {% for item in recommendation.players|sort(attribute='player.position') if item.currently_starting == (group == 'starters') %}
+            <article class="editor-player {% if item.locked %}player-locked{% endif %}" data-lineup-player data-position="{{ item.player.position|upper }}" draggable="{{ 'false' if item.locked or item.roster_status in ['IR','TS'] else 'true' }}" data-current="{{ 'true' if item.currently_starting else 'false' }}" data-recommended="{{ 'true' if item.recommended_start else 'false' }}" data-projection="{{ item.projection if item.projection is not none else '' }}">
+              <div class="roster-position"><button type="button" class="drag-handle" aria-label="Drag {{ item.player.name }}" {% if item.locked or item.roster_status in ['IR','TS'] %}disabled{% endif %}>⠿</button><span data-slot-label>{{ current_slots.get(item.player.id, 'BN') if item.currently_starting else 'BN' }}</span></div>
+              <div class="editor-player-info">
+                <div>{% set player = item.player %}{% include '_player_identity.html' %}
+                  <div class="editor-player-notes"><span class="recommendation {{ item.tone }}">{{ item.action }}</span>{% if item.injury %}<span class="injury-status">{{ item.injury.status }}</span>{% endif %}</div>
+                </div>
+              </div>
+              {% set game = games.get(item.player.team, {}) %}
+              <div class="roster-game"><span>{{ game.get('opponent', '—') }}</span><small>{% if game.get('final') %}Final{% elif item.locked %}In progress{% elif game.get('kickoff') %}<time data-kickoff="{{ game.kickoff }}">Scheduled</time>{% else %}Schedule unavailable{% endif %}</small></div>
+              <div class="editor-player-projection">{% if item.projection is not none %}{{ '%.1f'|format(item.projection) }}{% else %}—{% endif %}</div>
+              <div class="roster-score">{% if item.locked and item.player.id in player_scores %}{{ '%.2f'|format(player_scores[item.player.id]) }}{% else %}—{% endif %}</div>
+              <div class="editor-player-control">
+                <input hidden type="checkbox" name="starter_ids" value="{{ item.player.id }}" aria-label="Start {{ item.player.name }}" {% if item.currently_starting %}checked{% endif %} {% if item.locked or item.roster_status in ['IR','TS'] %}disabled{% endif %}>
+                <details class="player-actions"><summary aria-label="Actions for {{ item.player.name }}">⋯</summary><div class="player-action-menu">
+                  <button type="button" data-move-to="starters" {% if item.locked or item.roster_status in ['IR','TS'] or item.currently_starting %}disabled{% endif %}>Move to starters</button>
+                  <button type="button" data-move-to="bench" {% if item.locked or item.roster_status in ['IR','TS'] or not item.currently_starting %}disabled{% endif %}>Move to bench</button>
+                  <button type="button" data-player-card="{{ item.player.id }}" data-league="{{ league.id }}" data-week="{{ week }}">Player card</button>
+                  {% if item.locked %}<small>Game locked</small>{% endif %}
+                </div></details>
+                {% if item.locked and item.currently_starting %}<input type="hidden" name="starter_ids" value="{{ item.player.id }}">{% endif %}
+              </div>
+            </article>
+            {% endfor %}
+          </div>
+          {% endfor %}
+          <footer class="editor-roster-footer"><span>Nothing is saved to MFL until you review and confirm.</span></footer>
+        </section>
+      </div>
+    </form>
+    {% endif %}
+  </main>
+  {% include '_player_card.html' %}
+</body>
+</html>

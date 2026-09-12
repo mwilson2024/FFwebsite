@@ -1,0 +1,9 @@
+<dialog id="player-card" class="player-card" aria-labelledby="card-name">
+  <form method="dialog"><button class="card-close" aria-label="Close player card">✕</button></form>
+  <div class="card-identity"><img id="card-photo" alt="" hidden><div><p id="card-team" class="eyebrow"></p><h2 id="card-name">Player details</h2></div></div>
+  <p id="card-status" role="status"></p>
+  <div class="card-points" id="card-points" hidden><div><span id="card-week"></span><strong id="card-projection">—</strong><small>Projected points</small></div><div><span>League scoring</span><strong id="card-actual">—</strong><small>Actual points</small></div></div>
+  <p id="card-scoring-basis" class="helper"></p><dl id="card-details"></dl>
+  <details id="card-scoring"><summary>League scoring rules</summary><p id="card-scoring-league"></p><ul id="card-scoring-rules"></ul></details>
+  <p id="card-source" class="helper"></p>
+</dialog>
