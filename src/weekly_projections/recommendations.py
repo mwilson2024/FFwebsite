@@ -18,6 +18,7 @@ class PlayerRecommendation:
     reason: str
     fantasy_team_id: str = ""
     fantasy_team_name: str = ""
+    bye_replacements: tuple[str, ...] = ()
 
     @property
     def is_rostered(self) -> bool:
@@ -77,6 +78,7 @@ def rank_available_players(
     availability: Mapping[str, MFLAvailability],
     roster: Iterable[MFLPlayer],
     projections: Mapping[str, float],
+    bye_teams: set[str] | frozenset[str] = frozenset(),
 ) -> list[PlayerRecommendation]:
     """Rank the whole available pool against the weakest projected roster peer."""
     roster_by_position: dict[str, list[MFLPlayer]] = {}
@@ -103,6 +105,14 @@ def rank_available_players(
             delta=delta,
             locked=state.locked,
         )
+        bye_peers = tuple(
+            peer.name for peer in roster_by_position.get(player.position.casefold(), [])
+            if peer.team.upper() in bye_teams
+        )
+        if bye_peers:
+            reason += f" Covers {', '.join(bye_peers)} during this week's bye."
+            if not state.locked and label in {"Review fit", "Depth only", "Small edge"}:
+                label, tone = "Bye-week fit", "good"
         recommendations.append(
             PlayerRecommendation(
                 player=player,
@@ -113,6 +123,7 @@ def rank_available_players(
                 recommendation=label,
                 recommendation_tone=tone,
                 reason=reason,
+                bye_replacements=bye_peers,
             )
         )
     return sorted(
@@ -135,6 +146,7 @@ def build_player_board(
     own_franchise_id: str,
     own_roster: Iterable[MFLPlayer],
     projections: Mapping[str, float],
+    bye_teams: set[str] | frozenset[str] = frozenset(),
 ) -> list[PlayerRecommendation]:
     """Combine free agents and rostered players into one searchable league board."""
     own_roster = tuple(own_roster)
@@ -143,6 +155,7 @@ def build_player_board(
         availability=availability,
         roster=own_roster,
         projections=projections,
+        bye_teams=bye_teams,
     )
     own_by_position: dict[str, list[MFLPlayer]] = {}
     for player in own_roster:

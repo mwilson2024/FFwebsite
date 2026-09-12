@@ -77,6 +77,10 @@
 .lineup-editor-page .editor-player-info strong { font-size:.9375rem; }
 .lineup-editor-page .editor-player-notes { margin-top:.2rem; }
 .lineup-editor-page .editor-player,.roster-column-head { display:grid; grid-template-columns:45px minmax(210px,1fr) 170px 65px 65px 100px; gap:.75rem; align-items:center; }
+.lineup-empty-slot { min-height:68px; border-top:1px dashed var(--site-line,#dfe6f1) !important; background:color-mix(in srgb,var(--site-raised,#f7f9fc) 58%,transparent) !important; }
+.lineup-empty-slot:hover { background:color-mix(in srgb,var(--site-raised,#f7f9fc) 58%,transparent) !important; }
+.lineup-empty-copy strong { display:block; color:var(--site-muted,#60728d); font-size:.9rem; }
+.lineup-empty-copy small { color:var(--site-muted,#60728d); }
 .roster-column-head { padding:.7rem 1rem; background:#f7f9fc; font-size:.75rem; color:#60728d; border-block:1px solid #dfe6f1; }
 .roster-column-head span:nth-child(4),.roster-column-head span:nth-child(5) { text-align:right; }
 .roster-section-title { font-size:.875rem; background:#edf2f8; color:#354e70; margin:0; padding:.55rem 1rem; border-top:1px solid #d6e0ed; }
@@ -183,6 +187,8 @@
   .lineup-editor-page .lineup-control-panel .secondary-button { flex:1; }
   .roster-column-head { display:none; }
   .lineup-editor-page .editor-player { grid-template-columns:28px minmax(0,1fr) 88px; gap:.3rem .45rem; padding:.75rem; }
+  .lineup-empty-slot .lineup-empty-copy { grid-column:2; }
+  .lineup-empty-slot .roster-game { display:none; }
   .lineup-editor-page .roster-position { grid-column:1; grid-row:1; }
   .lineup-editor-page .editor-player-info { grid-column:2; grid-row:1; }
   .lineup-editor-page .player-identity strong { font-size:.875rem; }

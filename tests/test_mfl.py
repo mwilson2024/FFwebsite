@@ -141,6 +141,51 @@ def test_league_details_parse_divisions_logos_and_reject_external_artwork(monkey
     assert calls == ["league"]
 
 
+def test_league_details_parse_faab_weeks_and_history(monkeypatch):
+    client = MFLClient(_config(user_cookie="cookie"))
+    monkeypatch.setattr(client, "export", lambda kind, **params: {"league": {
+        "name": "Test League", "startWeek": "1", "endWeek": "17",
+        "lastRegularSeasonWeek": "14", "bbidSeasonLimit": "100",
+        "history": {"league": [{"year": "2026"}, {"year": "2025"}]},
+        "franchises": {"franchise": {"id": "1", "name": "One",
+            "bbidAvailableBalance": "74", "waiverSortOrder": "3"}},
+    }})
+    details = client.league_details()
+    assert details.name == "Test League"
+    assert (details.start_week, details.end_week, details.last_regular_season_week) == (1, 17, 14)
+    assert details.faab_limit == 100
+    assert details.history_years == (2026, 2025)
+    assert details.franchises["0001"].faab_balance == 74
+    assert details.franchises["0001"].waiver_order == 3
+
+
+def test_schedule_and_transactions_parse_singleton_and_list_payloads(monkeypatch):
+    client = MFLClient(_config(user_cookie="cookie"))
+    payloads = {
+        "schedule": {"schedule": {"weeklySchedule": [
+            {"week": "1", "matchup": {"franchise": [
+                {"id": "1", "score": "121.5"}, {"id": "2", "score": {"$t": "110"}}]}},
+            {"week": "2", "matchup": [{"franchise": [
+                {"id": "1", "score": ""}, {"id": "3", "score": ""}]}]},
+        ]}},
+        "transactions": {"transactions": {"transaction": [
+            {"id": "t1", "type": "BBID_WAIVER", "timestamp": "100",
+             "franchise": "1", "transaction": "1234|ADD,5678|DROP"},
+            {"id": "t2", "type": "TRADE", "timestamp": "200", "franchise1": "1", "franchise2": "2"},
+        ]}},
+    }
+    monkeypatch.setattr(client, "export", lambda kind, **params: payloads[kind])
+    games = client.fantasy_schedule()
+    assert games[0].team_ids == ("0001", "0002")
+    assert games[0].scores == (121.5, 110.0)
+    assert games[1].scores == (None, None)
+    activity = client.transactions()
+    assert activity[0].kind == "TRADE"
+    assert activity[1].adds == ("1234",)
+    assert activity[1].drops == ("5678",)
+    assert activity[1].franchise_ids == ("0001",)
+
+
 def test_login_posts_credentials_and_stores_cookie() -> None:
     session = LoginSession()
     client = MFLClient(_config(), session=session)  # type: ignore[arg-type]

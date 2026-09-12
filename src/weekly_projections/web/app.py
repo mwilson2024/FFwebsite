@@ -4,6 +4,7 @@ import secrets
 import os
 import math
 import time
+from datetime import datetime
 from dataclasses import dataclass, field
 from itertools import zip_longest
 from pathlib import Path
@@ -41,6 +42,12 @@ from weekly_projections.projection_sources import ProjectionBlend, projection_bl
 from weekly_projections.live_stats import weekly_boxscore, scoring_components
 from weekly_projections.recommendations import PlayerRecommendation, build_player_board
 from weekly_projections.trade_engine import suggest_trades, analyze_target_trade
+from weekly_projections.league_intelligence import (
+    build_power_rankings,
+    build_recap,
+    playoff_probability,
+    waiver_trends,
+)
 from weekly_projections.web.diagnostics import initialize_log, log_error, request_context
 
 
@@ -256,6 +263,16 @@ class BlockDraft:
 
 
 @dataclass
+class SideBet:
+    id: str
+    title: str
+    participants: str
+    stake: str
+    status: str = "open"
+    created_at: float = field(default_factory=time.time)
+
+
+@dataclass
 class BrowserSession:
     mfl_cookie: str
     year: int
@@ -270,6 +287,7 @@ class BrowserSession:
     expires_at: float = field(default_factory=lambda: time.monotonic() + 8 * 60 * 60)
     mfl_api_key: str = ""
     read_cache: dict[str, tuple[float, object]] = field(default_factory=dict)
+    side_bets: dict[str, list[SideBet]] = field(default_factory=dict)
 
 
 sessions: dict[str, BrowserSession] = {}
@@ -304,7 +322,7 @@ async def secure_local_responses(request: Request, call_next):
     current = _session(request)
     league_id = request.query_params.get("league")
     if (current and request.method == "GET" and response.status_code == 200
-            and request.url.path in {"/home", "/lineup", "/moves", "/scores", "/trades", "/standings"}
+            and request.url.path in {"/home", "/lineup", "/moves", "/scores", "/trades", "/standings", "/league"}
             and any(item.id == league_id for item in current.leagues)):
         response.set_cookie("wp_last_league", f"{current.year}:{league_id}", max_age=365*86400,
                             httponly=True, samesite="strict", secure=_secure_cookies(request))
@@ -379,6 +397,95 @@ def _invalidate_player_board(current: BrowserSession, league_id: str) -> None:
     current.read_cache.pop(f"{current.year}:{league_id}:player-board", None)
 
 
+def _standings_groups(rows: list[dict], details) -> list[dict]:
+    groups = []
+    assigned: set[str] = set()
+    for division_id, division_name in details.divisions:
+        division_rows = [
+            row for row in rows
+            if details.franchises.get(row["id"])
+            and details.franchises[row["id"]].division_id == division_id
+        ]
+        if division_rows:
+            groups.append({"id": division_id, "name": division_name, "rows": division_rows})
+            assigned.update(row["id"] for row in division_rows)
+    remaining = [row for row in rows if row["id"] not in assigned]
+    if remaining or not groups:
+        groups.append({"id": "", "name": "Other teams" if groups else "League standings",
+                       "rows": remaining if groups else rows})
+    return groups
+
+
+def _activity_time(timestamp: int | None) -> str:
+    if timestamp is None:
+        return "Time unavailable"
+    try:
+        value = datetime.fromtimestamp(timestamp)
+        if os.name != "nt":
+            return value.strftime("%b %-d · %-I:%M %p")
+        return value.strftime("%b %d · %I:%M %p").replace(" 0", " ")
+    except (OverflowError, OSError, ValueError):
+        return "Time unavailable"
+
+
+def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
+    cache_key = f"{current.year}:{selected.id}:league-hq"
+    now = time.monotonic()
+    cached = current.read_cache.get(cache_key)
+    if cached and cached[0] > now:
+        return cached[1]
+    client = _client(current, selected)
+    errors: dict[str, str] = {}
+    details = client.league_details()
+    names = {team_id: team.name for team_id, team in details.franchises.items()}
+
+    def read(label, loader, fallback):
+        try:
+            return loader()
+        except (MFLApiError, ValueError, requests.RequestException) as error:
+            log_error(f"league_hq_{label}_unavailable", error)
+            errors[label] = "MFL could not load this report right now."
+            return fallback
+
+    current_week = read("week", client.current_week, None) or details.start_week
+    standings = read("standings", client.league_standings, [])
+    schedule = read("schedule", client.fantasy_schedule, ())
+    activity = read("activity", lambda: client.transactions(days=21, count=200), ())
+    catalog = read("players", client.players, {})
+    _remember_catalog(current, client)
+    rankings = build_power_rankings(schedule, names, current_week=current_week)
+    rank_by_team = {row.franchise_id: row for row in rankings}
+    recap = build_recap(schedule, names, current_week=current_week)
+    trends = waiver_trends(activity)
+    playoff_games = []
+    for game in schedule:
+        if game.week <= details.last_regular_season_week:
+            continue
+        probability = None
+        if len(game.team_ids) == 2:
+            probability = playoff_probability(rank_by_team.get(game.team_ids[0]), rank_by_team.get(game.team_ids[1]))
+        playoff_games.append({"game": game, "probability": probability})
+    result = {
+        "details": details,
+        "teams": details.franchises,
+        "names": names,
+        "current_week": current_week,
+        "standings": standings,
+        "groups": _standings_groups(standings, details),
+        "schedule": schedule,
+        "activity": activity,
+        "catalog": catalog,
+        "rankings": rankings,
+        "rank_by_team": rank_by_team,
+        "recap": recap,
+        "trends": trends[:12],
+        "playoff_games": playoff_games,
+        "errors": errors,
+    }
+    current.read_cache[cache_key] = (time.monotonic() + 90, result)
+    return result
+
+
 def _load_player_board(
     client: MFLClient,
 ) -> tuple[
@@ -429,11 +536,19 @@ def _load_player_board(
     }
     week = client.current_week()
     roster_locked: set[str] = set()
+    bye_teams: set[str] = set()
     if week is not None:
         try:
             kickoffs = client.nfl_team_kickoffs(week=week)
             schedule_locked = _locked_player_ids(available_players, kickoffs)
             roster_locked = _locked_player_ids(roster, kickoffs)
+            # Only infer a bye when the NFL feed is clearly complete enough.
+            # A partial feed must never create fake bye-week advice.
+            if len(kickoffs) >= 24:
+                bye_teams = {
+                    player.team.upper() for player in roster
+                    if player.team and player.team.upper() not in kickoffs
+                }
             availability = {
                 player_id: (
                     MFLAvailability(player_id, status="locked", locked=True)
@@ -478,6 +593,7 @@ def _load_player_board(
         own_franchise_id=client.config.franchise_id,
         own_roster=roster,
         projections=blend.scores,
+        bye_teams=bye_teams,
     )
     result = (week, roster, recommendations, blend, roster_locked)
     if cache is not None:
@@ -863,6 +979,100 @@ def standings_page(request: Request, league: str):
         "session": current, "league": _league(current, league), "active_tool": "standings"})
 
 
+@app.get("/league", response_class=HTMLResponse)
+def league_page(request: Request, league: str):
+    current = _session(request)
+    if not current:
+        return RedirectResponse("/", status_code=303)
+    selected = _league(current, league)
+    try:
+        context = _league_hq(current, selected)
+    except (MFLApiError, ValueError, requests.RequestException) as error:
+        log_error("league_hq_unavailable", error)
+        return templates.TemplateResponse(request=request, name="league.html", context={
+            "session": current, "league": selected, "active_tool": "league",
+            "error": "MFL could not load the league reports. Try again shortly.",
+        })
+    activity_rows = []
+    for item in context["activity"]:
+        teams = [context["names"].get(team_id, f"Franchise {team_id}") for team_id in item.franchise_ids]
+        added = [context["catalog"].get(player_id, MFLPlayer(id=player_id, name=player_id)).name for player_id in item.adds]
+        dropped = [context["catalog"].get(player_id, MFLPlayer(id=player_id, name=player_id)).name for player_id in item.drops]
+        assets = [context["catalog"][player_id].name for player_id in item.assets if player_id in context["catalog"]]
+        activity_rows.append({
+            "item": item,
+            "teams": teams,
+            "added": added,
+            "dropped": dropped,
+            "assets": assets,
+            "when": _activity_time(item.timestamp),
+        })
+    context.update(
+        session=current,
+        league=selected,
+        active_tool="league",
+        error=None,
+        activity_rows=activity_rows,
+        side_bets=current.side_bets.get(selected.id, []),
+    )
+    return templates.TemplateResponse(request=request, name="league.html", context=context)
+
+
+@app.get("/manager/{franchise_id}", response_class=HTMLResponse)
+def manager_page(request: Request, franchise_id: str, league: str):
+    current = _session(request)
+    if not current:
+        return RedirectResponse("/", status_code=303)
+    selected = _league(current, league)
+    franchise_id = franchise_id.zfill(4)
+    context = _league_hq(current, selected)
+    team = context["teams"].get(franchise_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="That manager is not in this league")
+    context.update(session=current, league=selected, active_tool="league", team=team,
+                   ranking=context["rank_by_team"].get(franchise_id))
+    return templates.TemplateResponse(request=request, name="manager.html", context=context)
+
+
+@app.post("/league/side-bets")
+def create_side_bet(
+    request: Request,
+    league: str = Form(...),
+    title: str = Form(...),
+    participants: str = Form(""),
+    stake: str = Form(""),
+    csrf_token: str = Form(...),
+):
+    current = _require_session(request)
+    _check_csrf(current, csrf_token)
+    selected = _league(current, league)
+    title, participants, stake = title.strip(), participants.strip(), stake.strip()
+    if not title or len(title) > 120 or len(participants) > 120 or len(stake) > 80:
+        raise HTTPException(status_code=400, detail="Enter a short prop, participants, and stake")
+    bets = current.side_bets.setdefault(selected.id, [])
+    if len(bets) >= 100:
+        raise HTTPException(status_code=400, detail="This session has reached 100 side bets")
+    bets.insert(0, SideBet(secrets.token_urlsafe(10), title, participants, stake))
+    return RedirectResponse(f"/league?league={selected.id}#side-bets", status_code=303)
+
+
+@app.post("/league/side-bets/{bet_id}/settle")
+def settle_side_bet(
+    request: Request,
+    bet_id: str,
+    league: str = Form(...),
+    csrf_token: str = Form(...),
+):
+    current = _require_session(request)
+    _check_csrf(current, csrf_token)
+    selected = _league(current, league)
+    bet = next((item for item in current.side_bets.get(selected.id, []) if item.id == bet_id), None)
+    if not bet:
+        raise HTTPException(status_code=404, detail="That side bet is no longer available")
+    bet.status = "settled"
+    return RedirectResponse(f"/league?league={selected.id}#side-bets", status_code=303)
+
+
 @app.get("/hub/{section}", response_class=HTMLResponse)
 def hub_section(request: Request, section: str, league: str, target: str = "", wanted: str = "", package_size: int = 2):
     current = _require_session(request)
@@ -928,12 +1138,13 @@ def hub_section(request: Request, section: str, league: str, target: str = "", w
             ids = set().union(*rosters.values()) if rosters else set()
             projections = client.projected_scores(week=week, player_ids=sorted(ids))
             settings = client.lineup_settings()
+            ros_weeks = max(0, client.league_details().end_week - week + 1)
             if wanted:
                 analysis = analyze_target_trade(own, target, wanted, rosters, catalog, projections, settings, package_size=package_size)
-                context.update(analysis=analysis, target=target)
+                context.update(analysis=analysis, target=target, ros_weeks=ros_weeks)
             else:
                 context["ideas"] = suggest_trades(own, rosters, catalog, projections, settings)
-            context.update(week=week, names=client.franchise_names())
+            context.update(week=week, names=client.franchise_names(), ros_weeks=ros_weeks)
         _remember_catalog(current, client)
     except (MFLApiError, ValueError, requests.RequestException) as exc:
         log_error("hub_section_unavailable", exc)

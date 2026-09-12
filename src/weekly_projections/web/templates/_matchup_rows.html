@@ -6,7 +6,7 @@
     {% if item %}
     <div class="matchup-player-info"><div class="matchup-identity-line">{% set player = item.player %}{% include '_player_identity.html' %}<span class="game-status-badge {{ item.game_state|lower }}">{{ 'Playing' if item.game_state == 'Live' else 'Yet to play' if item.game_state == 'Upcoming' else 'Final' }}</span></div></div>
     <div class="matchup-player-points"><strong>{{ '%.2f'|format(item.score) }}</strong><small>{% if item.projection is not none %}{{ '%.1f'|format(item.projection) }} proj{% else %}— proj{% endif %}</small></div>
-    {% else %}<span class="empty-slot">No player</span>{% endif %}
+    {% else %}<span class="empty-slot">Open starter slot</span>{% endif %}
   </div>
   {% endfor %}
 </div>

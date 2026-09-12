@@ -59,5 +59,7 @@
 .block-grid p { line-height:1.5; overflow-wrap:anywhere; }
 .idea-gains { display:flex; gap:.6rem; margin:.7rem 0; flex-wrap:wrap; }
 .idea-gains span { background:#e5f2fa; color:#005c90; border-radius:6px; padding:.5rem; font-weight:700; }
+.trade-value-chart { display:grid; grid-template-columns:1fr auto 1fr; gap:.6rem; align-items:center; margin:1rem 0; padding:.8rem; border:1px solid var(--site-line); border-radius:10px; background:var(--site-raised); }
+.trade-value-chart div { text-align:center; }.trade-value-chart small,.trade-value-chart strong { display:block; }.trade-value-chart small { color:var(--site-muted); }.trade-value-chart strong { color:var(--site-link); font-size:1.15rem; margin-top:.25rem; }.trade-value-chart>p { grid-column:1/-1; margin:.25rem 0 0; text-align:center; color:var(--site-muted); font-size:.75rem; }
 @media(max-width:850px) { .hub-grid { grid-template-columns:1fr; } .block-form { grid-template-columns:1fr; } }
 @media(max-width:480px) { .hub-shell { padding:1rem .75rem 2rem; } .hub-panel { padding:1rem; border-radius:12px; } .hub-hero { align-items:start; } .hub-hero button { padding:.5rem; font-size:.75rem; } .hub-quick-links { gap:.4rem; } .hub-quick-links a { padding:.7rem; font-size:.8rem; flex:1; text-align:center; } }

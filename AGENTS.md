@@ -16,6 +16,8 @@ for one signed-in owner and provides:
 - reviewed FCFS, priority-waiver, and blind-bid FAAB add/drop requests;
 - live and historical matchup scoring with starter-only summaries and point details;
 - standings grouped by MFL division when division data exists;
+- a League HQ with transaction activity, waiver trends/FAAB, power and luck rankings,
+  playoff outlooks, automated score recaps, manager profiles, and session-only props;
 - trade offers, target analysis, suggested trades, and trade-block management;
 - MFL league-scored projections and clearly separated third-party reference projections;
 - Maize & Blue and Detroit Lions themes across desktop and iPhone layouts.
@@ -52,6 +54,7 @@ src/weekly_projections/
   projection_sources.py        MFL projections plus separate reference feed
   recommendations.py           waiver/player-market recommendation ranking
   trade_engine.py              bounded trade analysis and suggestion engine
+  league_intelligence.py       power/luck, waiver trends, recaps, and playoff odds
   mfl/client.py                all MFL reads, writes, parsing, and data classes
   web/app.py                   FastAPI routes, sessions, page composition, validation
   web/diagnostics.py           redacted local and Railway error logging
@@ -217,6 +220,26 @@ Never enable add controls for rostered or locked players.
 - Group standings by MFL divisions when division metadata exists; keep unassigned teams
   in an explicit fallback group.
 - Use MFL-hosted franchise logos only after existing URL validation accepts them.
+- Rest-of-season trade pace is a labeled extrapolation of the current weekly
+  league-scored projection, not a dynasty market value or trained acceptance model.
+
+## 11a. League-intelligence contract
+
+- Build power rankings only from completed schedule weeks. Weight scoring 45%, point
+  differential 25%, record 20%, and recent three-week form 10%.
+- Expected wins are weekly all-play wins; luck is actual wins minus expected wins.
+- Recaps and team one-liners are deterministic score summaries unless a real LLM
+  provider is explicitly configured. Never label template text as LLM-generated.
+- Transaction reads stay bounded by count and recent days and share a 90-second
+  session cache with the rest of League HQ to protect MFL rate limits.
+- Playoff probabilities are model estimates derived from power scores, not official
+  MFL odds. If MFL has not published the bracket, show an empty state.
+- Manager profiles must not invent career, championship, rivalry, draft, trophy, or
+  retired-player history. Show only imported seasons and computed facts.
+- Side bets are private, session-memory notes with no payment handling. They clear on
+  disconnect, expiration, restart, or redeploy and are never posted to MFL.
+- An incomplete lineup must retain one visible blank row per unfilled legal starter
+  slot in both the editor and matchup presentation.
 
 ## 12. UI and accessibility expectations
 

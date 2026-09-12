@@ -39,6 +39,19 @@ def test_locked_upgrade_is_kept_on_board_as_future_target() -> None:
     assert board[0].availability.claimable is False
 
 
+def test_available_player_is_labeled_as_bye_week_fit() -> None:
+    board = rank_available_players(
+        available_players=[MFLPlayer("a1", "Bye Fill", "WR", "DET")],
+        availability={"a1": MFLAvailability("a1")},
+        roster=[MFLPlayer("r1", "Starter On Bye", "WR", "BUF")],
+        projections={"a1": 8.0, "r1": 10.0},
+        bye_teams={"BUF"},
+    )
+    assert board[0].recommendation == "Bye-week fit"
+    assert board[0].bye_replacements == ("Starter On Bye",)
+    assert "during this week's bye" in board[0].reason
+
+
 def test_full_player_board_labels_rostered_teams_without_making_them_addable() -> None:
     own = MFLPlayer("mine", "My Receiver", "WR", "DET")
     free_agent = MFLPlayer("free", "Free Receiver", "WR", "GB")

@@ -3,7 +3,9 @@
 A private web app for managing MyFantasyLeague teams. It supports multiple
 leagues, lineup changes, automatic lineup suggestions, add/drop reviews, live
 matchups, league standings, trades, the trade block, and league-scored weekly
-projections.
+projections. League HQ adds a transaction feed, waiver trends and FAAB balances,
+power rankings, an expected-wins luck index, playoff outlooks, score-driven weekly
+recaps, current-season manager profiles, and a private session-only prop tracker.
 
 The player market combines MFL free agents, waiver players, and every league
 roster. It can filter by name, position, NFL team, availability, fantasy team,
@@ -57,6 +59,9 @@ repository.
 - Kickoff locks are checked before lineup or player-move submissions.
 - Live scoring automatically polls only while an NFL game is in progress.
 - MFL scores remain authoritative when detailed stat feeds differ.
+- Incomplete rosters keep visible open rows for every unfilled legal starter slot.
+- League HQ caches its bounded MFL reports for 90 seconds to reduce rate-limit pressure.
+- Side bets are notes only: they have no payment handling and clear with the session.
 - Detailed diagnostic records rotate under `logs/errors.log` and are also sent
   to standard output for Railway Deploy Logs. They include the complete
   exception chain, stack frames, HTTP status, safe endpoint details, and rate

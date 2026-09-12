@@ -283,6 +283,7 @@
     const dragStatus = document.querySelector('#drag-status');
     const checkFor = (row) => row.querySelector('input[type="checkbox"][name="starter_ids"]');
     const assignSlots = () => {
+      lineupForm.querySelectorAll('[data-empty-lineup-slot]').forEach((row) => row.remove());
       const selected = lineupRows.filter((row) => checkFor(row).checked);
       const assigned = new Map();
       const slotOrder = slotSpecs.map((_,i) => i).sort((a,b) => slotSpecs[a].positions.length - slotSpecs[b].positions.length || a-b);
@@ -299,7 +300,17 @@
       const section = lineupForm.querySelector('[data-roster-section="starters"]');
       slotSpecs.forEach((slot,index) => {
         const row = assigned.get(index);
-        if (row) { row.querySelector('[data-slot-label]').textContent = slot.label; section.append(row); }
+        if (row) {
+          row.querySelector('[data-slot-label]').textContent = slot.label;
+          section.append(row);
+          return;
+        }
+        const empty = document.createElement('article');
+        empty.className = 'editor-player lineup-empty-slot';
+        empty.dataset.emptyLineupSlot = 'true';
+        empty.setAttribute('aria-label', `${slot.label} starter slot is empty`);
+        empty.innerHTML = `<div class="roster-position"><span>${slot.label}</span></div><div class="lineup-empty-copy"><strong>Open starter slot</strong><small>No player selected</small></div><div class="roster-game"><span>—</span></div><div class="editor-player-projection">—</div><div class="roster-score">—</div><div></div>`;
+        section.append(empty);
       });
     };
 

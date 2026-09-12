@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from typing import Any, Iterable, Iterator, Literal
@@ -165,12 +166,39 @@ class MFLFranchise:
     name: str
     division_id: str = ""
     logo_url: str = ""
+    faab_balance: float | None = None
+    waiver_order: int | None = None
 
 
 @dataclass(frozen=True)
 class MFLLeagueDetails:
     divisions: tuple[tuple[str, str], ...]
     franchises: dict[str, MFLFranchise]
+    name: str = ""
+    start_week: int = 1
+    end_week: int = 18
+    last_regular_season_week: int = 14
+    faab_limit: float | None = None
+    history_years: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
+class MFLFantasyGame:
+    week: int
+    team_ids: tuple[str, ...]
+    scores: tuple[float | None, ...]
+
+
+@dataclass(frozen=True)
+class MFLTransaction:
+    id: str
+    kind: str
+    timestamp: int | None
+    franchise_ids: tuple[str, ...]
+    adds: tuple[str, ...]
+    drops: tuple[str, ...]
+    description: str = ""
+    assets: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -551,6 +579,114 @@ class MFLClient:
             rows.append(row)
         return rows
 
+    def fantasy_schedule(self) -> tuple[MFLFantasyGame, ...]:
+        """Return the league schedule with scores using one MFL export."""
+        payload = self.export("schedule")
+        root = payload.get("schedule") if isinstance(payload, dict) else None
+        if not isinstance(root, dict):
+            raise MFLApiError("MFL league schedule is unavailable")
+        games: list[MFLFantasyGame] = []
+        for weekly in _iter_key(root, "weeklySchedule"):
+            if not isinstance(weekly, dict):
+                continue
+            try:
+                week = int(weekly.get("week", 0))
+            except (TypeError, ValueError):
+                continue
+            if week < 1:
+                continue
+            matchups = weekly.get("matchup", [])
+            if isinstance(matchups, dict):
+                matchups = [matchups]
+            if not isinstance(matchups, list):
+                continue
+            for matchup in matchups:
+                if not isinstance(matchup, dict):
+                    continue
+                teams = matchup.get("franchise", [])
+                if isinstance(teams, dict):
+                    teams = [teams]
+                if not isinstance(teams, list):
+                    continue
+                team_ids: list[str] = []
+                scores: list[float | None] = []
+                for team in teams:
+                    if not isinstance(team, dict) or not str(team.get("id", "")).isdecimal():
+                        continue
+                    team_ids.append(str(team["id"]).zfill(4))
+                    raw_score = team.get("score")
+                    if isinstance(raw_score, dict):
+                        raw_score = raw_score.get("$t")
+                    try:
+                        scores.append(float(raw_score) if raw_score not in (None, "") else None)
+                    except (TypeError, ValueError):
+                        scores.append(None)
+                if len(team_ids) >= 2:
+                    games.append(MFLFantasyGame(week, tuple(team_ids), tuple(scores)))
+        return tuple(sorted(games, key=lambda game: (game.week, game.team_ids)))
+
+    def transactions(self, *, days: int = 14, count: int = 150) -> tuple[MFLTransaction, ...]:
+        """Read a bounded activity window for waiver and trade intelligence."""
+        days = min(90, max(1, int(days)))
+        count = min(500, max(1, int(count)))
+        payload = self.export(
+            "transactions",
+            DAYS=days,
+            COUNT=count,
+            TRANS_TYPE="WAIVER,BBID_WAIVER,FREE_AGENT,TRADE",
+        )
+        root = payload.get("transactions") if isinstance(payload, dict) else None
+        if root in (None, ""):
+            return ()
+        if not isinstance(root, dict):
+            raise MFLApiError("MFL league activity is unavailable")
+        result: list[MFLTransaction] = []
+        action_pattern = re.compile(r"(\d+)\s*[,|:]\s*(ADD|DROP)\b", re.IGNORECASE)
+        reverse_pattern = re.compile(r"(?:^|;)\s*(ADD|DROP)\s*[,|:]\s*(\d+)", re.IGNORECASE)
+        for index, item in enumerate(_iter_key(root, "transaction")):
+            if not isinstance(item, dict):
+                continue
+            raw_parts: list[str] = []
+            for key in ("transaction", "players", "player", "description"):
+                value = item.get(key)
+                if isinstance(value, dict):
+                    value = value.get("$t", "")
+                if isinstance(value, str):
+                    raw_parts.append(value)
+            description = " · ".join(part.strip() for part in raw_parts if part.strip())
+            actions = [(player, action.upper()) for player, action in action_pattern.findall(description)]
+            actions.extend((player, action.upper()) for action, player in reverse_pattern.findall(description))
+            adds = tuple(dict.fromkeys(player for player, action in actions if action == "ADD"))
+            drops = tuple(dict.fromkeys(player for player, action in actions if action == "DROP"))
+            asset_ids = tuple(dict.fromkeys((*adds, *drops, *re.findall(r"\d+", description))))
+            franchise_ids: list[str] = []
+            for key in ("franchise", "franchise_id", "franchise1", "franchise2", "offeredBy", "offeredTo"):
+                value = item.get(key)
+                if isinstance(value, dict):
+                    value = value.get("$t", "")
+                for candidate in re.findall(r"\d+", str(value or "")):
+                    if len(candidate) <= 4:
+                        franchise_ids.append(candidate.zfill(4))
+            raw_timestamp = item.get("timestamp")
+            if isinstance(raw_timestamp, dict):
+                raw_timestamp = raw_timestamp.get("$t")
+            try:
+                timestamp = int(raw_timestamp) if raw_timestamp not in (None, "") else None
+            except (TypeError, ValueError):
+                timestamp = None
+            kind = str(item.get("type") or item.get("transaction_type") or "ACTIVITY").upper()
+            result.append(MFLTransaction(
+                id=str(item.get("id") or item.get("transaction_id") or f"activity-{index}"),
+                kind=kind,
+                timestamp=timestamp,
+                franchise_ids=tuple(dict.fromkeys(franchise_ids)),
+                adds=adds,
+                drops=drops,
+                description=description,
+                assets=asset_ids,
+            ))
+        return tuple(sorted(result, key=lambda item: item.timestamp or 0, reverse=True))
+
     @staticmethod
     def _mfl_image_url(value: Any) -> str:
         """Allow only HTTPS artwork served by MFL; reject manager-supplied hosts."""
@@ -596,9 +732,38 @@ class MFLClient:
                     str(item.get("name") or f"Franchise {franchise_id}"),
                     str(item.get("division") or ""),
                     logo,
+                    self._optional_float(item.get("bbidAvailableBalance")),
+                    self._optional_int(item.get("waiverSortOrder")),
                 )
-        self._league_details = MFLLeagueDetails(tuple(divisions), franchises)
+        history_years = []
+        for item in _iter_key(root.get("history", {}), "league"):
+            if isinstance(item, dict) and str(item.get("year", "")).isdecimal():
+                history_years.append(int(item["year"]))
+        self._league_details = MFLLeagueDetails(
+            tuple(divisions),
+            franchises,
+            name=str(root.get("name") or ""),
+            start_week=self._optional_int(root.get("startWeek")) or 1,
+            end_week=self._optional_int(root.get("endWeek")) or 18,
+            last_regular_season_week=self._optional_int(root.get("lastRegularSeasonWeek")) or 14,
+            faab_limit=self._optional_float(root.get("bbidSeasonLimit")),
+            history_years=tuple(sorted(set(history_years), reverse=True)),
+        )
         return self._league_details
+
+    @staticmethod
+    def _optional_float(value: Any) -> float | None:
+        if isinstance(value, dict):
+            value = value.get("$t")
+        try:
+            return float(value) if value not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _optional_int(value: Any) -> int | None:
+        number = MFLClient._optional_float(value)
+        return int(number) if number is not None else None
 
     def validate_player_trade(self, target: str, give: Iterable[str], receive: Iterable[str]) -> tuple[str, list[str], list[str]]:
         own = self.config.franchise_id.zfill(4)

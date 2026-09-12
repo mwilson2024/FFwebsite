@@ -17,5 +17,5 @@
     <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h17m-4-4 4 4-4 4M21 17H4m4-4-4 4 4 4"/></svg>
     <span>Trades</span>
   </a>
-  <a aria-label="League standings" {% if active_tool == 'standings' %}class="active" aria-current="page"{% endif %} href="/standings?league={{ league.id }}"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V10h4v10M10 20V4h4v16M15 20v-7h4v7M3 20h18"/></svg><span class="nav-label-desktop">Standings</span><span class="nav-label-mobile" aria-hidden="true">Ranks</span></a>
+  <a aria-label="League intelligence" {% if active_tool in ['league','standings'] %}class="active" aria-current="page"{% endif %} href="/league?league={{ league.id }}"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V10h4v10M10 20V4h4v16M15 20v-7h4v7M3 20h18"/></svg><span class="nav-label-desktop">League</span><span class="nav-label-mobile" aria-hidden="true">League</span></a>
 </nav>

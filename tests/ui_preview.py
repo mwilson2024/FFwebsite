@@ -10,6 +10,8 @@ from weekly_projections.mfl.client import (
     MFLFranchise,
     MFLLeague,
     MFLLeagueDetails,
+    MFLFantasyGame,
+    MFLTransaction,
     MFLLineupRule,
     MFLLineupSettings,
     MFLLiveFranchise,
@@ -69,9 +71,11 @@ class DemoClient:
         return MFLLeagueDetails(
             (("01", "Leaders"), ("02", "Legends")),
             {
-                "0001": MFLFranchise("0001", "Motor City Maulers", "01"),
-                "0002": MFLFranchise("0002", "Ann Arbor Aces", "02"),
+                "0001": MFLFranchise("0001", "Motor City Maulers", "01", faab_balance=74, waiver_order=2),
+                "0002": MFLFranchise("0002", "Ann Arbor Aces", "02", faab_balance=91, waiver_order=1),
             },
+            name="Motor City League", end_week=17, last_regular_season_week=14,
+            faab_limit=100, history_years=(2026, 2025, 2024),
         )
     def league_standings(self):
         return [
@@ -80,6 +84,16 @@ class DemoClient:
         ]
     def trade_block(self):
         return {"0002": {"assets": ("16",), "wanted": "Wide receiver depth", "timestamp": ""}}
+    def fantasy_schedule(self):
+        return (
+            MFLFantasyGame(1, ("0001", "0002"), (124.7, 103.2)),
+            MFLFantasyGame(15, ("0001", "0002"), (None, None)),
+        )
+    def transactions(self, **kwargs):
+        return (
+            MFLTransaction("a1", "BBID_WAIVER", 1789200000, ("0001",), ("15",), ("8",)),
+            MFLTransaction("a2", "TRADE", 1789100000, ("0001", "0002"), (), (), assets=("4", "5")),
+        )
     def nfl_refresh_state(self, **kwargs): return {'active':False, 'next_kickoff':None}
     def scoring_rules(self): return {"positionRules": [{"positions":"QB|RB|WR|TE", "rule":[{"event":{"$t":"CC"},"points":{"$t":"*.5"},"range":{"$t":"0-99"}}]}]}
     def live_scoring(self, *, week):

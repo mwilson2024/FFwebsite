@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="csrf-token" content="{{ session.csrf_token }}">
+  <title>{{ league.name }} · League HQ</title>
+  <link rel="stylesheet" href="/static/app.css?v=league-1">
+  <link rel="stylesheet" href="/static/hub.css?v=league-1">
+  <link rel="stylesheet" href="/static/league.css?v=1">
+  <link rel="stylesheet" href="/static/lions.css?v=1">
+  <script src="/static/diagnostics.js" defer></script>
+  {% include '_theme_assets.html' %}
+</head>
+<body class="league-hq-page">
+  {% set active_tool = 'league' %}{% include '_league_header.html' %}
+  <main class="league-hq-shell" id="main-content">
+    {% if error %}
+      <div class="error" role="alert">{{ error }}{% include '_error_reference.html' %}</div>
+    {% else %}
+    <section class="league-hq-hero">
+      <div><p class="eyebrow">LEAGUE INTELLIGENCE</p><h1>{{ details.name or league.name }}</h1><p>Week {{ current_week }} · MFL data, one clear league view</p></div>
+      <nav class="league-jump" aria-label="League page sections"><a href="#power">Power</a><a href="#waivers">Waivers</a><a href="#activity">Feed</a><a href="#playoffs">Playoffs</a></nav>
+    </section>
+
+    {% if errors %}<details class="hq-notice"><summary>Some MFL reports are temporarily unavailable</summary><ul>{% for section,message in errors.items() %}<li>{{ section|title }}: {{ message }}</li>{% endfor %}</ul></details>{% endif %}
+
+    <section class="league-feature-grid">
+      <article class="league-card recap-card">
+        <span class="card-kicker">AUTOMATED WEEKLY RECAP</span>
+        <h2>{{ recap.headline }}</h2><p>{{ recap.story }}</p>
+        {% if recap.awards %}<div class="award-row">{% for title,value in recap.awards %}<div><small>{{ title }}</small><strong>{{ value }}</strong></div>{% endfor %}</div>{% endif %}
+        <p class="data-note">Generated from completed MFL scores. No made-up quotes or results.</p>
+      </article>
+      <article class="league-card own-team-card">
+        {% set own = teams.get(league.franchise_id.zfill(4)) %}{% set own_rank = rank_by_team.get(league.franchise_id.zfill(4)) %}
+        <span class="card-kicker">YOUR FRANCHISE</span>
+        <div class="franchise-title">{% if own and own.logo_url %}<img src="{{ own.logo_url }}" alt="">{% else %}<span>{{ (own.name if own else league.name)[:2]|upper }}</span>{% endif %}<div><h2>{{ own.name if own else league.name }}</h2>{% if own_rank %}<p>#{{ own_rank.rank }} power · {{ own_rank.record }}</p>{% endif %}</div></div>
+        <div class="team-actions"><a href="/manager/{{ league.franchise_id }}?league={{ league.id }}">Open profile</a><a href="/lineup?league={{ league.id }}">Set lineup</a></div>
+      </article>
+    </section>
+
+    <section class="league-card" id="power">
+      <div class="league-section-heading"><div><span class="card-kicker">WEEK {{ current_week }}</span><h2>Power rankings &amp; luck index</h2></div><p>45% scoring · 25% differential · 20% record · 10% recent form</p></div>
+      {% if rankings %}<div class="power-list">{% for row in rankings %}
+        <a class="power-row {% if row.franchise_id == league.franchise_id.zfill(4) %}is-yours{% endif %}" href="/manager/{{ row.franchise_id }}?league={{ league.id }}">
+          <strong class="power-rank">{{ row.rank }}</strong><span class="power-team">{{ row.name }}<small>{{ row.one_liner }}</small></span><span><small>Record</small><strong>{{ row.record }}</strong></span><span><small>Expected wins</small><strong>{{ '%.1f'|format(row.expected_wins) }}</strong></span><span class="luck-value {{ 'positive' if row.luck > 0.5 else 'negative' if row.luck < -0.5 else '' }}"><small>Luck</small><strong>{{ '%+.1f'|format(row.luck) }}</strong></span><span class="power-meter"><i style="width:{{ row.power_score }}%"></i><small>{{ '%.1f'|format(row.power_score) }}</small></span>
+        </a>{% endfor %}</div>{% else %}<p class="empty-state">Power rankings appear after completed MFL matchups are available.</p>{% endif %}
+    </section>
+
+    <div class="league-two-column">
+      <section class="league-card" id="waivers">
+        <div class="league-section-heading"><div><span class="card-kicker">21-DAY WINDOW</span><h2>Waiver wire intelligence</h2></div><a href="/moves?league={{ league.id }}">Open player market</a></div>
+        {% if trends %}<ol class="trend-list">{% for trend in trends %}{% set player = catalog.get(trend.player_id) %}<li><span class="trend-rank">{{ loop.index }}</span><span><strong>{{ player.name if player else trend.player_id }}</strong><small>{{ player.team if player else 'MFL player' }}{% if player %} · {{ player.position }}{% endif %}</small></span><span class="trend-count"><b>+{{ trend.adds }}</b><small>adds</small></span><span class="trend-count drops">−{{ trend.drops }}<small>drops</small></span></li>{% endfor %}</ol>{% else %}<p class="empty-state">No adds or drops were returned in this activity window.</p>{% endif %}
+        <h3 class="subheading">FAAB &amp; waiver priority</h3>
+        <div class="budget-grid">{% for team_id,team in teams.items() %}<div><span>{{ team.name }}</span><strong>{% if team.faab_balance is not none %}${{ '%.0f'|format(team.faab_balance) }}{% else %}—{% endif %}</strong><small>{% if team.waiver_order %}Priority {{ team.waiver_order }}{% else %}Priority unavailable{% endif %}</small></div>{% endfor %}</div>
+        <p class="data-note">Pickup recommendations for bench weakness and weekly need remain on the Players page. FAAB values come directly from this league's MFL setup.</p>
+      </section>
+
+      <section class="league-card" id="activity">
+        <div class="league-section-heading"><div><span class="card-kicker">LEAGUE FEED</span><h2>Activity wall</h2></div><span>Newest first</span></div>
+        {% if activity_rows %}<ol class="activity-feed">{% for row in activity_rows[:25] %}<li><span class="activity-dot {{ row.item.kind|lower }}"></span><div><strong>{{ row.item.kind|replace('_',' ')|title }}</strong>{% if row.teams %}<p>{{ row.teams|join(' ↔ ') }}</p>{% endif %}{% if row.item.kind == 'TRADE' and row.assets %}<p>Players: {{ row.assets|join(', ') }}</p>{% endif %}{% if row.added %}<p class="activity-add">Added {{ row.added|join(', ') }}</p>{% endif %}{% if row.dropped %}<p class="activity-drop">Dropped {{ row.dropped|join(', ') }}</p>{% endif %}<small>{{ row.when }}</small></div></li>{% endfor %}</ol>{% else %}<p class="empty-state">No recent MFL transactions were returned.</p>{% endif %}
+      </section>
+    </div>
+
+    <section class="league-card" id="playoffs">
+      <div class="league-section-heading"><div><span class="card-kicker">LIVE OUTLOOK</span><h2>Playoff bracket</h2></div><p>Probabilities use the power model above</p></div>
+      {% if playoff_games %}<div class="bracket-scroll"><div class="bracket">{% for item in playoff_games %}{% set game=item.game %}<article><span>Week {{ game.week }}</span>{% for team_id in game.team_ids %}<div><strong>{{ names.get(team_id, 'TBD') }}</strong>{% if game.scores[loop.index0] is not none %}<b>{{ '%.2f'|format(game.scores[loop.index0]) }}</b>{% elif item.probability %}<b>{{ item.probability[loop.index0] }}%</b>{% else %}<b>—</b>{% endif %}</div>{% endfor %}</article>{% endfor %}</div></div>{% else %}<p class="empty-state">MFL has not published playoff matchups yet. This bracket will fill in automatically after the regular season.</p>{% endif %}
+    </section>
+
+    <section class="league-card">
+      <div class="league-section-heading"><div><span class="card-kicker">FRANCHISES</span><h2>Manager profiles</h2></div>{% if details.history_years %}<p>League history available: {{ details.history_years[-1] }}–{{ details.history_years[0] }}</p>{% endif %}</div>
+      <div class="manager-grid">{% for team_id,team in teams.items() %}{% set row=rank_by_team.get(team_id) %}<a href="/manager/{{ team_id }}?league={{ league.id }}"><div class="manager-logo">{% if team.logo_url %}<img src="{{ team.logo_url }}" alt="">{% else %}{{ team.name[:2]|upper }}{% endif %}</div><strong>{{ team.name }}</strong>{% if row %}<span>#{{ row.rank }} power · {{ row.record }}</span><small>{{ '%+.1f'|format(row.luck) }} luck</small>{% endif %}</a>{% endfor %}</div>
+    </section>
+
+    <section class="league-card" id="standings"><div class="league-section-heading"><div><span class="card-kicker">OFFICIAL MFL</span><h2>Standings</h2></div></div>
+      {% if standings %}<div class="standings-divisions">{% for group in groups %}<section class="division-standing"><header><h3>{{ group.name }}</h3><span>{{ group.rows|length }} teams</span></header><div class="hub-table-scroll"><table class="hub-standings"><thead><tr><th>Team</th><th>W</th><th>L</th><th>T</th><th>PF</th><th>PA</th></tr></thead><tbody>{% for row in group.rows %}{% set team=teams.get(row.id) %}<tr class="{% if row.id == league.franchise_id.zfill(4) %}your-standing{% endif %}"><th>{{ team.name if team else row.id }}</th><td>{{ row.h2hw }}</td><td>{{ row.h2hl }}</td><td>{{ row.h2ht }}</td><td>{{ row.pf }}</td><td>{{ row.pa }}</td></tr>{% endfor %}</tbody></table></div></section>{% endfor %}</div>{% else %}<p class="empty-state">Standings are temporarily unavailable.</p>{% endif %}
+    </section>
+
+    <section class="league-card" id="side-bets"><div class="league-section-heading"><div><span class="card-kicker">LEAGUE PROPS</span><h2>Side-bet tracker</h2></div><p>Private to this browser session</p></div>
+      <form class="side-bet-form" method="post" action="/league/side-bets"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="league" value="{{ league.id }}"><label>Prop<input name="title" maxlength="120" placeholder="Who scores more this week?" required></label><label>Managers / sides<input name="participants" maxlength="120" placeholder="Alex vs. Jordan"></label><label>Stake<input name="stake" maxlength="80" placeholder="$10 or loser buys pizza"></label><button type="submit">Add prop</button></form>
+      {% if side_bets %}<div class="bet-list">{% for bet in side_bets %}<article class="{{ bet.status }}"><div><strong>{{ bet.title }}</strong><p>{{ bet.participants or 'Open participants' }}{% if bet.stake %} · {{ bet.stake }}{% endif %}</p></div><span>{{ bet.status|title }}</span>{% if bet.status == 'open' %}<form method="post" action="/league/side-bets/{{ bet.id }}/settle"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="league" value="{{ league.id }}"><button>Mark settled</button></form>{% endif %}</article>{% endfor %}</div>{% else %}<p class="empty-state">No props tracked in this session yet.</p>{% endif %}<p class="data-note">Side bets clear when you disconnect, the server restarts, or the session expires. No payment handling is included.</p>
+    </section>
+    {% endif %}
+  </main>
+</body>
+</html>

@@ -10,6 +10,8 @@ from weekly_projections.mfl.client import (
     MFLFranchise,
     MFLLeague,
     MFLLeagueDetails,
+    MFLFantasyGame,
+    MFLTransaction,
     MFLLiveFranchise,
     MFLLiveMatchup,
     MFLLivePlayer,
@@ -21,6 +23,7 @@ from weekly_projections.mfl.client import (
 from weekly_projections.recommendations import PlayerRecommendation
 from weekly_projections.projection_sources import ProjectionBlend
 from weekly_projections.web import app as web_app
+from weekly_projections.league_intelligence import build_power_rankings, build_recap, waiver_trends
 
 
 class FakeMFLClient:
@@ -303,6 +306,55 @@ def test_lineup_page_shows_start_sit_recommendations(monkeypatch) -> None:
     assert 'data-roster-section="bench"' in response.text
     assert 'data-player-card="p1"' in response.text
     assert 'id="use-recommended"' in response.text
+    assert "lineup-3" in response.text
+
+
+def test_league_hq_renders_intelligence_and_tracks_session_side_bets(monkeypatch) -> None:
+    web_app.sessions.clear()
+    session_id = "league-session"
+    league = MFLLeague("11111", "0001", "Home League")
+    web_app.sessions[session_id] = web_app.BrowserSession(
+        mfl_cookie="mfl-session-cookie", year=2026, leagues=[league], csrf_token="csrf",
+    )
+    teams = {
+        "0001": MFLFranchise("0001", "Alpha", faab_balance=70, waiver_order=2),
+        "0002": MFLFranchise("0002", "Bravo", faab_balance=50, waiver_order=1),
+    }
+    games = (MFLFantasyGame(1, ("0001", "0002"), (120.0, 100.0)),)
+    names = {key: team.name for key, team in teams.items()}
+    rankings = build_power_rankings(games, names, current_week=2)
+    activity = (MFLTransaction("t1", "WAIVER", 100, ("0001",), ("p1",), ("p2",)),)
+    hq = {
+        "details": MFLLeagueDetails((), teams, name="Test HQ", end_week=17),
+        "teams": teams, "names": names, "current_week": 2,
+        "standings": [{"id":"0001","h2hw":"1","h2hl":"0","h2ht":"0","pf":"120","pa":"100"}],
+        "groups": [{"id":"","name":"League standings","rows":[{"id":"0001","h2hw":"1","h2hl":"0","h2ht":"0","pf":"120","pa":"100"}]}],
+        "schedule": games, "activity": activity,
+        "catalog": {"p1": MFLPlayer("p1", "Pickup", "WR", "DET"), "p2": MFLPlayer("p2", "Drop", "RB", "GB")},
+        "rankings": rankings, "rank_by_team": {row.franchise_id: row for row in rankings},
+        "recap": build_recap(games, names, current_week=2), "trends": waiver_trends(activity),
+        "playoff_games": [], "errors": {},
+    }
+    monkeypatch.setattr(web_app, "_league_hq", lambda current, selected: dict(hq))
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", session_id)
+    response = client.get("/league?league=11111")
+    assert response.status_code == 200
+    assert "Power rankings &amp; luck index" in response.text
+    assert "Waiver wire intelligence" in response.text
+    assert "Pickup" in response.text
+    assert "Side-bet tracker" in response.text
+    response = client.post("/league/side-bets", data={
+        "league":"11111", "csrf_token":"csrf", "title":"QB duel",
+        "participants":"A vs B", "stake":"pizza",
+    }, follow_redirects=False)
+    assert response.status_code == 303
+    assert web_app.sessions[session_id].side_bets["11111"][0].title == "QB duel"
+    profile = client.get("/manager/0001?league=11111")
+    assert profile.status_code == 200
+    assert "FRANCHISE PROFILE" in profile.text
+    assert "Alpha" in profile.text
+    assert "without inventing results" in profile.text
 
 
 def test_kickoff_locks_are_enforced_server_side() -> None:
