@@ -269,6 +269,7 @@ class BrowserSession:
     blocks: dict[str, BlockDraft] = field(default_factory=dict)
     expires_at: float = field(default_factory=lambda: time.monotonic() + 8 * 60 * 60)
     mfl_api_key: str = ""
+    read_cache: dict[str, tuple[float, object]] = field(default_factory=dict)
 
 
 sessions: dict[str, BrowserSession] = {}
@@ -363,12 +364,19 @@ def _client(current: BrowserSession, league: MFLLeague) -> MFLClient:
         )
     )
     client._players = current.player_catalog
+    # Short-lived, session-local read cache. Mutation previews and submissions
+    # intentionally bypass it and re-read MFL before any write.
+    client._browser_read_cache = current.read_cache
     return client
 
 
 def _remember_catalog(current: BrowserSession, client: MFLClient) -> None:
     if client._players is not None:
         current.player_catalog = client._players
+
+
+def _invalidate_player_board(current: BrowserSession, league_id: str) -> None:
+    current.read_cache.pop(f"{current.year}:{league_id}:player-board", None)
 
 
 def _load_player_board(
@@ -380,6 +388,13 @@ def _load_player_board(
     ProjectionBlend,
     set[str],
 ]:
+    cache = getattr(client, "_browser_read_cache", None)
+    cache_key = f"{client.config.year}:{client.config.league_id}:player-board"
+    now = time.monotonic()
+    if cache is not None:
+        cached = cache.get(cache_key)
+        if cached and cached[0] > now:
+            return cached[1]
     roster_ids = client.roster_ids()
     availability = client.free_agents()
     league_rosters = client.trade_rosters()
@@ -464,7 +479,13 @@ def _load_player_board(
         own_roster=roster,
         projections=blend.scores,
     )
-    return week, roster, recommendations, blend, roster_locked
+    result = (week, roster, recommendations, blend, roster_locked)
+    if cache is not None:
+        # This board combines several large MFL exports. A brief cache keeps
+        # home widgets and the player page from immediately repeating them,
+        # while submission-time ownership and lock checks remain live.
+        cache[cache_key] = (time.monotonic() + 30, result)
+    return result
 
 
 def _load_lineup(
@@ -710,6 +731,12 @@ def _stage_move(
     pending_id = secrets.token_urlsafe(24)
     current.pending_moves[pending_id] = preview
     return pending_id, preview, league
+
+
+@app.get("/health", include_in_schema=False)
+def health() -> dict[str, str]:
+    """Small unauthenticated liveness check for Railway and other hosts."""
+    return {"status": "ok"}
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -1345,6 +1372,7 @@ def submit_move(request: Request, pending_id: str, csrf_token: str = Form(...)):
                 )
                 raise ValueError(f"Game already started; MFL has locked: {names}")
         result = client.submit_add_drop(preview, replace=preview.replace_existing)
+        _invalidate_player_board(current, league.id)
         success = "MFL accepted the transaction request."
         error = None
     except (MFLApiError, ValueError) as api_error:

@@ -20,6 +20,8 @@
 .hub-scoreboard > div { min-width:0; }
 .hub-scoreboard p { color:#ffe278; font-size:.85rem; }
 .hub-scoreboard small { color:#bacde0; font-size:.75rem; }
+.hub-game-counts { display:flex; flex-wrap:wrap; gap:.35rem; margin-top:.7rem; }
+.hub-game-counts .game-status-badge { font-size:.7rem; }
 .hub-score { display:block; font-size:clamp(2rem,4vw,3.3rem); letter-spacing:-.04em; font-variant-numeric:tabular-nums; }
 .hub-scoreboard > div:first-child .hub-score { color:#ffcb05; }
 .hub-player-list { list-style:none; padding:0; margin:0; }

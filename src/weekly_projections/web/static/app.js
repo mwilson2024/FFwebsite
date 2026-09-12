@@ -152,6 +152,9 @@
   const fantasyTeam = document.querySelector("#fantasy-team-filter");
   const projectionFilter = document.querySelector("#projection-filter");
   const playerSort = document.querySelector("#player-sort");
+  const filterPanel = document.querySelector(".board-filter-panel");
+  const resultCount = document.querySelector("#player-result-count");
+  const clearFilters = document.querySelector("#clear-player-filters");
   const playerTableBody = document.querySelector(".waiver-table tbody");
   const empty = document.querySelector("#filtered-empty");
   const selectedCopy = document.querySelector("#selected-player");
@@ -190,6 +193,7 @@
       if (!row.hidden) shown += 1;
     });
     if (empty) empty.hidden = shown !== 0;
+    if (resultCount) resultCount.textContent = shown === rows.length ? `${shown} shown` : `${shown} of ${rows.length} shown`;
   };
 
   const applySort = () => {
@@ -222,6 +226,16 @@
     control?.addEventListener(control === search ? "input" : "change", applyFilters);
   });
   playerSort?.addEventListener("change", applySort);
+  clearFilters?.addEventListener("click", () => {
+    if (search) search.value = "";
+    [position, status, nflTeam, fantasyTeam, projectionFilter].forEach((control) => {
+      if (control) control.value = "all";
+    });
+    if (playerSort) playerSort.value = "recommended";
+    applyFilters();
+    applySort();
+    search?.focus();
+  });
   document.querySelectorAll('input[name="add_id"]').forEach((radio) => radio.addEventListener("change", () => {
     if (radio.checked && radio.dataset.marketStatus === "waiver" && modeSelect) modeSelect.value = "waiver";
     if (radio.checked && radio.dataset.marketStatus === "open" && modeSelect?.value === "waiver") modeSelect.value = "fcfs";
@@ -245,6 +259,7 @@
   applySort();
   updateModeFields();
   updateReviewState();
+  if (filterPanel && window.matchMedia("(max-width: 760px)").matches && !search?.value) filterPanel.open = false;
 
   const moveBuilder = document.querySelector("#move-builder");
   if (moveBuilder && moveShortcut && "IntersectionObserver" in window) {

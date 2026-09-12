@@ -54,9 +54,14 @@ html body .hub-panel-heading a { display:inline-flex; align-items:center; min-he
 html body .board-summary { border:0; background:transparent; box-shadow:none; padding:0; gap:1.25rem; }
 html body .waiver-intelligence { padding:.7rem 1rem; margin-bottom:1rem; }
 html body .board-toolbar { padding:1rem; align-items:end; flex-wrap:wrap; }
+html body .board-filter-panel { flex:1 1 720px; min-width:0; }
+html body .board-filter-panel>summary { display:none; }
 html body .board-filters { flex:1; display:grid; grid-template-columns:minmax(160px,2fr) minmax(100px,1fr) minmax(130px,1fr); gap:.75rem; }
 html body .board-filters label { min-width:0; }
 html body .board-filters :is(input,select) { width:100%; }
+html body .filter-actions { display:flex; align-items:end; }
+html body .filter-actions button { width:100%; margin:0; }
+.nav-label-mobile { display:none; }
 html body .editor-layout { display:flex; flex-direction:column; gap:1rem; }
 html body .lineup-control-panel { display:block; position:static; width:100%; padding:1.1rem 1.25rem; border-radius:14px; }
 html body .lineup-control-panel .control-panel-heading { margin-bottom:.8rem; }
@@ -121,6 +126,11 @@ html body :is(.review-actions,.confirmation-actions) { display:flex; flex-wrap:w
   html body.lineup-editor-page { padding-bottom:calc(172px + env(safe-area-inset-bottom)); }
   html body .board-filters { grid-template-columns:1fr 1fr; width:100%; }
   html body .board-filters label:first-child { grid-column:1/-1; }
+  html body .board-filter-panel { flex-basis:100%; width:100%; border:1px solid var(--site-line); border-radius:12px; background:var(--site-raised); }
+  html body .board-filter-panel>summary { display:flex; align-items:center; justify-content:space-between; gap:1rem; min-height:48px; padding:.65rem .8rem; cursor:pointer; color:var(--site-link); font-weight:700; }
+  html body .board-filter-panel>summary span:last-child { color:var(--site-muted); font-size:.8125rem; font-weight:500; }
+  html body .board-filter-panel[open]>summary { border-bottom:1px solid var(--site-line); }
+  html body .board-filter-panel .board-filters { padding:.8rem; }
   html body .board-summary { flex-wrap:wrap; }
   html body .trade-rosters { grid-template-columns:1fr; }
   html body .trade-player-list { max-height:52vh; }
@@ -133,5 +143,13 @@ html body :is(.review-actions,.confirmation-actions) { display:flex; flex-wrap:w
   html body .move-builder { position:static; padding:1rem; }
   html body .trade-tabs { width:100%; }
   html body .trade-tabs a { flex:1; padding:.55rem .3rem; justify-content:center; text-align:center; }
+}
+@media(max-width:480px) {
+  .nav-label-desktop { display:none; }
+  .nav-label-mobile { display:inline; }
+  html body .gameday-toolbar>div:first-child { width:100%; }
+  html body .gameday-toolbar .score-filters { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto; width:100%; }
+  html body .gameday-toolbar .score-filters label { min-width:0; width:auto; }
+  html body .gameday-toolbar .score-filters button { width:auto; padding-inline:.8rem; }
 }
 @media(prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } html body *,html body *::before,html body *::after { animation:none !important; transition:none !important; } }

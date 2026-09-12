@@ -45,8 +45,9 @@ python -m uvicorn weekly_projections.web.app:app --app-dir src --host 0.0.0.0 --
 ```
 
 Add the Railway variable `WP_SECURE_COOKIES=1`, keep one replica, and generate
-a domain under the service's Networking settings. Never commit `.env` or place
-MFL login details in the repository.
+a domain under the service's Networking settings. You can set Railway's health
+check path to `/health`. Never commit `.env` or place MFL login details in the
+repository.
 
 ## Behavior and safety
 

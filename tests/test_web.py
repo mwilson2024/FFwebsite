@@ -40,6 +40,12 @@ class FakeMFLClient:
         return "mfl-session-cookie"
 
 
+def test_health_endpoint_is_available_without_an_mfl_session() -> None:
+    response = TestClient(web_app.app).get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
 def test_login_page_is_local_and_not_cached() -> None:
     web_app.sessions.clear()
     client = TestClient(web_app.app)
@@ -144,6 +150,9 @@ def test_move_page_shows_full_board_projections_and_locks(monkeypatch) -> None:
     assert 'id="fantasy-team-filter"' in response.text
     assert 'id="projection-filter"' in response.text
     assert 'id="player-sort"' in response.text
+    assert 'class="board-filter-panel"' in response.text
+    assert 'id="player-result-count"' in response.text
+    assert 'id="clear-player-filters"' in response.text
     assert "Blind-bid waiver · FAAB" in response.text
     assert 'name="replace_existing"' in response.text
 
@@ -194,6 +203,42 @@ def test_player_market_loader_merges_all_rosters_and_free_agents(monkeypatch) ->
     assert set(rows) == {"mine", "free", "def", "other"}
     assert rows["other"].fantasy_team_name == "Other Team"
     assert rows["def"].is_claimable is True
+
+
+def test_player_market_loader_reuses_brief_session_cache(monkeypatch) -> None:
+    player = MFLPlayer("free", "Free Player", "RB", "DET")
+
+    class CachedBoardClient:
+        config = MFLConfig(2026, "11111", "0001", user_cookie="test")
+        session = None
+
+        def __init__(self):
+            self._players = {player.id: player}
+            self._browser_read_cache = {}
+            self.roster_reads = 0
+
+        def roster_ids(self):
+            self.roster_reads += 1
+            return set()
+
+        def free_agents(self): return {player.id: MFLAvailability(player.id)}
+        def trade_rosters(self): return {"0001": set()}
+        def league_details(self): return MFLLeagueDetails((), {"0001": MFLFranchise("0001", "My Team")})
+        def players(self): return dict(self._players)
+        def current_week(self): return 1
+        def nfl_team_kickoffs(self, *, week): return {}
+        def projected_scores(self, **kwargs): return {player.id: 10.0}
+
+    monkeypatch.setattr(
+        web_app,
+        "projection_blend",
+        lambda player_list, **kwargs: ProjectionBlend(kwargs["mfl_scores"], kwargs["mfl_scores"], {}, 0),
+    )
+    client = CachedBoardClient()
+    first = web_app._load_player_board(client)
+    second = web_app._load_player_board(client)
+    assert second is first
+    assert client.roster_reads == 1
 
 
 def test_lineup_page_shows_start_sit_recommendations(monkeypatch) -> None:
