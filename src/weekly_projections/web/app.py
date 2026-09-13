@@ -386,13 +386,42 @@ def _secure_cookies(request: Request) -> bool:
 
 
 def _same_origin(request: Request) -> bool:
-    """Reject browser cross-origin unsafe requests; non-browser clients may omit both headers."""
+    """Reject browser cross-site writes while tolerating trusted reverse proxies."""
+    fetch_site = request.headers.get("sec-fetch-site", "").strip().casefold()
+    if fetch_site == "cross-site":
+        return False
+    if fetch_site in {"same-origin", "none"}:
+        return True
     supplied = request.headers.get("origin") or request.headers.get("referer")
     if not supplied:
         return True
     try:
         parsed = urlsplit(supplied)
-        return parsed.scheme in {"http", "https"} and parsed.netloc.casefold() == request.url.netloc.casefold()
+        origin_host = (parsed.hostname or "").rstrip(".").casefold()
+        if parsed.scheme not in {"http", "https"} or not origin_host:
+            return False
+
+        candidates = {(request.url.hostname or "").rstrip(".").casefold()}
+        for header in ("host", "x-forwarded-host", "x-original-host"):
+            for value in request.headers.get(header, "").split(","):
+                value = value.strip()
+                if not value:
+                    continue
+                candidate = urlsplit(f"//{value}").hostname
+                if candidate:
+                    candidates.add(candidate.rstrip(".").casefold())
+        if origin_host in candidates:
+            return True
+
+        # Railway exposes its generated public hostname through an environment
+        # variable. Custom domains are explicitly listed in WP_ALLOWED_HOSTS.
+        for allowed in _allowed_hosts():
+            allowed = allowed.rstrip(".").casefold()
+            if allowed == "*" or origin_host == allowed:
+                return True
+            if allowed.startswith("*.") and origin_host.endswith(allowed[1:]):
+                return True
+        return False
     except ValueError:
         return False
 
@@ -1061,6 +1090,12 @@ def home(request: Request):
     if getattr(request.state, "invalid_remember_token", False):
         response.delete_cookie("wp_remember", path="/")
     return response
+
+
+@app.get("/login", include_in_schema=False)
+def login_page():
+    """Send bookmarks and password managers back to the actual sign-in page."""
+    return RedirectResponse("/", status_code=303)
 
 
 @app.post("/login", response_class=HTMLResponse)

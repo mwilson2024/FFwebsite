@@ -120,6 +120,34 @@ def test_login_requires_nonce_and_rejects_cross_site_origin(monkeypatch):
     assert response.status_code == 403 and not web.sessions
 
 
+def test_login_accepts_railway_forwarded_same_origin(monkeypatch):
+    monkeypatch.setattr(web, "MFLClient", LoginClient)
+    monkeypatch.setattr(web, "sessions", {})
+    web.login_attempts.clear()
+    client = TestClient(web.app, base_url="https://testserver")
+    client.get("/")
+    response = client.post(
+        "/login",
+        data={
+            "username": "owner", "password": "x",
+            "login_csrf": client.cookies.get("wp_login_csrf"),
+        },
+        headers={
+            "Origin": "https://fantasy.example",
+            "X-Forwarded-Host": "fantasy.example",
+            "Sec-Fetch-Site": "same-origin",
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+
+
+def test_get_login_redirects_to_sign_in_page():
+    response = TestClient(web.app).get("/login", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/"
+
+
 def test_security_headers_are_applied():
     response = TestClient(web.app, base_url="https://testserver").get("/health")
     assert response.headers["strict-transport-security"] == "max-age=31536000"
