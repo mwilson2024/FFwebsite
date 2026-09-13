@@ -1,4 +1,6 @@
 from weekly_projections.league_intelligence import (
+    build_local_playoff_games,
+    build_playoff_seeds,
     build_power_rankings,
     build_recap,
     playoff_probability,
@@ -42,3 +44,25 @@ def test_trends_recap_probability_and_ros_pace():
     assert "Week 2" in recap.headline
     assert playoff_probability(rankings[0], rankings[-1])[0] > 50
     assert rest_of_season_pace(10.0, week=10, end_week=17) == 80.0
+
+
+def test_local_playoff_seeding_puts_three_division_leaders_first():
+    rows = [
+        {"id":"0001","h2hw":"8","h2hl":"2","h2ht":"0","pf":"900"},
+        {"id":"0002","h2hw":"9","h2hl":"1","h2ht":"0","pf":"950"},
+        {"id":"0003","h2hw":"7","h2hl":"3","h2ht":"0","pf":"850"},
+        {"id":"0004","h2hw":"10","h2hl":"0","h2ht":"0","pf":"1000"},
+        {"id":"0005","h2hw":"6","h2hl":"4","h2ht":"0","pf":"800"},
+        {"id":"0006","h2hw":"5","h2hl":"5","h2ht":"0","pf":"700"},
+        {"id":"0007","h2hw":"4","h2hl":"6","h2ht":"0","pf":"650"},
+        {"id":"0008","h2hw":"3","h2hl":"7","h2ht":"0","pf":"600"},
+        {"id":"0009","h2hw":"2","h2hl":"8","h2ht":"0","pf":"500"},
+    ]
+    divisions = {"0001":"a","0004":"a","0002":"b","0005":"b","0003":"c","0006":"c","0007":"c","0008":"c","0009":"c"}
+    seeds = build_playoff_seeds(rows, divisions, ("a", "b", "c"))
+    assert seeds[:3] == ("0004", "0002", "0003")
+    assert seeds[3:5] == ("0001", "0005")
+    games = build_local_playoff_games(seeds, first_playoff_week=15)
+    assert [game.team_ids for game in games] == [
+        (seeds[0], seeds[7]), (seeds[3], seeds[4]), (seeds[1], seeds[6]), (seeds[2], seeds[5])
+    ]

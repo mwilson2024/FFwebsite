@@ -63,9 +63,10 @@ def test_login_discovers_and_displays_two_leagues(monkeypatch) -> None:
     web_app.sessions.clear()
     monkeypatch.setattr(web_app, "MFLClient", FakeMFLClient)
     client = TestClient(web_app.app)
+    client.get("/")
     response = client.post(
         "/login",
-        data={"username": "owner", "password": "secret", "year": "2026"},
+        data={"username": "owner", "password": "secret", "year": "2026", "login_csrf": client.cookies.get("wp_login_csrf")},
         follow_redirects=True,
     )
     assert response.status_code == 200

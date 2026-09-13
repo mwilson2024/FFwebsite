@@ -44,7 +44,7 @@
       <div class="league-section-heading"><div><span class="card-kicker">WEEK {{ current_week }}</span><h2>Power rankings &amp; luck index</h2></div><p>45% scoring · 25% differential · 20% record · 10% recent form</p></div>
       {% if rankings %}<div class="power-list">{% for row in rankings %}
         <a class="power-row {% if row.franchise_id == league.franchise_id.zfill(4) %}is-yours{% endif %}" href="/manager/{{ row.franchise_id }}?league={{ league.id }}">
-          <strong class="power-rank">{{ row.rank }}</strong><span class="power-team">{{ row.name }}<small>{{ row.one_liner }}</small></span><span><small>Record</small><strong>{{ row.record }}</strong></span><span><small>Expected wins</small><strong>{{ '%.1f'|format(row.expected_wins) }}</strong></span><span class="luck-value {{ 'positive' if row.luck > 0.5 else 'negative' if row.luck < -0.5 else '' }}"><small>Luck</small><strong>{{ '%+.1f'|format(row.luck) }}</strong></span><span class="power-meter"><i style="width:{{ row.power_score }}%"></i><small>{{ '%.1f'|format(row.power_score) }}</small></span>
+          <strong class="power-rank">{{ row.rank }}</strong><span class="power-team">{{ row.name }}<small>{{ row.one_liner }}</small></span><span><small>Record</small><strong>{{ row.record }}</strong></span><span><small>Expected wins</small><strong>{{ '%.1f'|format(row.expected_wins) }}</strong></span><span class="luck-value {{ 'positive' if row.luck > 0.5 else 'negative' if row.luck < -0.5 else '' }}"><small>Luck</small><strong>{{ '%+.1f'|format(row.luck) }}</strong></span><span class="power-meter"><progress max="100" value="{{ row.power_score }}" aria-label="Power score {{ '%.1f'|format(row.power_score) }}"></progress><small>{{ '%.1f'|format(row.power_score) }}</small></span>
         </a>{% endfor %}</div>{% else %}<p class="empty-state">Power rankings appear after completed MFL matchups are available.</p>{% endif %}
     </section>
 
@@ -64,8 +64,8 @@
     </div>
 
     <section class="league-card" id="playoffs">
-      <div class="league-section-heading"><div><span class="card-kicker">LIVE OUTLOOK</span><h2>Playoff bracket</h2></div><p>Probabilities use the power model above</p></div>
-      {% if playoff_games %}<div class="bracket-scroll"><div class="bracket">{% for item in playoff_games %}{% set game=item.game %}<article><span>Week {{ game.week }}</span>{% for team_id in game.team_ids %}<div><strong>{{ names.get(team_id, 'TBD') }}</strong>{% if game.scores[loop.index0] is not none %}<b>{{ '%.2f'|format(game.scores[loop.index0]) }}</b>{% elif item.probability %}<b>{{ item.probability[loop.index0] }}%</b>{% else %}<b>—</b>{% endif %}</div>{% endfor %}</article>{% endfor %}</div></div>{% else %}<p class="empty-state">MFL has not published playoff matchups yet. This bracket will fill in automatically after the regular season.</p>{% endif %}
+      <div class="league-section-heading"><div><span class="card-kicker">LOCAL PROJECTION</span><h2>Playoff bracket</h2></div><p>Division leaders seed 1–3; best remaining records fill 4–8</p></div>
+      {% if playoff_games %}<div class="bracket-scroll"><div class="bracket">{% for item in playoff_games %}{% set game=item.game %}<article><span>Projected quarterfinal · Week {{ game.week }}</span>{% for team_id in game.team_ids %}<div><strong><i class="seed-number">{{ item.seeds[loop.index0] }}</i> {{ names.get(team_id, 'TBD') }}</strong>{% if item.probability %}<b>{{ item.probability[loop.index0] }}%</b>{% else %}<b>—</b>{% endif %}</div>{% endfor %}</article>{% endfor %}</div></div><p class="data-note">Calculated here from official standings; MFL's playoff bracket is not used.</p>{% else %}<p class="empty-state">The projected bracket appears when standings contain at least two teams.</p>{% endif %}
     </section>
 
     <section class="league-card">

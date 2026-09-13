@@ -209,6 +209,60 @@ def playoff_probability(left: TeamIntelligence | None, right: TeamIntelligence |
     return left_percent, 100 - left_percent
 
 
+def build_playoff_seeds(
+    standings: Iterable[Mapping[str, object]],
+    division_by_team: Mapping[str, str],
+    division_order: Iterable[str],
+    *,
+    field_size: int = 8,
+) -> tuple[str, ...]:
+    """Seed division leaders first, then fill the field by league record.
+
+    Division leaders are ranked against one another for seeds 1-3. Remaining
+    teams are ranked for seeds 4-8 by record, then points scored. This is a
+    local projection and deliberately ignores MFL's published playoff bracket.
+    """
+    rows = [dict(row) for row in standings if str(row.get("id", ""))]
+
+    def number(value: object) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def key(row: Mapping[str, object]) -> tuple[float, float, float, str]:
+        wins = number(row.get("h2hw"))
+        losses = number(row.get("h2hl"))
+        ties = number(row.get("h2ht"))
+        return (-(wins + ties * .5), losses, -number(row.get("pf")), str(row.get("id", "")))
+
+    ordered = sorted(rows, key=key)
+    leaders: list[dict[str, object]] = []
+    for division_id in division_order:
+        match = next((row for row in ordered if division_by_team.get(str(row["id"])) == division_id), None)
+        if match is not None:
+            leaders.append(match)
+    leaders = sorted(leaders, key=key)[:3]
+    leader_ids = {str(row["id"]) for row in leaders}
+    remaining = [row for row in ordered if str(row["id"]) not in leader_ids]
+    return tuple(str(row["id"]) for row in [*leaders, *remaining][:max(2, field_size)])
+
+
+def build_local_playoff_games(
+    seeds: Iterable[str], *, first_playoff_week: int
+) -> tuple[MFLFantasyGame, ...]:
+    """Build the projected eight-team quarterfinals without MFL bracket data."""
+    seeded = tuple(seeds)[:8]
+    if len(seeded) < 2:
+        return ()
+    pair_indexes = ((0, 7), (3, 4), (1, 6), (2, 5))
+    games = []
+    for left, right in pair_indexes:
+        if left < len(seeded) and right < len(seeded):
+            games.append(MFLFantasyGame(first_playoff_week, (seeded[left], seeded[right]), (None, None)))
+    return tuple(games)
+
+
 def rest_of_season_pace(weekly_projection: float | None, *, week: int, end_week: int) -> float | None:
     if weekly_projection is None:
         return None

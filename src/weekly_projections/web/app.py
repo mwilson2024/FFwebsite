@@ -4,13 +4,14 @@ import secrets
 import os
 import math
 import time
+import hashlib
 from datetime import datetime
 from dataclasses import dataclass, field
 from itertools import zip_longest
 from pathlib import Path
-from threading import Lock
+from threading import BoundedSemaphore, Lock, RLock
 from typing import Literal
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 import uvicorn
 import requests
@@ -19,11 +20,13 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from weekly_projections.mfl.client import (
     AddDropPreview,
     MFLAvailability,
     MFLApiError,
+    MFLWriteUncertainError,
     MFLClient,
     MFLConfig,
     MFLLiveScoring,
@@ -43,12 +46,15 @@ from weekly_projections.live_stats import weekly_boxscore, scoring_components
 from weekly_projections.recommendations import PlayerRecommendation, build_player_board
 from weekly_projections.trade_engine import suggest_trades, analyze_target_trade
 from weekly_projections.league_intelligence import (
+    build_local_playoff_games,
+    build_playoff_seeds,
     build_power_rankings,
     build_recap,
     playoff_probability,
     waiver_trends,
 )
 from weekly_projections.web.diagnostics import initialize_log, log_error, request_context
+from weekly_projections.web.session_store import EncryptedSessionStore
 
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -285,15 +291,35 @@ class BrowserSession:
     trades: dict[str, TradeDraft] = field(default_factory=dict)
     blocks: dict[str, BlockDraft] = field(default_factory=dict)
     expires_at: float = field(default_factory=lambda: time.monotonic() + 8 * 60 * 60)
-    mfl_api_key: str = ""
     read_cache: dict[str, tuple[float, object]] = field(default_factory=dict)
+    read_lock: RLock = field(default_factory=RLock)
     side_bets: dict[str, list[SideBet]] = field(default_factory=dict)
+    remember_token: str = ""
+    owner_fingerprint: str = ""
+    created_at: float = field(default_factory=time.monotonic)
 
 
 sessions: dict[str, BrowserSession] = {}
+sessions_lock = RLock()
+remembered_sessions: EncryptedSessionStore | None = None
+login_attempts: dict[str, list[float]] = {}
+login_attempts_lock = Lock()
+login_slots = BoundedSemaphore(4)
 trade_send_lock = Lock()
 initialize_log()
 app = FastAPI(title="Weekly Projections · MFL Moves", docs_url=None, redoc_url=None)
+
+
+def _allowed_hosts() -> list[str]:
+    values = {"127.0.0.1", "localhost", "testserver"}
+    values.update(value.strip() for value in os.environ.get("WP_ALLOWED_HOSTS", "").split(",") if value.strip())
+    railway = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "").strip()
+    if railway:
+        values.add(railway)
+    return sorted(values)
+
+
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts())
 app.mount("/static", StaticFiles(directory=PACKAGE_DIR / "static"), name="static")
 
 
@@ -304,7 +330,10 @@ async def secure_local_responses(request: Request, call_next):
     token = request_context.set((request_id, request))
     try:
         try:
-            response = await call_next(request)
+            if request.method not in {"GET", "HEAD", "OPTIONS"} and not _same_origin(request):
+                response = HTMLResponse("Cross-site request rejected", status_code=403)
+            else:
+                response = await call_next(request)
         except Exception as error:
             log_error("unhandled_request_error", error, status=500)
             response = HTMLResponse(
@@ -320,6 +349,14 @@ async def secure_local_responses(request: Request, call_next):
     # Device-local navigation preference only. It never grants league access,
     # stores credentials, or follows background widget requests.
     current = _session(request)
+    restored_id = getattr(request.state, "restored_session_id", "")
+    if restored_id:
+        response.set_cookie(
+            "wp_session", restored_id, max_age=8 * 60 * 60, path="/",
+            httponly=True, samesite="strict", secure=_secure_cookies(request),
+        )
+    if getattr(request.state, "invalid_remember_token", False):
+        response.delete_cookie("wp_remember", path="/", httponly=True, samesite="strict", secure=_secure_cookies(request))
     league_id = request.query_params.get("league")
     if (current and request.method == "GET" and response.status_code == 200
             and request.url.path in {"/home", "/lineup", "/moves", "/scores", "/trades", "/standings", "/league"}
@@ -331,9 +368,15 @@ async def secure_local_responses(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Content-Security-Policy"] = (
-        "default-src 'self'; style-src 'self'; img-src 'self' data: https://a.espncdn.com https://*.myfantasyleague.com; "
-        "form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+        "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; font-src 'self'; "
+        "img-src 'self' data: https://a.espncdn.com https://*.myfantasyleague.com; object-src 'none'; "
+        "frame-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
     )
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+    response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+    response.headers["X-Permitted-Cross-Domain-Policies"] = "none"
+    if _secure_cookies(request):
+        response.headers["Strict-Transport-Security"] = "max-age=31536000"
     return response
 
 
@@ -342,13 +385,118 @@ def _secure_cookies(request: Request) -> bool:
     return os.environ.get("WP_SECURE_COOKIES", "").lower() in {"1", "true"} or request.url.scheme == "https"
 
 
-def _session(request: Request) -> BrowserSession | None:
-    session_id = request.cookies.get("wp_session")
-    current = sessions.get(session_id or "")
-    if current and current.expires_at <= time.monotonic():
-        sessions.pop(session_id, None)
+def _same_origin(request: Request) -> bool:
+    """Reject browser cross-origin unsafe requests; non-browser clients may omit both headers."""
+    supplied = request.headers.get("origin") or request.headers.get("referer")
+    if not supplied:
+        return True
+    try:
+        parsed = urlsplit(supplied)
+        return parsed.scheme in {"http", "https"} and parsed.netloc.casefold() == request.url.netloc.casefold()
+    except ValueError:
+        return False
+
+
+def _cleanup_sessions() -> None:
+    now = time.monotonic()
+    with sessions_lock:
+        expired = [key for key, value in sessions.items() if value.expires_at <= now]
+        for key in expired:
+            sessions.pop(key, None)
+        if len(sessions) > 256:
+            oldest = sorted(sessions, key=lambda key: sessions[key].created_at)[:len(sessions) - 256]
+            for key in oldest:
+                sessions.pop(key, None)
+
+
+def _persistent_store() -> EncryptedSessionStore:
+    global remembered_sessions
+    if remembered_sessions is None:
+        remembered_sessions = EncryptedSessionStore()
+    return remembered_sessions
+
+
+def _session_from_remembered(value: dict) -> BrowserSession | None:
+    try:
+        leagues = [
+            MFLLeague(str(item["id"]), str(item["franchise_id"]), str(item["name"]), str(item.get("url", "")))
+            for item in value["leagues"]
+        ]
+        year = int(value["year"])
+        cookie = str(value["mfl_cookie"])
+    except (KeyError, TypeError, ValueError):
         return None
+    if not cookie or not leagues or not 2020 <= year <= 2100:
+        return None
+    return BrowserSession(cookie, year, leagues, secrets.token_urlsafe(32))
+
+
+def _session(request: Request) -> BrowserSession | None:
+    if getattr(request.state, "session_checked", False):
+        return getattr(request.state, "browser_session", None)
+    request.state.session_checked = True
+    _cleanup_sessions()
+    session_id = request.cookies.get("wp_session")
+    with sessions_lock:
+        current = sessions.get(session_id or "")
+    if current:
+        request.state.browser_session = current
+        return current
+    remember_token = request.cookies.get("wp_remember", "")
+    if remember_token:
+        try:
+            restored = _session_from_remembered(_persistent_store().restore(remember_token) or {})
+        except Exception as error:
+            log_error("remembered_session_restore_failed", error)
+            restored = None
+        if restored:
+            restored.remember_token = remember_token
+            restored_id = secrets.token_urlsafe(32)
+            with sessions_lock:
+                sessions[restored_id] = restored
+            request.state.restored_session_id = restored_id
+            request.state.browser_session = restored
+            return restored
+        request.state.invalid_remember_token = True
+    request.state.browser_session = None
     return current
+
+
+def _login_csrf(request: Request) -> str:
+    value = request.cookies.get("wp_login_csrf", "")
+    return value if 32 <= len(value) <= 256 else secrets.token_urlsafe(32)
+
+
+def _login_key(request: Request, username: str) -> tuple[str, str]:
+    address = request.client.host if request.client else "unknown"
+    account = hashlib.sha256(username.strip().casefold().encode("utf-8")).hexdigest()
+    return f"ip:{address}", f"account:{account}"
+
+
+def _check_login_limit(request: Request, username: str) -> tuple[str, str]:
+    keys = _login_key(request, username)
+    now = time.monotonic()
+    with login_attempts_lock:
+        for key in list(login_attempts):
+            login_attempts[key] = [value for value in login_attempts[key] if now - value < 300]
+            if not login_attempts[key]:
+                login_attempts.pop(key, None)
+        if len(login_attempts.get(keys[0], ())) >= 10 or len(login_attempts.get(keys[1], ())) >= 5:
+            raise HTTPException(status_code=429, detail="Too many sign-in attempts. Wait five minutes and try again.")
+    return keys
+
+
+def _record_login_failure(keys: tuple[str, str]) -> None:
+    now = time.monotonic()
+    with login_attempts_lock:
+        for key in keys:
+            login_attempts.setdefault(key, []).append(now)
+
+
+def _clear_login_failures(keys: tuple[str, str]) -> None:
+    with login_attempts_lock:
+        for key in keys:
+            login_attempts.pop(key, None)
 
 
 def _require_session(request: Request) -> BrowserSession:
@@ -378,7 +526,6 @@ def _client(current: BrowserSession, league: MFLLeague) -> MFLClient:
             league_id=league.id,
             franchise_id=league.franchise_id,
             user_cookie=current.mfl_cookie,
-            api_key=current.mfl_api_key or None,
         )
     )
     client._players = current.player_catalog
@@ -386,6 +533,25 @@ def _client(current: BrowserSession, league: MFLLeague) -> MFLClient:
     # intentionally bypass it and re-read MFL before any write.
     client._browser_read_cache = current.read_cache
     return client
+
+
+def _cached_session_read(
+    current: BrowserSession,
+    league_id: str,
+    label: str,
+    loader,
+    *,
+    ttl: int = 60,
+):
+    """Coalesce short-lived display reads without weakening write checks."""
+    cache_key = f"{current.year}:{league_id}:report:{label}"
+    with current.read_lock:
+        cached = current.read_cache.get(cache_key)
+        if cached and cached[0] > time.monotonic():
+            return cached[1]
+        value = loader()
+        current.read_cache[cache_key] = (time.monotonic() + max(1, ttl), value)
+        return value
 
 
 def _remember_catalog(current: BrowserSession, client: MFLClient) -> None:
@@ -436,7 +602,7 @@ def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
         return cached[1]
     client = _client(current, selected)
     errors: dict[str, str] = {}
-    details = client.league_details()
+    details = _cached_session_read(current, selected.id, "details", client.league_details, ttl=300)
     names = {team_id: team.name for team_id, team in details.franchises.items()}
 
     def read(label, loader, fallback):
@@ -447,24 +613,45 @@ def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
             errors[label] = "MFL could not load this report right now."
             return fallback
 
-    current_week = read("week", client.current_week, None) or details.start_week
-    standings = read("standings", client.league_standings, [])
-    schedule = read("schedule", client.fantasy_schedule, ())
-    activity = read("activity", lambda: client.transactions(days=21, count=200), ())
-    catalog = read("players", client.players, {})
+    current_week = read(
+        "week", lambda: _cached_session_read(current, selected.id, "week", client.current_week), None,
+    ) or details.start_week
+    standings = read(
+        "standings", lambda: _cached_session_read(current, selected.id, "standings", client.league_standings), [],
+    )
+    schedule = read(
+        "schedule", lambda: _cached_session_read(current, selected.id, "schedule", client.fantasy_schedule), (),
+    )
+    activity = read(
+        "activity",
+        lambda: _cached_session_read(
+            current, selected.id, "activity", lambda: client.transactions(days=21, count=200),
+        ),
+        (),
+    )
+    catalog = read(
+        "players", lambda: _cached_session_read(current, selected.id, "players", client.players, ttl=900), {},
+    )
     _remember_catalog(current, client)
-    rankings = build_power_rankings(schedule, names, current_week=current_week)
+    regular_schedule = tuple(game for game in schedule if game.week <= details.last_regular_season_week)
+    rankings = build_power_rankings(regular_schedule, names, current_week=current_week)
     rank_by_team = {row.franchise_id: row for row in rankings}
-    recap = build_recap(schedule, names, current_week=current_week)
+    recap = build_recap(regular_schedule, names, current_week=current_week)
     trends = waiver_trends(activity)
+    division_by_team = {team_id: team.division_id for team_id, team in details.franchises.items()}
+    seeds = build_playoff_seeds(
+        standings, division_by_team, (division_id for division_id, _ in details.divisions), field_size=8,
+    )
     playoff_games = []
-    for game in schedule:
-        if game.week <= details.last_regular_season_week:
-            continue
+    for game in build_local_playoff_games(seeds, first_playoff_week=details.last_regular_season_week + 1):
         probability = None
         if len(game.team_ids) == 2:
             probability = playoff_probability(rank_by_team.get(game.team_ids[0]), rank_by_team.get(game.team_ids[1]))
-        playoff_games.append({"game": game, "probability": probability})
+        playoff_games.append({
+            "game": game,
+            "probability": probability,
+            "seeds": tuple(seeds.index(team_id) + 1 for team_id in game.team_ids),
+        })
     result = {
         "details": details,
         "teams": details.franchises,
@@ -480,6 +667,7 @@ def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
         "recap": recap,
         "trends": trends[:12],
         "playoff_games": playoff_games,
+        "playoff_seeds": seeds,
         "errors": errors,
     }
     current.read_cache[cache_key] = (time.monotonic() + 90, result)
@@ -860,11 +1048,19 @@ def home(request: Request):
     current = _session(request)
     if current:
         return RedirectResponse("/dashboard", status_code=303)
-    return templates.TemplateResponse(
+    login_csrf = _login_csrf(request)
+    response = templates.TemplateResponse(
         request=request,
         name="login.html",
-        context={"error": None, "year": 2026},
+        context={"error": None, "year": 2026, "login_csrf": login_csrf},
     )
+    response.set_cookie(
+        "wp_login_csrf", login_csrf, max_age=600, path="/", httponly=True,
+        samesite="strict", secure=_secure_cookies(request),
+    )
+    if getattr(request.state, "invalid_remember_token", False):
+        response.delete_cookie("wp_remember", path="/")
+    return response
 
 
 @app.post("/login", response_class=HTMLResponse)
@@ -872,15 +1068,24 @@ def login(
     request: Request,
     username: str = Form(""),
     password: str = Form(""),
-    api_key: str = Form(""),
     year: int = Form(2026),
+    login_csrf: str = Form(""),
+    remember_me: str = Form(""),
 ):
-    api_key = api_key.strip()
+    expected_login_csrf = request.cookies.get("wp_login_csrf", "")
+    if not expected_login_csrf or not login_csrf or not secrets.compare_digest(expected_login_csrf, login_csrf):
+        raise HTTPException(status_code=403, detail="The sign-in form expired; reload and try again")
+    keys = _check_login_limit(request, username)
+    acquired = login_slots.acquire(blocking=False)
+    if not acquired:
+        raise HTTPException(status_code=503, detail="Sign-in is busy. Try again in a moment.")
     try:
-        if api_key and (len(api_key) > 512 or any(character.isspace() or not character.isprintable() for character in api_key)):
-            raise ValueError("Enter a valid MFL API key without spaces.")
-        if not api_key and (not username.strip() or not password):
-            raise ValueError("Enter your MFL username and password, or use an API key.")
+        if not 2020 <= year <= 2100:
+            raise ValueError("Choose a valid MFL season.")
+        if not username.strip() or not password:
+            raise ValueError("Enter your MFL username and password.")
+        if len(username) > 254 or len(password) > 1024 or any(not character.isprintable() for character in username):
+            raise ValueError("Enter valid MFL sign-in details.")
         client = MFLClient(
             MFLConfig(
                 year=year,
@@ -888,7 +1093,6 @@ def login(
                 franchise_id="",
                 username=username,
                 password=password,
-                api_key=api_key or None,
             )
         )
         client.login()
@@ -896,21 +1100,52 @@ def login(
         if not leagues:
             raise MFLApiError(f"No owner leagues were found for the {year} season")
         session_id = secrets.token_urlsafe(32)
-        sessions[session_id] = BrowserSession(
-            mfl_cookie="" if api_key else client.user_cookie(),
+        current = BrowserSession(
+            mfl_cookie=client.user_cookie(),
             year=year,
             leagues=leagues,
             csrf_token=secrets.token_urlsafe(32),
-            mfl_api_key=api_key,
+            owner_fingerprint=keys[1],
         )
+        if remember_me == "1":
+            persistent_leagues = [
+                {"id": item.id, "franchise_id": item.franchise_id, "name": item.name, "url": item.url}
+                for item in leagues
+            ]
+            current.remember_token = _persistent_store().create(
+                mfl_cookie=current.mfl_cookie, year=year, leagues=persistent_leagues,
+            )
+        with sessions_lock:
+            same_owner = sorted(
+                (
+                    (key, value.created_at)
+                    for key, value in sessions.items()
+                    if value.owner_fingerprint == current.owner_fingerprint
+                ),
+                key=lambda item: item[1],
+            )
+            # Four old sessions plus this one is the per-account ceiling.
+            for old_id, _ in same_owner[:max(0, len(same_owner) - 4)]:
+                sessions.pop(old_id, None)
+            sessions[session_id] = current
+        _cleanup_sessions()
+        _clear_login_failures(keys)
     except (MFLApiError, ValueError) as error:
+        _record_login_failure(keys)
         log_error("login_failed", error)
-        return templates.TemplateResponse(
+        response = templates.TemplateResponse(
             request=request,
             name="login.html",
-            context={"error": str(error), "year": year},
+            context={"error": "MFL could not verify that sign-in. Check your details and try again.", "year": year, "login_csrf": expected_login_csrf},
             status_code=401,
         )
+        response.set_cookie(
+            "wp_login_csrf", expected_login_csrf, max_age=600, path="/", httponly=True,
+            samesite="strict", secure=_secure_cookies(request),
+        )
+        return response
+    finally:
+        login_slots.release()
 
     response = RedirectResponse(_league_home_url(request, sessions[session_id]), status_code=303)
     response.set_cookie(
@@ -920,36 +1155,16 @@ def login(
         samesite="strict",
         secure=_secure_cookies(request),
         max_age=8 * 60 * 60,
+        path="/",
     )
+    if sessions[session_id].remember_token:
+        response.set_cookie(
+            "wp_remember", sessions[session_id].remember_token,
+            max_age=_persistent_store().lifetime_seconds, path="/", httponly=True,
+            samesite="strict", secure=_secure_cookies(request),
+        )
+    response.delete_cookie("wp_login_csrf", path="/", httponly=True, samesite="strict", secure=_secure_cookies(request))
     return response
-
-
-@app.post("/session/api-key")
-def add_session_api_key(
-    request: Request,
-    league: str = Form(...),
-    api_key: str = Form(...),
-    csrf_token: str = Form(...),
-):
-    current = _require_session(request)
-    _check_csrf(current, csrf_token)
-    selected = _league(current, league)
-    api_key = api_key.strip()
-    if not api_key or len(api_key) > 512 or any(character.isspace() or not character.isprintable() for character in api_key):
-        return RedirectResponse(f"/home?league={selected.id}&connection=invalid-key", status_code=303)
-    try:
-        probe = MFLClient(MFLConfig(
-            year=current.year,
-            league_id=selected.id,
-            franchise_id=selected.franchise_id,
-            api_key=api_key,
-        ))
-        probe.league_standings()
-    except (MFLApiError, requests.RequestException):
-        log_error("api_key_validation_failed")
-        return RedirectResponse(f"/home?league={selected.id}&connection=invalid-key", status_code=303)
-    current.mfl_api_key = api_key
-    return RedirectResponse(f"/home?league={selected.id}&connection=api-key-added", status_code=303)
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -1094,24 +1309,11 @@ def hub_section(request: Request, section: str, league: str, target: str = "", w
                      and item.projection is not None and item.roster_delta is not None and item.roster_delta > 0][:5]
             context.update(week=week, picks=picks)
         elif section == "standings":
-            rows = client.league_standings()
-            details = client.league_details()
-            groups = []
-            assigned: set[str] = set()
-            for division_id, division_name in details.divisions:
-                division_rows = [row for row in rows
-                                 if details.franchises.get(row["id"])
-                                 and details.franchises[row["id"]].division_id == division_id]
-                if division_rows:
-                    groups.append({"id": division_id, "name": division_name, "rows": division_rows})
-                    assigned.update(row["id"] for row in division_rows)
-            remaining = [row for row in rows if row["id"] not in assigned]
-            if remaining or not groups:
-                groups.append({"id": "", "name": "Other teams" if groups else "League standings",
-                               "rows": remaining if groups else rows})
+            rows = _cached_session_read(current, selected.id, "standings", client.league_standings)
+            details = _cached_session_read(current, selected.id, "details", client.league_details, ttl=300)
             context.update(
                 rows=rows,
-                groups=groups,
+                groups=_standings_groups(rows, details),
                 teams=details.franchises,
                 has_divisions=bool(details.divisions),
             )
@@ -1569,6 +1771,7 @@ def submit_move(request: Request, pending_id: str, csrf_token: str = Form(...)):
     league = _league(current, preview.league_id)
     client = _client(current, league)
     try:
+        client.validate_add_drop(preview)
         week = client.current_week()
         if week is not None:
             locked = _locked_player_ids(
@@ -1582,7 +1785,27 @@ def submit_move(request: Request, pending_id: str, csrf_token: str = Form(...)):
                     if player.id in locked
                 )
                 raise ValueError(f"Game already started; MFL has locked: {names}")
-        result = client.submit_add_drop(preview, replace=preview.replace_existing)
+        try:
+            result = client.submit_add_drop(preview, replace=preview.replace_existing)
+        except MFLWriteUncertainError as write_error:
+            # MFL occasionally follows a successful FCFS write with an HTML
+            # page instead of API JSON/XML. Verify authoritative roster state
+            # before showing success; queued claims remain explicitly uncertain.
+            if preview.mode == "fcfs":
+                try:
+                    current_roster = client.roster_ids()
+                except MFLApiError as verify_error:
+                    log_error("move_submit_readback_failed", verify_error)
+                    raise MFLWriteUncertainError(
+                        "MFL's response could not be confirmed. Do not submit again "
+                        "until you check your MFL roster and Transactions report."
+                    ) from write_error
+                if preview.add.id in current_roster and preview.drop.id not in current_roster:
+                    result = {"status": "verified-by-roster-readback"}
+                else:
+                    raise write_error
+            else:
+                raise write_error
         _invalidate_player_board(current, league.id)
         success = "MFL accepted the transaction request."
         error = None
@@ -1617,7 +1840,8 @@ def trades_page(request: Request, league: str, target: str = "", give: str = "",
     names, own_players, other_players, error = {}, [], [], None
     target = target.zfill(4) if target else ""
     try:
-        names = {key.zfill(4): value for key, value in client.franchise_names().items()
+        league_names = _cached_session_read(current, selected.id, "franchise-names", client.franchise_names, ttl=300)
+        names = {key.zfill(4): value for key, value in league_names.items()
                  if key.zfill(4) not in {selected.franchise_id.zfill(4), "0000"}}
         if target and target not in names:
             raise ValueError("Choose another team in this league.")
@@ -1819,9 +2043,18 @@ def logout(request: Request, csrf_token: str = Form(...)):
     current = _require_session(request)
     _check_csrf(current, csrf_token)
     session_id = request.cookies.get("wp_session")
-    sessions.pop(session_id or "", None)
+    with sessions_lock:
+        sessions.pop(session_id or "", None)
+    remember_token = current.remember_token or request.cookies.get("wp_remember", "")
+    if remember_token:
+        try:
+            _persistent_store().revoke(remember_token)
+        except Exception as error:
+            log_error("remembered_session_revoke_failed", error)
     response = RedirectResponse("/", status_code=303)
-    response.delete_cookie("wp_session")
+    response.delete_cookie("wp_session", path="/", httponly=True, samesite="strict", secure=_secure_cookies(request))
+    response.delete_cookie("wp_remember", path="/", httponly=True, samesite="strict", secure=_secure_cookies(request))
+    response.headers["Clear-Site-Data"] = '"cache"'
     return response
 
 

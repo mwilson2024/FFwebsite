@@ -17,6 +17,10 @@ class MFLApiError(RuntimeError):
     """A rejected or malformed response from MyFantasyLeague."""
 
 
+class MFLWriteUncertainError(MFLApiError):
+    """MFL may have accepted a write but did not return a usable receipt."""
+
+
 @dataclass(frozen=True)
 class MFLConfig:
     year: int
@@ -25,7 +29,6 @@ class MFLConfig:
     username: str | None = None
     password: str | None = None
     user_cookie: str | None = None
-    api_key: str | None = None
     base_url: str = "https://api.myfantasyleague.com"
 
     @classmethod
@@ -42,10 +45,6 @@ class MFLConfig:
             year=year,
             league_id=league_id,
             franchise_id=franchise_id,
-            username=os.getenv("MFL_USERNAME") or None,
-            password=os.getenv("MFL_PASSWORD") or None,
-            user_cookie=os.getenv("MFL_USER_ID") or None,
-            api_key=os.getenv("MFL_API_KEY") or None,
             base_url=os.getenv("MFL_BASE_URL", "https://api.myfantasyleague.com").rstrip("/"),
         )
 
@@ -291,11 +290,11 @@ class MFLClient:
         return str(cookie)
 
     def login(self) -> None:
-        if self.session.cookies.get("MFL_USER_ID") or self.config.api_key:
+        if self.session.cookies.get("MFL_USER_ID"):
             return
         if not self.config.username or not self.config.password:
             raise MFLApiError(
-                "Set MFL_USERNAME and MFL_PASSWORD, or provide MFL_USER_ID, before using MFL"
+                "Sign in through the website before using authenticated MFL features"
             )
         try:
             response = self.session.post(
@@ -361,8 +360,6 @@ class MFLClient:
         if global_feed:
             # League IDs cause MFL to route global feeds to a league server.
             params.pop("L", None)
-        elif self.config.api_key:
-            params["APIKEY"] = self.config.api_key
         url = f"https://api.myfantasyleague.com/{self.config.year}" if global_feed else self.year_url
         try:
             response = self.session.get(
@@ -378,7 +375,7 @@ class MFLClient:
         try:
             response = self.session.get(
                 f"{self.year_url}/export",
-                params={"TYPE": "myleagues", "JSON": "1", **({"APIKEY": self.config.api_key} if self.config.api_key else {})},
+                params={"TYPE": "myleagues", "JSON": "1"},
                 timeout=(10, 60),
             )
         except requests.RequestException as error:
@@ -407,8 +404,6 @@ class MFLClient:
             "JSON": "1",
             **{key: value for key, value in parameters.items() if value is not None},
         }
-        if self.config.api_key:
-            data["APIKEY"] = self.config.api_key
         try:
             # POSTs are deliberately not retried: a timeout must not risk
             # submitting the same roster transaction twice.
@@ -419,11 +414,28 @@ class MFLClient:
                 allow_redirects=True,
             )
         except requests.RequestException as error:
-            raise MFLApiError(
+            raise MFLWriteUncertainError(
                 "MFL transaction status is uncertain after a network error; "
                 "check MFL's Transactions report before trying again"
             ) from error
-        return self._decode(response)
+        response_text = str(getattr(response, "text", "") or "").lstrip().casefold()
+        if not response_text or response_text.startswith(("<html", "<!doctype html")):
+            raise MFLWriteUncertainError(
+                "MFL did not return a readable transaction receipt. Check "
+                "your roster or pending waivers before trying again."
+            )
+        try:
+            return self._decode(response)
+        except MFLApiError as error:
+            # A normal JSON/XML MFL rejection is authoritative and remains an
+            # MFLApiError. HTML and empty responses are not receipts: the POST
+            # must not be retried because MFL may already have applied it.
+            if str(error) == "MFL returned neither JSON nor XML":
+                raise MFLWriteUncertainError(
+                    "MFL did not return a readable transaction receipt. Check "
+                    "your roster or pending waivers before trying again."
+                ) from error
+            raise
 
     def players(self, *, refresh: bool = False) -> dict[str, MFLPlayer]:
         if self._players is None or refresh:
@@ -633,7 +645,10 @@ class MFLClient:
             "transactions",
             DAYS=days,
             COUNT=count,
-            TRANS_TYPE="WAIVER,BBID_WAIVER,FREE_AGENT,TRADE",
+            # MFL accepts `*` or one/comma-separated documented type. Some
+            # league servers reject the historical mixed list even though each
+            # individual value is valid, so request the complete activity feed.
+            TRANS_TYPE="*",
         )
         root = payload.get("transactions") if isinstance(payload, dict) else None
         if root in (None, ""):
@@ -1175,6 +1190,18 @@ class MFLClient:
                 FRANCHISE_ID=impersonate,
             )
         raise ValueError(f"Unsupported transaction mode: {preview.mode}")
+
+    def validate_add_drop(self, preview: AddDropPreview) -> None:
+        """Revalidate the reviewed transaction immediately before its write."""
+        if preview.league_id != self.config.league_id or preview.franchise_id != self.config.franchise_id:
+            raise ValueError("This move belongs to a different league or franchise. Rebuild the review.")
+        availability = self.free_agents().get(preview.add.id)
+        if availability is None:
+            raise ValueError(f"{preview.add.name} is no longer a free agent in this league. Rebuild the review.")
+        if not availability.claimable:
+            raise ValueError(f"{preview.add.name} is locked by MFL. Rebuild the review when claims reopen.")
+        if preview.drop.id not in self.roster_ids():
+            raise ValueError(f"{preview.drop.name} is no longer on your roster. Rebuild the review.")
 
     def named_players(self, player_ids: Iterable[str]) -> list[MFLPlayer]:
         catalog = self.players()

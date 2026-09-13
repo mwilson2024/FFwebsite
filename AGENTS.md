@@ -101,18 +101,25 @@ must remain untracked.
 ## 5. Authentication and session invariants
 
 - Users sign into MFL inside this web app. Never ask them to provide credentials in chat.
-- Passwords, MFL session cookies, and API keys must never be placed in URLs, HTML,
-  browser storage, Git, diagnostic output, or files.
-- Authentication state is held only in the server-side `BrowserSession` object.
-- The browser receives only an opaque `wp_session` identifier and CSRF token.
-- Sessions expire after eight hours and disappear when the process restarts.
-- The optional MFL API key is entered through the app and remains memory-only.
+- Passwords and API keys must never be placed in URLs, HTML, browser storage, Git,
+  diagnostic output, environment files, or persistent session records.
+- Active authentication state is held in the server-side `BrowserSession` object.
+- A user-approved remembered login may persist only the MFL session cookie inside
+  authenticated encryption. SQLite stores ciphertext plus a hash of an opaque token;
+  the encryption key must remain separate in `WP_SESSION_SECRET` or the local user
+  profile key directory.
+- The browser receives only opaque `wp_session`/`wp_remember` identifiers and a CSRF token.
+- Active sessions expire after eight hours. Remembered sessions expire after at most
+  30 days, create fresh CSRF state after restart, and are revoked on disconnect.
+- Web API-key login is intentionally unsupported because MFL read authentication places
+  API keys in GET URLs.
 - Every state-changing browser request requires CSRF validation.
 - Device-local cookies may remember only non-secret preferences such as league ID,
   season, selected week, and theme.
+- Pending lineup, add/drop, trade, trade-block, and side-bet state remains memory-only
+  and must never be restored with a remembered login.
 
-Do not replace memory-only sessions with persistent credential storage without an
-explicit security design and user authorization.
+Do not expand the encrypted persistence schema without a new explicit security review.
 
 ## 6. MFL request rules
 
@@ -325,15 +332,17 @@ Start command:
 python -m uvicorn weekly_projections.web.app:app --app-dir src --host 0.0.0.0 --port $PORT --workers 1 --no-access-log
 ```
 
-Required Railway variable:
+Required Railway variables:
 
 ```text
 WP_SECURE_COOKIES=1
+WP_SESSION_SECRET=<Fernet key stored only in Railway Variables>
+WP_SESSION_DB=/data/sessions.sqlite3
 ```
 
-Do not manually define `PORT`; Railway provides it. Keep one worker and one replica
-because sessions are process memory. A restart/redeploy signs users out. Do not place
-MFL credentials or an MFL API key in Railway variables.
+Mount a Railway volume at `/data`. Do not manually define `PORT`; Railway provides it.
+Keep one worker and one replica because active CSRF and review state remains process
+memory. Do not place MFL credentials or an MFL API key in Railway variables.
 
 ## 16. Change checklist
 

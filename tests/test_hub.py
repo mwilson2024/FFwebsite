@@ -72,46 +72,27 @@ def test_login_returns_to_valid_last_league(monkeypatch, preference, expected):
         def account_leagues(self): return [MFLLeague('12345','0001','One'), MFLLeague('22222','0002','Two')]
     monkeypatch.setattr(web, 'MFLClient', LoginClient)
     monkeypatch.setattr(web, 'sessions', {})
-    client = TestClient(web.app)
+    client = TestClient(web.app, base_url='https://testserver')
     client.cookies.set('wp_last_league', preference)
-    result = client.post('/login', data={'username':'fake', 'password':'fake', 'year':2026}, follow_redirects=False)
+    client.get('/')
+    result = client.post('/login', data={'username':'fake', 'password':'fake', 'year':2026, 'login_csrf':client.cookies.get('wp_login_csrf')}, follow_redirects=False)
     assert result.headers['location'] == '/home?league=' + expected
     assert '; Secure' in result.headers['set-cookie']
 
 
-def test_api_key_login_is_memory_only_and_never_uses_cookie_auth(monkeypatch):
-    captured = []
-    class KeyClient:
-        def __init__(self, config): captured.append(config)
-        def login(self): pass
-        def user_cookie(self): raise AssertionError('API-key login must not request a user cookie')
-        def account_leagues(self): return [MFLLeague('12345','0001','One')]
-    monkeypatch.setattr(web, 'MFLClient', KeyClient)
+def test_api_key_login_is_not_offered_or_accepted(monkeypatch):
     monkeypatch.setattr(web, 'sessions', {})
     client = TestClient(web.app)
-    result = client.post('/login', data={'api_key':'session-secret','year':2026}, follow_redirects=False)
-    assert result.status_code == 303
-    assert captured[0].api_key == 'session-secret'
-    session = next(iter(web.sessions.values()))
-    assert session.mfl_api_key == 'session-secret' and session.mfl_cookie == ''
+    page = client.get('/')
+    assert 'MFL API key' not in page.text
+    result = client.post('/login', data={'api_key':'session-secret','year':2026,'login_csrf':client.cookies.get('wp_login_csrf')}, follow_redirects=False)
+    assert result.status_code == 401 and not web.sessions
     assert 'session-secret' not in str(result.headers) and 'session-secret' not in result.text
 
 
-def test_settings_validates_api_key_before_storing_it(hub, monkeypatch):
-    client,mfl,session,block,rosters,writes = hub
-    seen = []
-    class Probe:
-        def __init__(self, config): seen.append(config)
-        def league_standings(self): return []
-    monkeypatch.setattr(web, 'MFLClient', Probe)
-    result = client.post('/session/api-key', data={'league':'12345','api_key':'fresh-secret','csrf_token':'csrf'}, follow_redirects=False)
-    assert result.status_code == 303 and result.headers['location'].endswith('connection=api-key-added')
-    assert seen[0].api_key == 'fresh-secret' and session.mfl_api_key == 'fresh-secret'
-    assert 'fresh-secret' not in str(result.headers)
-    session.mfl_api_key = ''
-    result = client.post('/session/api-key', data={'league':'12345','api_key':'bad key','csrf_token':'csrf'}, follow_redirects=False)
-    assert result.headers['location'].endswith('connection=invalid-key') and session.mfl_api_key == ''
-    assert client.post('/session/api-key', data={'league':'12345','api_key':'x','csrf_token':'wrong'}).status_code == 403
+def test_api_key_settings_endpoint_is_removed(hub):
+    client, *_ = hub
+    assert client.post('/session/api-key', data={'league':'12345','api_key':'fresh-secret','csrf_token':'csrf'}).status_code == 404
 
 
 def test_trade_block_preview_preserves_assets_and_confirms_once(hub):
@@ -185,6 +166,7 @@ def test_hub_sections_escape_feed_text_and_fail_independently(hub, monkeypatch):
     assert 'https://www42.myfantasyleague.com/one.png' in standings
     def fail(): raise MFLApiError('private upstream error')
     monkeypatch.setattr(mfl, 'league_standings', fail)
+    session.read_cache.clear()
     result = client.get('/hub/standings?league=12345')
     assert 'data-hub-retry' in result.text and 'private upstream error' not in result.text
     assert client.get('/home?league=12345').status_code == 200

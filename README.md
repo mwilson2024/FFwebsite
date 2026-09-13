@@ -27,8 +27,10 @@ python -m pip install -r requirements.txt
 python -m uvicorn weekly_projections.web.app:app --app-dir src --host 127.0.0.1 --port 8765 --no-access-log
 ```
 
-Open `http://127.0.0.1:8765`. Sign into MFL inside the app. Login information
-is held only in server memory and is cleared when the server restarts.
+Open `http://127.0.0.1:8765`. Sign into MFL inside the app. If “Stay signed in”
+is checked, the app remembers only an encrypted MFL session for up to 30 days.
+The password is discarded immediately after MFL sign-in. Local encryption keys
+live outside the repository in your user profile.
 
 ## Deploy on Railway
 
@@ -46,21 +48,44 @@ Start command:
 python -m uvicorn weekly_projections.web.app:app --app-dir src --host 0.0.0.0 --port $PORT --workers 1 --no-access-log
 ```
 
-Add the Railway variable `WP_SECURE_COOKIES=1`, keep one replica, and generate
-a domain under the service's Networking settings. You can set Railway's health
-check path to `/health`. Never commit `.env` or place MFL login details in the
-repository.
+Add a Railway volume mounted at `/data`, then configure:
+
+```text
+WP_SECURE_COOKIES=1
+WP_SESSION_DB=/data/sessions.sqlite3
+WP_SESSION_SECRET=<your generated Fernet key>
+```
+
+Generate the secret once with:
+
+```powershell
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Put that output only in Railway Variables and keep it stable across deployments.
+Keep one replica, generate a domain under Networking, and set the health check to
+`/health`. Railway's generated domain is allowed automatically; for a custom domain,
+set `WP_ALLOWED_HOSTS` to that hostname (comma-separate multiple hostnames). Never
+commit `.env`, the key, or MFL login details.
 
 ## Behavior and safety
 
 - The last selected league and theme are remembered in device-local cookies.
-- MFL sessions are memory-only; a restart or redeployment requires a new login.
+- Active sessions last eight hours; an opted-in encrypted session can restore a
+  fresh active session after restart for up to 30 days.
+- Remembered sessions never contain the MFL password, API key, CSRF token, caches,
+  pending lineup/add-drop/trade actions, or side bets.
+- Web API-key login is disabled because MFL requires the key in GET URLs; password
+  login exchanges the password for an MFL session cookie and discards the password.
 - Lineup and transaction changes always have a review step before submission.
-- Kickoff locks are checked before lineup or player-move submissions.
+- Ownership, free-agent availability, administrative locks, and kickoff locks are
+  checked again before player-move submissions.
 - Live scoring automatically polls only while an NFL game is in progress.
 - MFL scores remain authoritative when detailed stat feeds differ.
 - Incomplete rosters keep visible open rows for every unfilled legal starter slot.
 - League HQ caches its bounded MFL reports for 90 seconds to reduce rate-limit pressure.
+- The playoff bracket is projected locally: three division leaders receive seeds
+  1–3, then the best remaining records fill seeds 4–8.
 - Side bets are notes only: they have no payment handling and clear with the session.
 - Detailed diagnostic records rotate under `logs/errors.log` and are also sent
   to standard output for Railway Deploy Logs. They include the complete

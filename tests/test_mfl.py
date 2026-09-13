@@ -5,7 +5,15 @@ from typing import Any
 import pytest
 import requests
 
-from weekly_projections.mfl.client import MFLAvailability, MFLClient, MFLConfig, MFLPlayer
+from weekly_projections.mfl.client import (
+    AddDropPreview,
+    MFLApiError,
+    MFLAvailability,
+    MFLClient,
+    MFLConfig,
+    MFLPlayer,
+    MFLWriteUncertainError,
+)
 
 
 def _config(**overrides: Any) -> MFLConfig:
@@ -50,6 +58,18 @@ class JsonResponse:
         return self.payload
 
 
+class HtmlResponse:
+    text = "<html><body>No API receipt</body></html>"
+    status_code = 200
+    headers: dict[str, str] = {}
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, Any]:
+        raise requests.exceptions.JSONDecodeError("not json", self.text, 0)
+
+
 def test_http_429_returns_actionable_message_without_retrying():
     response = requests.Response()
     response.status_code = 429
@@ -65,6 +85,20 @@ def test_default_transport_does_not_retry_http_429():
     retries = client.session.get_adapter("https://").max_retries
     assert 429 not in retries.status_forcelist
     assert 500 in retries.status_forcelist
+
+
+def test_import_html_response_is_unconfirmed_and_never_retried(monkeypatch):
+    client = MFLClient(_config(user_cookie="cookie"))
+    calls = []
+
+    def post(*args, **kwargs):
+        calls.append((args, kwargs))
+        return HtmlResponse()
+
+    monkeypatch.setattr(client.session, "post", post)
+    with pytest.raises(MFLWriteUncertainError, match="readable transaction receipt"):
+        client.import_request("fcfsWaiver", ADD="100", DROP="200")
+    assert len(calls) == 1
 
 
 class LeagueSession(LoginSession):
@@ -174,7 +208,8 @@ def test_schedule_and_transactions_parse_singleton_and_list_payloads(monkeypatch
             {"id": "t2", "type": "TRADE", "timestamp": "200", "franchise1": "1", "franchise2": "2"},
         ]}},
     }
-    monkeypatch.setattr(client, "export", lambda kind, **params: payloads[kind])
+    calls = []
+    monkeypatch.setattr(client, "export", lambda kind, **params: calls.append((kind, params)) or payloads[kind])
     games = client.fantasy_schedule()
     assert games[0].team_ids == ("0001", "0002")
     assert games[0].scores == (121.5, 110.0)
@@ -184,6 +219,7 @@ def test_schedule_and_transactions_parse_singleton_and_list_payloads(monkeypatch
     assert activity[1].adds == ("1234",)
     assert activity[1].drops == ("5678",)
     assert activity[1].franchise_ids == ("0001",)
+    assert calls[-1][1]["TRANS_TYPE"] == "*"
 
 
 def test_login_posts_credentials_and_stores_cookie() -> None:
@@ -209,7 +245,7 @@ def test_authenticated_account_discovers_multiple_leagues() -> None:
     ]
 
 
-def test_api_key_authenticates_exports_imports_and_league_discovery_without_login():
+def test_unauthenticated_reads_do_not_make_provider_requests():
     class KeySession:
         def __init__(self):
             self.cookies = requests.cookies.RequestsCookieJar()
@@ -224,14 +260,10 @@ def test_api_key_authenticates_exports_imports_and_league_discovery_without_logi
             self.posts.append((url, kwargs.get("data", {})))
             return JsonResponse({"status":{"$t":"OK"}})
     transport = KeySession()
-    client = MFLClient(_config(username=None, password=None, api_key="temporary-secret"), session=transport)
-    client.export("league")
-    assert client.account_leagues()[0].id == "11111"
-    client.import_request("testWrite", VALUE="one")
-    assert not any("temporary-secret" in url for url, _ in transport.gets + transport.posts)
-    assert all(params["APIKEY"] == "temporary-secret" for _, params in transport.gets)
-    assert transport.posts[0][1]["APIKEY"] == "temporary-secret"
-    assert not any(url.endswith("/login") for url, _ in transport.posts)
+    client = MFLClient(_config(username=None, password=None), session=transport)
+    with pytest.raises(MFLApiError, match="Sign in through the website"):
+        client.export("league")
+    assert transport.gets == [] and transport.posts == []
 
 
 def test_preview_validates_free_agent_and_roster(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -294,6 +326,26 @@ def test_submit_fcfs_uses_official_mfl_parameters(monkeypatch: pytest.MonkeyPatc
         "DROP": "200",
         "FRANCHISE_ID": None,
     }
+
+
+def test_final_add_drop_validation_rejects_changed_mfl_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = MFLClient(_config(user_cookie="cookie"))
+    preview = AddDropPreview(
+        mode="fcfs",
+        add=MFLPlayer("100", "Add Me"),
+        drop=MFLPlayer("200", "Drop Me"),
+        league_id="12345",
+        franchise_id="0007",
+    )
+    monkeypatch.setattr(client, "free_agents", lambda: {})
+    monkeypatch.setattr(client, "roster_ids", lambda: {"200"})
+    with pytest.raises(ValueError, match="no longer a free agent"):
+        client.validate_add_drop(preview)
+
+    monkeypatch.setattr(client, "free_agents", lambda: {"100": MFLAvailability("100")})
+    monkeypatch.setattr(client, "roster_ids", lambda: set())
+    with pytest.raises(ValueError, match="no longer on your roster"):
+        client.validate_add_drop(preview)
 
 
 def test_blind_bid_requires_bid(monkeypatch: pytest.MonkeyPatch) -> None:

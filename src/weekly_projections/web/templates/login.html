@@ -28,22 +28,20 @@
       </div>
       {% if error %}<div class="error" role="alert">{{ error }}{% include '_error_reference.html' %}</div>{% endif %}
       <form method="post" action="/login" class="stack" data-mfl-login>
-        <fieldset class="login-method"><legend>Connect with</legend><label><input type="radio" name="login_method" value="password" checked> Password</label><label><input type="radio" name="login_method" value="api-key"> API key</label></fieldset>
+        <input type="hidden" name="login_csrf" value="{{ login_csrf }}">
         <div class="login-method-fields" data-login-fields="password"><label>Username or email
-          <input name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+          <input name="username" autocomplete="username" autocapitalize="none" spellcheck="false" maxlength="254" required>
         </label>
         <label>Password
-          <input name="password" type="password" autocomplete="current-password" required>
+          <input name="password" type="password" autocomplete="current-password" maxlength="1024" required>
         </label></div>
-        <div class="login-method-fields" data-login-fields="api-key" hidden><label>MFL API key
-          <input name="api_key" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="512">
-        </label><p class="fine-print">Used only for this temporary session. It is never saved in your browser, cookies, or local files.</p></div>
         <label>Season
           <input name="year" type="number" min="2020" max="2100" value="{{ year }}" required>
         </label>
+        <label class="remember-login"><input name="remember_me" type="checkbox" value="1" checked> <span><strong>Stay signed in on this device</strong><small>Stores only an encrypted MFL session for up to 30 days. Your password is never saved.</small></span></label>
         <button type="submit">Connect MFL <span aria-hidden="true">→</span></button>
       </form>
-      <p class="fine-print">Credentials are sent only to MFL and held in server memory for this session.</p>
+      <p class="fine-print">Your password passes through this private app to MFL for sign-in, then is discarded immediately.</p>
     </section>
   </main>
 </body>
