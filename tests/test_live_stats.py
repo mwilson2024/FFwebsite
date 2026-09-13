@@ -1,12 +1,13 @@
 from dataclasses import replace
 from types import SimpleNamespace
+import time
 
 import pytest
 import requests
 from fastapi.testclient import TestClient
 
 from weekly_projections.live_stats import parse_boxscore, scoring_components
-from weekly_projections.mfl.client import MFLPlayer, MFLLeague
+from weekly_projections.mfl.client import MFLPlayer, MFLLeague, MFLRateLimitError
 from weekly_projections.web import app as web
 
 
@@ -104,6 +105,60 @@ def test_unavailable_stats_preserve_mfl_score_and_upcoming_does_not_fetch(monkey
     data = client.get("/api/scoring/p?league=l&franchise=0001&week=1").json()
     assert data["official_points"] == 27.2
     assert "unavailable" in data["note"] and "private error" not in str(data)
+
+
+def test_repeated_starter_details_share_live_snapshot_and_scoring_rules(monkeypatch):
+    player = MFLPlayer("p", "Starter", "WR", "SEA", "123")
+    item = SimpleNamespace(player_id="p", status="starter", score=27.2, game_seconds_remaining=0)
+    live = SimpleNamespace(matchups=[SimpleNamespace(franchises=[SimpleNamespace(franchise_id="0001", players=[item])])])
+    calls = {"live": 0, "players": 0, "rules": 0}
+
+    def counted(name, value):
+        def read(**kwargs):
+            calls[name] += 1
+            return value
+        return read
+
+    fake = SimpleNamespace(
+        live_scoring=counted("live", live),
+        players=counted("players", {"p": player}),
+        scoring_rules=counted("rules", sample_rules()),
+    )
+    monkeypatch.setattr(web, "_client", lambda *args: fake)
+    monkeypatch.setattr(web, "weekly_boxscore", lambda *args: parse_boxscore(sample_box(), player, 2026, 1))
+    session = web.BrowserSession("fake", 2026, [MFLLeague("l", "0001", "League")], "csrf")
+    monkeypatch.setattr(web, "sessions", {"test": session})
+    client = TestClient(web.app)
+    client.cookies.set("wp_session", "test")
+
+    for _ in range(4):
+        assert client.get("/api/scoring/p?league=l&franchise=0001&week=1").status_code == 200
+    assert calls == {"live": 1, "players": 1, "rules": 1}
+    rules_expiry = session.read_cache["2026:l:report:scoring-rules"][0]
+    assert rules_expiry > time.monotonic() + (6 * 86400)
+
+
+def test_rate_limited_starter_details_stop_retrying_and_return_503(monkeypatch):
+    calls = {"live": 0}
+
+    def throttled(**kwargs):
+        calls["live"] += 1
+        raise MFLRateLimitError("limited", retry_after=120)
+
+    fake = SimpleNamespace(live_scoring=throttled)
+    monkeypatch.setattr(web, "_client", lambda *args: fake)
+    session = web.BrowserSession(
+        "fake", 2026, [MFLLeague("l", "0001", "League")], "csrf"
+    )
+    monkeypatch.setattr(web, "sessions", {"test": session})
+    client = TestClient(web.app)
+    client.cookies.set("wp_session", "test")
+
+    for _ in range(4):
+        response = client.get("/api/scoring/p?league=l&franchise=0001&week=1")
+        assert response.status_code == 503
+        assert "temporarily busy" in response.json()["detail"]
+    assert calls == {"live": 1}
 
 
 def test_bench_excluded_from_totals_counts_state_and_detail_controls():

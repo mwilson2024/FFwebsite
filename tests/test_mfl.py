@@ -12,6 +12,7 @@ from weekly_projections.mfl.client import (
     MFLClient,
     MFLConfig,
     MFLPlayer,
+    MFLRateLimitError,
     MFLWriteUncertainError,
 )
 
@@ -76,8 +77,9 @@ def test_http_429_returns_actionable_message_without_retrying():
     response.url = "https://api.myfantasyleague.com/2026/export?TYPE=playerRosterStatus"
     response.headers["Retry-After"] = "45"
     client = MFLClient(_config())
-    with pytest.raises(Exception, match="HTTP 429.*45 seconds"):
+    with pytest.raises(MFLRateLimitError, match="HTTP 429.*45 seconds") as caught:
         client._decode(response)
+    assert caught.value.retry_after == 45
 
 
 def test_default_transport_does_not_retry_http_429():

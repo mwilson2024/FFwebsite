@@ -21,6 +21,14 @@ class MFLWriteUncertainError(MFLApiError):
     """MFL may have accepted a write but did not return a usable receipt."""
 
 
+class MFLRateLimitError(MFLApiError):
+    """MFL temporarily refused reads because its request budget was exhausted."""
+
+    def __init__(self, message: str, *, retry_after: int = 120) -> None:
+        super().__init__(message)
+        self.retry_after = max(30, min(900, retry_after))
+
+
 @dataclass(frozen=True)
 class MFLConfig:
     year: int
@@ -328,8 +336,9 @@ class MFLClient:
             if response.status_code == 429:
                 retry_after = str(response.headers.get("Retry-After") or "").strip()
                 wait = f" Wait {retry_after} seconds before refreshing." if retry_after.isdecimal() else " Wait a few minutes before refreshing."
-                raise MFLApiError(
-                    "MFL's request limit was reached (HTTP 429)." + wait
+                raise MFLRateLimitError(
+                    "MFL's request limit was reached (HTTP 429)." + wait,
+                    retry_after=int(retry_after) if retry_after.isdecimal() else 120,
                 ) from error
             raise MFLApiError(f"MFL request failed: {error}") from error
         try:

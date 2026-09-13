@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import sqlite3
+import time
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 
 from weekly_projections.mfl.client import MFLLeague
+from weekly_projections.mfl.client import MFLRateLimitError
 from weekly_projections.web import app as web
 from weekly_projections.web.session_store import EncryptedSessionStore
 
@@ -154,3 +156,21 @@ def test_security_headers_are_applied():
     assert "object-src 'none'" in response.headers["content-security-policy"]
     assert response.headers["permissions-policy"].startswith("camera=()")
     assert response.headers["cross-origin-opener-policy"] == "same-origin"
+
+
+def test_rate_limit_circuit_serves_stale_data_without_repeating_provider_call():
+    current = web.BrowserSession("cookie", 2026, [MFLLeague("12345", "0001", "One")], "csrf")
+    calls = []
+    assert web._cached_session_read(
+        current, "12345", "standings", lambda: calls.append("ok") or ["saved"], ttl=1,
+    ) == ["saved"]
+    key = "2026:12345:report:standings"
+    current.read_cache[key] = (time.monotonic() - 2, ["saved"])
+
+    def throttled():
+        calls.append("429")
+        raise MFLRateLimitError("limited", retry_after=120)
+
+    assert web._cached_session_read(current, "12345", "standings", throttled, stale_ttl=900) == ["saved"]
+    assert web._cached_session_read(current, "12345", "standings", throttled, stale_ttl=900) == ["saved"]
+    assert calls == ["ok", "429"]

@@ -131,7 +131,7 @@ def test_move_page_shows_full_board_projections_and_locks(monkeypatch) -> None:
     monkeypatch.setattr(
         web_app,
         "_load_player_board",
-        lambda client: (1, roster, board, blend, {"r1"}),
+        lambda client, *args, **kwargs: (1, roster, board, blend, {"r1"}),
     )
 
     client = TestClient(web_app.app)
@@ -281,7 +281,7 @@ def test_lineup_page_shows_start_sit_recommendations(monkeypatch) -> None:
     monkeypatch.setattr(
         web_app,
         "_load_lineup",
-        lambda client: (
+        lambda client, *args, **kwargs: (
             1,
             recommendation,
             settings,
@@ -419,7 +419,7 @@ def test_live_scores_page_renders_mfl_matchup(monkeypatch) -> None:
     monkeypatch.setattr(
         web_app,
         "_load_live_scoring_week",
-        lambda client, requested_week: (
+        lambda client, requested_week=None, **kwargs: (
             requested_week or 2,
             2,
             live,
@@ -442,6 +442,6 @@ def test_live_scores_page_renders_mfl_matchup(monkeypatch) -> None:
     assert "12.50" in response.text
     assert 'class="matchup-player-row"' in response.text
     # An explicit choice survives a return without a week query parameter.
-    monkeypatch.setattr(web_app, "_load_live_scoring_week", lambda client, requested_week: (requested_week, 2, live, {}, head_to_head))
+    monkeypatch.setattr(web_app, "_load_live_scoring_week", lambda client, requested_week=None, **kwargs: (requested_week, 2, live, {}, head_to_head))
     returned = client.get("/scores?league=11111")
     assert "Week 1 Scores" in returned.text

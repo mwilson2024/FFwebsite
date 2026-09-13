@@ -83,7 +83,10 @@ commit `.env`, the key, or MFL login details.
 - Live scoring automatically polls only while an NFL game is in progress.
 - MFL scores remain authoritative when detailed stat feeds differ.
 - Incomplete rosters keep visible open rows for every unfilled legal starter slot.
-- League HQ caches its bounded MFL reports for 90 seconds to reduce rate-limit pressure.
+- MFL display reads are shared within a signed-in session, temporarily fall back to
+  recent data during provider trouble, and stop retrying during an MFL 429 cooldown.
+- League scoring rules are refreshed at most once every seven days because they are
+  season configuration, while live scores use a separate short-lived snapshot.
 - The playoff bracket is projected locally: three division leaders receive seeds
   1–3, then the best remaining records fill seeds 4–8.
 - Side bets are notes only: they have no payment handling and clear with the session.

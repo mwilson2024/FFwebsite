@@ -29,7 +29,7 @@ def test_other_matchup_selection_loads_its_players_and_keeps_week(monkeypatch):
     monkeypatch.setattr(mfl,'current_week',lambda:1)
     monkeypatch.setattr(mfl,'live_scoring',lambda **k:live)
     monkeypatch.setattr(mfl,'franchise_names',lambda:{f'{i:04d}':f'Team {i}' for i in range(1,5)})
-    monkeypatch.setattr(mfl,'projected_scores',lambda **k:{pid:20 for pid in k['player_ids']})
+    monkeypatch.setattr(mfl,'projected_scores',lambda **k:{pid:20 for pid in mfl._players})
     monkeypatch.setattr(mfl,'lineup_settings',lambda:None)
     monkeypatch.setattr(mfl,'nfl_refresh_state',lambda **k:{'active':False,'next_kickoff':2000000000})
     monkeypatch.setattr(web,'projection_blend',lambda *a,**k:ProjectionBlend(k['mfl_scores'],k['mfl_scores'],{},0))
