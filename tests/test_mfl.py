@@ -208,6 +208,12 @@ def test_schedule_and_transactions_parse_singleton_and_list_payloads(monkeypatch
             {"id": "t1", "type": "BBID_WAIVER", "timestamp": "100",
              "franchise": "1", "transaction": "1234|ADD,5678|DROP"},
             {"id": "t2", "type": "TRADE", "timestamp": "200", "franchise1": "1", "franchise2": "2"},
+            {"id": "t3", "type": "FREE_AGENT", "timestamp": "300",
+             "franchise": "1", "transaction": "17474,|15738,"},
+            {"id": "t4", "type": "BBID_WAIVER", "timestamp": "400",
+             "franchise": "2", "transaction": "0514,|3|0504,"},
+            {"id": "t5", "type": "TRADE", "timestamp": "500",
+             "franchise1": "1", "franchise2": "2", "transaction": "17474,|15738,"},
         ]}},
     }
     calls = []
@@ -217,10 +223,20 @@ def test_schedule_and_transactions_parse_singleton_and_list_payloads(monkeypatch
     assert games[0].scores == (121.5, 110.0)
     assert games[1].scores == (None, None)
     activity = client.transactions()
-    assert activity[0].kind == "TRADE"
-    assert activity[1].adds == ("1234",)
-    assert activity[1].drops == ("5678",)
-    assert activity[1].franchise_ids == ("0001",)
+    by_id = {item.id: item for item in activity}
+    assert by_id["t1"].adds == ("1234",)
+    assert by_id["t1"].drops == ("5678",)
+    assert by_id["t1"].franchise_ids == ("0001",)
+    assert by_id["t3"].adds == ("17474",)
+    assert by_id["t3"].drops == ("15738",)
+    assert by_id["t3"].bid is None
+    assert by_id["t4"].adds == ("0514",)
+    assert by_id["t4"].drops == ("0504",)
+    assert by_id["t4"].bid == 3
+    assert by_id["t4"].assets == ("0514", "0504")
+    assert by_id["t5"].kind == "TRADE"
+    assert by_id["t5"].adds == ()
+    assert by_id["t5"].drops == ()
     assert calls[-1][1]["TRANS_TYPE"] == "*"
 
 

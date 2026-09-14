@@ -7,7 +7,7 @@
   <title>{{ league.name }} · League HQ</title>
   <link rel="stylesheet" href="/static/app.css?v=league-1">
   <link rel="stylesheet" href="/static/hub.css?v=league-1">
-  <link rel="stylesheet" href="/static/league.css?v=2">
+  <link rel="stylesheet" href="/static/league.css?v=3">
   <link rel="stylesheet" href="/static/lions.css?v=1">
   <script src="/static/diagnostics.js" defer></script>
   {% include '_theme_assets.html' %}
@@ -65,16 +65,17 @@
           {% set activity_title = row.item.kind|replace('_',' ')|title %}
           <li>
             <span class="activity-dot {{ row.item.kind|lower }}" aria-hidden="true"></span>
-            <button type="button" class="activity-trigger" data-activity-card="activity-detail-{{ loop.index }}" data-activity-title="{{ activity_title }}" aria-haspopup="dialog">
-              <span><strong>{{ activity_title }}</strong>{% if row.teams %}<p>{{ row.teams|join(' ↔ ') }}</p>{% endif %}<small>{{ row.when }}</small></span>
-              <span class="activity-chevron" aria-hidden="true">›</span>
-              <span class="sr-only">View transaction details</span>
-            </button>
-            <template id="activity-detail-{{ loop.index }}">
+            <details class="activity-entry">
+              <summary>
+                <span><strong>{{ activity_title }}</strong>{% if row.teams %}<p>{{ row.teams|join(' ↔ ') }}</p>{% endif %}<small>{{ row.when }}</small></span>
+                <span class="activity-chevron" aria-hidden="true">›</span>
+              </summary>
+              <div class="activity-inline-detail">
               <dl class="activity-meta">
                 <div><dt>Transaction</dt><dd>{{ activity_title }}</dd></div>
                 <div><dt>When</dt><dd>{{ row.when }}</dd></div>
                 {% if row.teams %}<div><dt>{{ 'Franchises' if row.teams|length > 1 else 'Franchise' }}</dt><dd>{{ row.teams|join(' ↔ ') }}</dd></div>{% endif %}
+                {% if row.item.bid is not none %}<div><dt>Winning FAAB bid</dt><dd>${{ row.item.bid }}</dd></div>{% endif %}
                 <div><dt>MFL reference</dt><dd>{{ row.item.id }}</dd></div>
               </dl>
               {% if row.item.adds %}
@@ -91,7 +92,8 @@
               {% if row.item.description %}<details class="activity-raw-detail"><summary>Show MFL detail</summary><p>{{ row.item.description }}</p></details>{% endif %}
               {% endif %}
               <p class="data-note">League activity supplied by MyFantasyLeague.</p>
-            </template>
+              </div>
+            </details>
           </li>
           {% endfor %}
         </ol>
@@ -119,9 +121,5 @@
     </section>
     {% endif %}
   </main>
-  <dialog id="activity-card" class="activity-card" aria-labelledby="activity-card-title">
-    <header><div><span class="card-kicker">LEAGUE ACTIVITY</span><h2 id="activity-card-title">Transaction details</h2></div><form method="dialog"><button class="activity-card-close" aria-label="Close transaction details">×</button></form></header>
-    <div id="activity-card-content"></div>
-  </dialog>
 </body>
 </html>

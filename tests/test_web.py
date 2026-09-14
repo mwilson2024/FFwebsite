@@ -324,7 +324,7 @@ def test_league_hq_renders_intelligence_and_tracks_session_side_bets(monkeypatch
     games = (MFLFantasyGame(1, ("0001", "0002"), (120.0, 100.0)),)
     names = {key: team.name for key, team in teams.items()}
     rankings = build_power_rankings(games, names, current_week=2)
-    activity = (MFLTransaction("t1", "WAIVER", 100, ("0001",), ("p1",), ("p2",)),)
+    activity = (MFLTransaction("t1", "WAIVER", 100, ("0001",), ("p1",), ("p2",), bid=3),)
     hq = {
         "details": MFLLeagueDetails((), teams, name="Test HQ", end_week=17),
         "teams": teams, "names": names, "current_week": 2,
@@ -344,12 +344,14 @@ def test_league_hq_renders_intelligence_and_tracks_session_side_bets(monkeypatch
     assert "Power rankings &amp; luck index" in response.text
     assert "Waiver wire intelligence" in response.text
     assert "Pickup" in response.text
-    assert 'data-activity-card="activity-detail-1"' in response.text
-    assert 'id="activity-card"' in response.text
+    assert '<details class="activity-entry">' in response.text
+    assert 'id="activity-card"' not in response.text
     assert "WR · DET" in response.text
+    assert "Winning FAAB bid" in response.text
+    assert "$3" in response.text
     assert "MFL reference" in response.text
-    assert "/static/league.css?v=2" in response.text
-    assert "/static/interface.js?v=2" in response.text
+    assert "/static/league.css?v=3" in response.text
+    assert "/static/interface.js?v=3" in response.text
     assert "Side-bet tracker" in response.text
     response = client.post("/league/side-bets", data={
         "league":"11111", "csrf_token":"csrf", "title":"QB duel",

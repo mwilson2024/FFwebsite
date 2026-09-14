@@ -206,6 +206,37 @@ class MFLTransaction:
     drops: tuple[str, ...]
     description: str = ""
     assets: tuple[str, ...] = ()
+    bid: int | None = None
+
+
+def _compact_roster_move(
+    raw_parts: list[str], kind: str,
+) -> tuple[tuple[str, ...], tuple[str, ...], int | None] | None:
+    """Decode MFL's compact ``adds|[bid|]drops`` transaction payload."""
+    if kind != "FREE_AGENT" and "WAIVER" not in kind:
+        return None
+
+    for raw in raw_parts:
+        value = raw.strip()
+        if not value or re.search(r"[^0-9,|\s]", value):
+            continue
+        sections = value.split("|")
+        if len(sections) not in (2, 3):
+            continue
+
+        adds = tuple(dict.fromkeys(re.findall(r"\d+", sections[0])))
+        drops = tuple(dict.fromkeys(re.findall(r"\d+", sections[-1])))
+        if not adds and not drops:
+            continue
+
+        bid: int | None = None
+        if len(sections) == 3:
+            bid_text = sections[1].strip()
+            if not bid_text.isdecimal() or "WAIVER" not in kind:
+                continue
+            bid = int(bid_text)
+        return adds, drops, bid
+    return None
 
 
 @dataclass(frozen=True)
@@ -670,6 +701,7 @@ class MFLClient:
         for index, item in enumerate(_iter_key(root, "transaction")):
             if not isinstance(item, dict):
                 continue
+            kind = str(item.get("type") or item.get("transaction_type") or "ACTIVITY").upper()
             raw_parts: list[str] = []
             for key in ("transaction", "players", "player", "description"):
                 value = item.get(key)
@@ -682,7 +714,14 @@ class MFLClient:
             actions.extend((player, action.upper()) for action, player in reverse_pattern.findall(description))
             adds = tuple(dict.fromkeys(player for player, action in actions if action == "ADD"))
             drops = tuple(dict.fromkeys(player for player, action in actions if action == "DROP"))
-            asset_ids = tuple(dict.fromkeys((*adds, *drops, *re.findall(r"\d+", description))))
+            bid: int | None = None
+            compact_move = None if adds or drops else _compact_roster_move(raw_parts, kind)
+            if compact_move is not None:
+                adds, drops, bid = compact_move
+                # The middle value in a blind-waiver payload is FAAB, not a player.
+                asset_ids = tuple(dict.fromkeys((*adds, *drops)))
+            else:
+                asset_ids = tuple(dict.fromkeys((*adds, *drops, *re.findall(r"\d+", description))))
             franchise_ids: list[str] = []
             for key in ("franchise", "franchise_id", "franchise1", "franchise2", "offeredBy", "offeredTo"):
                 value = item.get(key)
@@ -698,7 +737,6 @@ class MFLClient:
                 timestamp = int(raw_timestamp) if raw_timestamp not in (None, "") else None
             except (TypeError, ValueError):
                 timestamp = None
-            kind = str(item.get("type") or item.get("transaction_type") or "ACTIVITY").upper()
             result.append(MFLTransaction(
                 id=str(item.get("id") or item.get("transaction_id") or f"activity-{index}"),
                 kind=kind,
@@ -708,6 +746,7 @@ class MFLClient:
                 drops=drops,
                 description=description,
                 assets=asset_ids,
+                bid=bid,
             ))
         return tuple(sorted(result, key=lambda item: item.timestamp or 0, reverse=True))
 
