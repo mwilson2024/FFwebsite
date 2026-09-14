@@ -7,7 +7,7 @@
   <title>{{ league.name }} · League HQ</title>
   <link rel="stylesheet" href="/static/app.css?v=league-1">
   <link rel="stylesheet" href="/static/hub.css?v=league-1">
-  <link rel="stylesheet" href="/static/league.css?v=1">
+  <link rel="stylesheet" href="/static/league.css?v=2">
   <link rel="stylesheet" href="/static/lions.css?v=1">
   <script src="/static/diagnostics.js" defer></script>
   {% include '_theme_assets.html' %}
@@ -59,7 +59,43 @@
 
       <section class="league-card" id="activity">
         <div class="league-section-heading"><div><span class="card-kicker">LEAGUE FEED</span><h2>Activity wall</h2></div><span>Newest first</span></div>
-        {% if activity_rows %}<ol class="activity-feed">{% for row in activity_rows[:25] %}<li><span class="activity-dot {{ row.item.kind|lower }}"></span><div><strong>{{ row.item.kind|replace('_',' ')|title }}</strong>{% if row.teams %}<p>{{ row.teams|join(' ↔ ') }}</p>{% endif %}{% if row.item.kind == 'TRADE' and row.assets %}<p>Players: {{ row.assets|join(', ') }}</p>{% endif %}{% if row.added %}<p class="activity-add">Added {{ row.added|join(', ') }}</p>{% endif %}{% if row.dropped %}<p class="activity-drop">Dropped {{ row.dropped|join(', ') }}</p>{% endif %}<small>{{ row.when }}</small></div></li>{% endfor %}</ol>{% else %}<p class="empty-state">No recent MFL transactions were returned.</p>{% endif %}
+        {% if activity_rows %}
+        <ol class="activity-feed">
+          {% for row in activity_rows[:25] %}
+          {% set activity_title = row.item.kind|replace('_',' ')|title %}
+          <li>
+            <span class="activity-dot {{ row.item.kind|lower }}" aria-hidden="true"></span>
+            <button type="button" class="activity-trigger" data-activity-card="activity-detail-{{ loop.index }}" data-activity-title="{{ activity_title }}" aria-haspopup="dialog">
+              <span><strong>{{ activity_title }}</strong>{% if row.teams %}<p>{{ row.teams|join(' ↔ ') }}</p>{% endif %}<small>{{ row.when }}</small></span>
+              <span class="activity-chevron" aria-hidden="true">›</span>
+              <span class="sr-only">View transaction details</span>
+            </button>
+            <template id="activity-detail-{{ loop.index }}">
+              <dl class="activity-meta">
+                <div><dt>Transaction</dt><dd>{{ activity_title }}</dd></div>
+                <div><dt>When</dt><dd>{{ row.when }}</dd></div>
+                {% if row.teams %}<div><dt>{{ 'Franchises' if row.teams|length > 1 else 'Franchise' }}</dt><dd>{{ row.teams|join(' ↔ ') }}</dd></div>{% endif %}
+                <div><dt>MFL reference</dt><dd>{{ row.item.id }}</dd></div>
+              </dl>
+              {% if row.item.adds %}
+              <section class="activity-movement activity-movement-add"><h3>Added</h3><ul>{% for player_id in row.item.adds %}{% set player = catalog.get(player_id) %}<li>{% if player and player.photo_url %}<img src="{{ player.photo_url }}" alt="">{% else %}<span class="activity-player-placeholder">+</span>{% endif %}<span><strong>{{ player.name if player else player_id }}</strong>{% if player %}<small>{{ player.position }}{% if player.team %} · {{ player.team }}{% endif %}</small>{% endif %}</span></li>{% endfor %}</ul></section>
+              {% endif %}
+              {% if row.item.drops %}
+              <section class="activity-movement activity-movement-drop"><h3>Dropped</h3><ul>{% for player_id in row.item.drops %}{% set player = catalog.get(player_id) %}<li>{% if player and player.photo_url %}<img src="{{ player.photo_url }}" alt="">{% else %}<span class="activity-player-placeholder">−</span>{% endif %}<span><strong>{{ player.name if player else player_id }}</strong>{% if player %}<small>{{ player.position }}{% if player.team %} · {{ player.team }}{% endif %}</small>{% endif %}</span></li>{% endfor %}</ul></section>
+              {% endif %}
+              {% if row.item.kind == 'TRADE' and row.assets %}
+              <section class="activity-movement"><h3>Players involved</h3><ul>{% for name in row.assets %}<li><span class="activity-player-placeholder">↔</span><span><strong>{{ name }}</strong></span></li>{% endfor %}</ul></section>
+              {% endif %}
+              {% if not row.item.adds and not row.item.drops and not (row.item.kind == 'TRADE' and row.assets) %}
+              <p class="activity-empty-detail">MFL did not include player-level details for this feed item.</p>
+              {% if row.item.description %}<details class="activity-raw-detail"><summary>Show MFL detail</summary><p>{{ row.item.description }}</p></details>{% endif %}
+              {% endif %}
+              <p class="data-note">League activity supplied by MyFantasyLeague.</p>
+            </template>
+          </li>
+          {% endfor %}
+        </ol>
+        {% else %}<p class="empty-state">No recent MFL transactions were returned.</p>{% endif %}
       </section>
     </div>
 
@@ -83,5 +119,9 @@
     </section>
     {% endif %}
   </main>
+  <dialog id="activity-card" class="activity-card" aria-labelledby="activity-card-title">
+    <header><div><span class="card-kicker">LEAGUE ACTIVITY</span><h2 id="activity-card-title">Transaction details</h2></div><form method="dialog"><button class="activity-card-close" aria-label="Close transaction details">×</button></form></header>
+    <div id="activity-card-content"></div>
+  </dialog>
 </body>
 </html>

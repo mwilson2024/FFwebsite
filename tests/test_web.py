@@ -344,6 +344,12 @@ def test_league_hq_renders_intelligence_and_tracks_session_side_bets(monkeypatch
     assert "Power rankings &amp; luck index" in response.text
     assert "Waiver wire intelligence" in response.text
     assert "Pickup" in response.text
+    assert 'data-activity-card="activity-detail-1"' in response.text
+    assert 'id="activity-card"' in response.text
+    assert "WR · DET" in response.text
+    assert "MFL reference" in response.text
+    assert "/static/league.css?v=2" in response.text
+    assert "/static/interface.js?v=2" in response.text
     assert "Side-bet tracker" in response.text
     response = client.post("/league/side-bets", data={
         "league":"11111", "csrf_token":"csrf", "title":"QB duel",
