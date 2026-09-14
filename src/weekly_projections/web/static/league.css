@@ -55,7 +55,7 @@
 .budget-grid span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:.78rem; }
 .budget-grid strong { color:var(--site-link); }.budget-grid small { grid-column:1/-1; color:var(--site-muted); }
 .activity-feed { position:relative; }
-[data-scroll-height-target].is-height-synced { display:flex; flex-direction:column; height:var(--activity-panel-height); min-height:0; overflow:hidden; }
+[data-scroll-height-target].is-height-synced { display:flex; flex-direction:column; max-height:var(--activity-panel-height); min-height:0; overflow:hidden; }
 [data-scroll-height-target].is-height-synced .activity-feed { flex:1 1 auto; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding-right:10px; scrollbar-gutter:stable; scrollbar-color:var(--site-accent) var(--site-raised); scrollbar-width:thin; }
 [data-scroll-height-target].is-height-synced .activity-feed::-webkit-scrollbar { width:9px; }
 [data-scroll-height-target].is-height-synced .activity-feed::-webkit-scrollbar-track { background:var(--site-raised); border-radius:99px; }

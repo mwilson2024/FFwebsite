@@ -44,3 +44,14 @@ def test_league_switcher_uses_one_control_height_on_every_page():
     assert '.league-topbar .brand-mark { display:grid; width:44px; height:44px; }' in css
     assert '/static/interface.css?v=3' in assets
     assert '<span class="sr-only">Switch league</span>' in header
+
+
+def test_activity_wall_only_scrolls_after_reaching_waiver_height():
+    css = (Path(__file__).resolve().parents[1] / 'src/weekly_projections/web/static/league.css').read_text(
+        encoding='utf-8'
+    )
+    synced_rule = css.split('[data-scroll-height-target].is-height-synced {', 1)[1].split('}', 1)[0]
+    properties = {declaration.split(':', 1)[0].strip() for declaration in synced_rule.split(';') if ':' in declaration}
+    assert 'max-height:var(--activity-panel-height);' in synced_rule
+    assert 'height' not in properties
+    assert '.activity-feed { flex:1 1 auto; min-height:0; overflow-y:auto;' in css
