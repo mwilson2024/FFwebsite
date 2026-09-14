@@ -7,7 +7,7 @@
   <title>{{ league.name }} · League HQ</title>
   <link rel="stylesheet" href="/static/app.css?v=league-1">
   <link rel="stylesheet" href="/static/hub.css?v=league-1">
-  <link rel="stylesheet" href="/static/league.css?v=3">
+  <link rel="stylesheet" href="/static/league.css?v=4">
   <link rel="stylesheet" href="/static/lions.css?v=1">
   <script src="/static/diagnostics.js" defer></script>
   {% include '_theme_assets.html' %}
@@ -48,8 +48,8 @@
         </a>{% endfor %}</div>{% else %}<p class="empty-state">Power rankings appear after completed MFL matchups are available.</p>{% endif %}
     </section>
 
-    <div class="league-two-column">
-      <section class="league-card" id="waivers">
+    <div class="league-two-column" data-equal-scroll-cards>
+      <section class="league-card" id="waivers" data-scroll-height-source>
         <div class="league-section-heading"><div><span class="card-kicker">21-DAY WINDOW</span><h2>Waiver wire intelligence</h2></div><a href="/moves?league={{ league.id }}">Open player market</a></div>
         {% if trends %}<ol class="trend-list">{% for trend in trends %}{% set player = catalog.get(trend.player_id) %}<li><span class="trend-rank">{{ loop.index }}</span><span><strong>{{ player.name if player else trend.player_id }}</strong><small>{{ player.team if player else 'MFL player' }}{% if player %} · {{ player.position }}{% endif %}</small></span><span class="trend-count"><b>+{{ trend.adds }}</b><small>adds</small></span><span class="trend-count drops">−{{ trend.drops }}<small>drops</small></span></li>{% endfor %}</ol>{% else %}<p class="empty-state">No adds or drops were returned in this activity window.</p>{% endif %}
         <h3 class="subheading">FAAB &amp; waiver priority</h3>
@@ -57,7 +57,7 @@
         <p class="data-note">Pickup recommendations for bench weakness and weekly need remain on the Players page. FAAB values come directly from this league's MFL setup.</p>
       </section>
 
-      <section class="league-card" id="activity">
+      <section class="league-card" id="activity" data-scroll-height-target>
         <div class="league-section-heading"><div><span class="card-kicker">LEAGUE FEED</span><h2>Activity wall</h2></div><span>Newest first</span></div>
         {% if activity_rows %}
         <ol class="activity-feed">

@@ -10,7 +10,7 @@
 .league-card { background:var(--site-panel); border:1px solid var(--site-line); border-radius:18px; padding:24px; margin-bottom:18px; box-shadow:0 12px 34px #0000000a; }
 .league-card h2 { margin:7px 0 10px; font-size:1.3rem; letter-spacing:-.02em; }
 .league-feature-grid,.league-two-column { display:grid; grid-template-columns:1.3fr .7fr; gap:18px; align-items:start; }
-.league-two-column { grid-template-columns:1fr 1fr; align-items:stretch; }
+.league-two-column { grid-template-columns:1fr 1fr; align-items:start; }
 .recap-card { border-top:4px solid var(--site-accent); }
 .recap-card>p { line-height:1.65; color:var(--site-muted); }
 .award-row { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:20px; }
@@ -55,6 +55,11 @@
 .budget-grid span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:.78rem; }
 .budget-grid strong { color:var(--site-link); }.budget-grid small { grid-column:1/-1; color:var(--site-muted); }
 .activity-feed { position:relative; }
+[data-scroll-height-target].is-height-synced { display:flex; flex-direction:column; height:var(--activity-panel-height); min-height:0; overflow:hidden; }
+[data-scroll-height-target].is-height-synced .activity-feed { flex:1 1 auto; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding-right:10px; scrollbar-gutter:stable; scrollbar-color:var(--site-accent) var(--site-raised); scrollbar-width:thin; }
+[data-scroll-height-target].is-height-synced .activity-feed::-webkit-scrollbar { width:9px; }
+[data-scroll-height-target].is-height-synced .activity-feed::-webkit-scrollbar-track { background:var(--site-raised); border-radius:99px; }
+[data-scroll-height-target].is-height-synced .activity-feed::-webkit-scrollbar-thumb { background:var(--site-accent); border:2px solid var(--site-raised); border-radius:99px; }
 .activity-feed li { display:grid; grid-template-columns:16px minmax(0,1fr); gap:12px; padding:0 0 12px; }
 .activity-dot { width:11px; height:11px; border:3px solid var(--site-accent); border-radius:50%; margin-top:4px; box-shadow:0 0 0 4px var(--site-panel); }
 .activity-feed li:not(:last-child) .activity-dot::after { content:""; display:block; width:1px; height:56px; background:var(--site-line); margin:10px 0 0 2px; }
@@ -99,5 +104,5 @@
 .bet-list { display:grid; gap:8px; margin-top:18px; }.bet-list article { display:flex; align-items:center; gap:12px; border:1px solid var(--site-line); border-radius:12px; padding:12px; }.bet-list article>div { flex:1; }.bet-list p { margin:4px 0 0; color:var(--site-muted); }.bet-list .settled { opacity:.65; }.bet-list button { padding:8px 11px; }
 .manager-page { max-width:900px; }.back-link { display:inline-block; margin-bottom:18px; }.manager-hero { display:flex; align-items:center; gap:20px; }.manager-hero h1 { margin:5px 0; }.manager-hero p { color:var(--site-muted); }
 .profile-stats { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:18px; }.profile-stats article { background:var(--site-panel); border:1px solid var(--site-line); border-radius:14px; padding:18px; }.profile-stats small,.profile-stats strong { display:block; }.profile-stats small { color:var(--site-muted); }.profile-stats strong { color:var(--site-link); font-size:1.55rem; margin-top:7px; }
-@media(max-width:900px){.league-feature-grid,.league-two-column{grid-template-columns:1fr}.power-row{grid-template-columns:32px minmax(160px,1fr) 80px 80px}.power-row>span:nth-child(4),.power-meter{display:none}.side-bet-form{grid-template-columns:1fr 1fr}.side-bet-form button{height:44px}.profile-stats{grid-template-columns:1fr 1fr}}
+@media(max-width:900px){.league-feature-grid,.league-two-column{grid-template-columns:1fr}[data-scroll-height-target].is-height-synced{height:auto;max-height:none;overflow:visible}[data-scroll-height-target].is-height-synced .activity-feed{flex:none;max-height:min(70vh,720px);overflow-y:auto}.power-row{grid-template-columns:32px minmax(160px,1fr) 80px 80px}.power-row>span:nth-child(4),.power-meter{display:none}.side-bet-form{grid-template-columns:1fr 1fr}.side-bet-form button{height:44px}.profile-stats{grid-template-columns:1fr 1fr}}
 @media(max-width:600px){.league-hq-shell{width:min(100% - 20px,1240px);padding-top:16px}.league-hq-hero{display:block}.league-jump{margin-top:18px}.league-card{padding:17px;border-radius:14px}.award-row{grid-template-columns:1fr}.league-section-heading{display:block}.league-section-heading>p{margin-top:6px}.power-row{grid-template-columns:28px 1fr 70px;padding-inline:2px}.power-row>span:nth-child(n+4){display:none}.budget-grid{grid-template-columns:1fr}.side-bet-form{grid-template-columns:1fr}.bet-list article{align-items:flex-start;flex-wrap:wrap}.profile-stats{grid-template-columns:1fr 1fr}.manager-hero{align-items:flex-start}.manager-logo.large{width:64px;height:64px;flex:0 0 64px}}

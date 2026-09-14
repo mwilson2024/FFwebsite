@@ -19,6 +19,26 @@
     if (event.target.matches('input[name="login_method"]')) updateLoginMethod();
   });
   updateLoginMethod();
+  const equalScrollCards = document.querySelector('[data-equal-scroll-cards]');
+  const scrollHeightSource = equalScrollCards?.querySelector('[data-scroll-height-source]');
+  const scrollHeightTarget = equalScrollCards?.querySelector('[data-scroll-height-target]');
+  const syncActivityHeight = () => {
+    if (!scrollHeightSource || !scrollHeightTarget) return;
+    if (window.matchMedia('(max-width: 900px)').matches) {
+      scrollHeightTarget.style.removeProperty('--activity-panel-height');
+    } else {
+      scrollHeightTarget.style.setProperty(
+        '--activity-panel-height',
+        `${Math.ceil(scrollHeightSource.getBoundingClientRect().height)}px`,
+      );
+    }
+    scrollHeightTarget.classList.add('is-height-synced');
+  };
+  if (scrollHeightSource && scrollHeightTarget) {
+    syncActivityHeight();
+    new ResizeObserver(syncActivityHeight).observe(scrollHeightSource);
+    window.addEventListener('resize', syncActivityHeight, { passive: true });
+  }
   // Matchup indexes belong to a specific week; return to your game on week change.
   document.querySelector('#score-week')?.addEventListener('change', () => {
     const matchup = document.querySelector('#matchup-picker');

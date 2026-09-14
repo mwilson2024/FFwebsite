@@ -350,8 +350,11 @@ def test_league_hq_renders_intelligence_and_tracks_session_side_bets(monkeypatch
     assert "Winning FAAB bid" in response.text
     assert "$3" in response.text
     assert "MFL reference" in response.text
-    assert "/static/league.css?v=3" in response.text
-    assert "/static/interface.js?v=3" in response.text
+    assert 'data-equal-scroll-cards' in response.text
+    assert 'data-scroll-height-source' in response.text
+    assert 'data-scroll-height-target' in response.text
+    assert "/static/league.css?v=4" in response.text
+    assert "/static/interface.js?v=4" in response.text
     assert "Side-bet tracker" in response.text
     response = client.post("/league/side-bets", data={
         "league":"11111", "csrf_token":"csrf", "title":"QB duel",
