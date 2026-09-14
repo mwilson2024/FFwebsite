@@ -6,12 +6,15 @@ html body :is(button,select,input:not([type=checkbox]):not([type=radio])) { min-
 html body button { cursor:pointer; }
 html body button:disabled { cursor:not-allowed; opacity:.48; filter:none; }
 html body :focus-visible { outline:3px solid var(--site-link); outline-offset:3px; }
+.sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; border:0; }
 .skip-to-content { position:fixed; left:1rem; top:-6rem; z-index:200; padding:.75rem 1rem; background:var(--site-panel); }
 .skip-to-content:focus { top:1rem; }
-html body .topbar.league-topbar { display:grid; grid-template-columns:40px minmax(0,340px) 1fr auto; gap:.65rem 1rem; padding:.85rem max(1rem,calc((100vw - 1320px)/2)) 0; min-height:0; backdrop-filter:none; }
-html body .league-topbar .header-league-picker { grid-column:2; display:flex; min-width:0; width:100%; margin:0; }
-html body .header-league-picker label,html body .header-league-picker select { width:100%; min-width:0; max-width:none; }
-html body .league-topbar .brand-mark { display:grid; width:38px; height:38px; }
+html body .topbar.league-topbar { display:grid; grid-template-columns:44px minmax(0,340px) 1fr auto; align-items:center; gap:.65rem 1rem; padding:.85rem max(1rem,calc((100vw - 1320px)/2)) 0; min-height:0; backdrop-filter:none; }
+html body .league-topbar .header-league-picker { grid-column:2; display:flex; align-items:center; gap:.5rem; min-width:0; width:100%; margin:0; }
+html body .header-league-picker label { display:flex; flex:1 1 auto; width:100%; min-width:0; max-width:none; margin:0; }
+html body .header-league-picker select { width:100%; min-width:0; max-width:none; height:44px; margin:0; }
+html body .header-league-picker .league-switch-button { flex:0 0 auto; width:auto; height:44px; min-height:44px; margin:0; padding:.55rem .9rem; }
+html body .league-topbar .brand-mark { display:grid; width:44px; height:44px; }
 html body .topbar.league-topbar .section-nav { grid-column:1/-1; order:initial; display:flex; gap:.5rem; width:100%; padding:0; margin:0; overflow:visible; background:transparent; }
 html body .topbar.league-topbar .section-nav a { flex:0 1 auto; min-height:48px; border-radius:10px 10px 0 0; padding:.7rem 1.05rem; font-size:.875rem; }
 .site-options { grid-column:4; position:relative; }

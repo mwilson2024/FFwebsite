@@ -31,3 +31,16 @@ def test_lions_uses_white_surfaces_and_light_controls():
     palette = css.split('html[data-theme="lions"] {',1)[1].split('}',1)[0]
     assert '--site-bg:#fff;' in palette and '--site-panel:#fff;' in palette
     assert 'color-scheme:light;' in css
+
+
+def test_league_switcher_uses_one_control_height_on_every_page():
+    root = Path(__file__).resolve().parents[1] / 'src/weekly_projections'
+    css = (root / 'web/static/interface.css').read_text(encoding='utf-8')
+    assets = (root / 'web/templates/_theme_assets.html').read_text(encoding='utf-8')
+    header = (root / 'web/templates/_league_header.html').read_text(encoding='utf-8')
+    assert '.sr-only {' in css
+    assert '.header-league-picker .league-switch-button' in css
+    assert 'height:44px; min-height:44px;' in css
+    assert '.league-topbar .brand-mark { display:grid; width:44px; height:44px; }' in css
+    assert '/static/interface.css?v=3' in assets
+    assert '<span class="sr-only">Switch league</span>' in header
