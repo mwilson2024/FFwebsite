@@ -6,7 +6,9 @@ cookies, authorization values, and request bodies must never be recorded.
 from __future__ import annotations
 
 import json
+import ipaddress
 import logging
+import os
 import re
 import sys
 import traceback
@@ -31,6 +33,25 @@ _SENSITIVE_ASSIGNMENT = re.compile(
 _SENSITIVE_WORD = re.compile(
     r"(?i)api[_ -]?key|password|passwd|username|mfl_user_id|authorization|cookie|bearer|secret"
 )
+
+
+def client_ip(request: object) -> str:
+    """Resolve a canonical client IP without trusting arbitrary proxy headers."""
+    headers = getattr(request, "headers", {}) or {}
+    direct = getattr(getattr(request, "client", None), "host", "") or ""
+    candidates: list[object] = []
+    # Railway terminates public HTTP and owns X-Real-IP. Outside Railway, only
+    # the ASGI server's validated direct/proxy address is eligible for logging.
+    if os.environ.get("RAILWAY_PROJECT_ID") or os.environ.get("RAILWAY_ENVIRONMENT_ID"):
+        candidates.append(headers.get("x-real-ip", ""))
+    candidates.append(direct)
+    for candidate in candidates:
+        value = str(candidate).strip().strip("[]")
+        try:
+            return ipaddress.ip_address(value).compressed
+        except ValueError:
+            continue
+    return "unknown"
 
 
 def _safe_text(value: object) -> str:
@@ -113,6 +134,7 @@ def log_error(event: str, error: BaseException | None = None, *, status: int | N
             reference=request_id,
             method=request.method,
             route=getattr(route, "path", "unmatched"),
+            client_ip=client_ip(request),
         )
     if status is not None:
         record["status"] = status

@@ -10,7 +10,7 @@ def test_error_log_does_not_capture_credentials_or_query_values(monkeypatch, tmp
     monkeypatch.setattr(diagnostics, "_logger", logger)
     path = tmp_path / "errors.log"
     monkeypatch.setattr(diagnostics, "LOG_PATH", path)
-    client = TestClient(web.app)
+    client = TestClient(web.app, client=("203.0.113.10", 50000))
     response = client.get("/missing?password=do-not-log-this")
     assert response.status_code == 404
     assert response.headers["x-error-reference"]
@@ -26,8 +26,33 @@ def test_error_log_does_not_capture_credentials_or_query_values(monkeypatch, tmp
     text = path.read_text()
     assert "http_error" in text
     assert "404" in text
+    assert '"client_ip": "203.0.113.10"' in text
     assert "do-not-log-this" not in text
     assert "password" not in text
+
+
+def test_railway_ip_header_is_trusted_only_inside_railway(monkeypatch):
+    request = type("Request", (), {
+        "headers": {"x-real-ip": "198.51.100.25"},
+        "client": type("Client", (), {"host": "203.0.113.10"})(),
+    })()
+    monkeypatch.delenv("RAILWAY_PROJECT_ID", raising=False)
+    monkeypatch.delenv("RAILWAY_ENVIRONMENT_ID", raising=False)
+    assert diagnostics.client_ip(request) == "203.0.113.10"
+    monkeypatch.setenv("RAILWAY_PROJECT_ID", "project")
+    assert diagnostics.client_ip(request) == "198.51.100.25"
+    request.headers["x-real-ip"] = "spoofed-or-invalid"
+    assert diagnostics.client_ip(request) == "203.0.113.10"
+
+
+def test_client_ip_canonicalizes_ipv6_and_rejects_non_addresses():
+    request = type("Request", (), {
+        "headers": {},
+        "client": type("Client", (), {"host": "2001:0db8:0:0:0:0:0:1"})(),
+    })()
+    assert diagnostics.client_ip(request) == "2001:db8::1"
+    request.client.host = "not-an-address"
+    assert diagnostics.client_ip(request) == "unknown"
 
 
 def test_exception_details_log_full_chain_but_redacts_sensitive_messages(monkeypatch, tmp_path):

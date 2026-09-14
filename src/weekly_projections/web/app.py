@@ -54,7 +54,7 @@ from weekly_projections.league_intelligence import (
     playoff_probability,
     waiver_trends,
 )
-from weekly_projections.web.diagnostics import initialize_log, log_error, request_context
+from weekly_projections.web.diagnostics import client_ip, initialize_log, log_error, request_context
 from weekly_projections.web.session_store import EncryptedSessionStore
 
 
@@ -508,7 +508,7 @@ def _login_csrf(request: Request) -> str:
 
 
 def _login_key(request: Request, username: str) -> tuple[str, str]:
-    address = request.client.host if request.client else "unknown"
+    address = client_ip(request)
     account = hashlib.sha256(username.strip().casefold().encode("utf-8")).hexdigest()
     return f"ip:{address}", f"account:{account}"
 

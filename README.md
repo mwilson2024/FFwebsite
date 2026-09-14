@@ -92,9 +92,10 @@ commit `.env`, the key, or MFL login details.
 - Side bets are notes only: they have no payment handling and clear with the session.
 - Detailed diagnostic records rotate under `logs/errors.log` and are also sent
   to standard output for Railway Deploy Logs. They include the complete
-  exception chain, stack frames, HTTP status, safe endpoint details, and rate
-  limit headers. Credentials, cookies, authorization values, and request bodies
-  are redacted or excluded.
+  exception chain, stack frames, HTTP status, canonical client IP, safe endpoint
+  details, and rate-limit headers. On Railway, only Railway's `X-Real-IP` header
+  is trusted; local/direct requests use the connection address. Credentials,
+  cookies, authorization values, and request bodies are redacted or excluded.
 
 ## Tests
 
