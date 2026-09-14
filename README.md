@@ -96,6 +96,10 @@ commit `.env`, the key, or MFL login details.
   details, and rate-limit headers. On Railway, only Railway's `X-Real-IP` header
   is trusted; local/direct requests use the connection address. Credentials,
   cookies, authorization values, and request bodies are redacted or excluded.
+- Every non-static request also writes a structured `access_request` record to
+  stdout so Railway Deploy Logs show the client IP, safe route template, method,
+  status, and error reference. Access records never appear in the website and do
+  not contain raw URLs, query values, cookies, or request bodies.
 
 ## Tests
 

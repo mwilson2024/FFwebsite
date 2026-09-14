@@ -25,6 +25,9 @@ _lock = Lock()
 _logger = logging.getLogger("weekly_projections.errors")
 _logger.setLevel(logging.INFO)
 _logger.propagate = False
+_access_logger = logging.getLogger("weekly_projections.access")
+_access_logger.setLevel(logging.INFO)
+_access_logger.propagate = False
 
 _SENSITIVE_ASSIGNMENT = re.compile(
     r"(?i)(?:api[_-]?key|password|passwd|username|mfl_user_id|authorization|cookie|token|secret)"
@@ -104,8 +107,25 @@ def _exception_details(error: BaseException) -> list[dict]:
     return details
 
 
+def _initialize_access_log() -> None:
+    """Configure the Railway/local console access stream without a disk file."""
+    try:
+        with _lock:
+            if not _access_logger.handlers:
+                # Railway captures stdout. Access records deliberately remain
+                # out of errors.log and never appear in an application page.
+                access_handler = logging.StreamHandler(sys.stdout)
+                access_handler.setFormatter(
+                    logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+                )
+                _access_logger.addHandler(access_handler)
+    except OSError:
+        pass
+
+
 def initialize_log() -> None:
-    """Create the local log at startup without inserting a fabricated error."""
+    """Create the local error log without inserting a fabricated error."""
+    _initialize_access_log()
     try:
         with _lock:
             if not _logger.handlers:
@@ -121,6 +141,27 @@ def initialize_log() -> None:
                 stream_handler.setFormatter(formatter)
                 _logger.addHandler(stream_handler)
     except OSError:
+        pass
+
+
+def log_access(request_id: str, request: object, status: int) -> None:
+    """Write a privacy-bounded access record to hosted stdout only."""
+    route = getattr(getattr(request, "scope", {}).get("route"), "path", "unmatched")
+    record = {
+        "event": "access_request",
+        "reference": request_id,
+        "client_ip": client_ip(request),
+        "method": str(getattr(request, "method", ""))[:12],
+        "route": route,
+        "status": int(status),
+    }
+    try:
+        _initialize_access_log()
+        with _lock:
+            if _access_logger.handlers:
+                _access_logger.info(json.dumps(record))
+    except (OSError, TypeError, ValueError):
+        # Observability must never break a lineup or transaction request.
         pass
 
 

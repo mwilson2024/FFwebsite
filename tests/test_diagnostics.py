@@ -1,8 +1,30 @@
 import logging
+import io
 from fastapi.testclient import TestClient
 
 from weekly_projections.web import app as web
 from weekly_projections.web import diagnostics
+
+
+def test_access_log_is_stdout_only_and_contains_safe_ip(monkeypatch):
+    stream = io.StringIO()
+    logger = logging.Logger("isolated-access")
+    logger.setLevel(logging.INFO)
+    handler = logging.StreamHandler(stream)
+    logger.addHandler(handler)
+    monkeypatch.setattr(diagnostics, "_access_logger", logger)
+    request = type("Request", (), {
+        "headers": {},
+        "client": type("Client", (), {"host": "203.0.113.44"})(),
+        "method": "GET",
+        "scope": {"route": type("Route", (), {"path": "/league"})()},
+    })()
+    diagnostics.log_access("reference1", request, 200)
+    text = stream.getvalue()
+    assert '"event": "access_request"' in text
+    assert '"client_ip": "203.0.113.44"' in text
+    assert '"route": "/league"' in text and '"status": 200' in text
+    assert "query" not in text and "cookie" not in text
 
 
 def test_error_log_does_not_capture_credentials_or_query_values(monkeypatch, tmp_path):

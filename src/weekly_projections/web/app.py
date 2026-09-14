@@ -54,7 +54,7 @@ from weekly_projections.league_intelligence import (
     playoff_probability,
     waiver_trends,
 )
-from weekly_projections.web.diagnostics import client_ip, initialize_log, log_error, request_context
+from weekly_projections.web.diagnostics import client_ip, initialize_log, log_access, log_error, request_context
 from weekly_projections.web.session_store import EncryptedSessionStore
 
 
@@ -354,6 +354,10 @@ async def secure_local_responses(request: Request, call_next):
         if (not caught_exception and response.status_code >= 400
                 and (route or response.status_code not in {404, 405})):
             log_error("http_error", status=response.status_code)
+        # Uvicorn access logs are disabled in production. Keep one structured,
+        # stdout-only Railway record for user traffic without URLs or payloads.
+        if request.url.path != "/health" and not request.url.path.startswith("/static/"):
+            log_access(request_id, request, response.status_code)
     finally:
         request_context.reset(token)
     response.headers["X-Error-Reference"] = request_id

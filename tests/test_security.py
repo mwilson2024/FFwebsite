@@ -158,6 +158,21 @@ def test_security_headers_are_applied():
     assert response.headers["cross-origin-opener-policy"] == "same-origin"
 
 
+def test_access_logging_skips_health_and_static_but_records_pages(monkeypatch):
+    records = []
+    monkeypatch.setattr(
+        web, "log_access",
+        lambda reference, request, status: records.append(
+            (reference, request.url.path, status)
+        ),
+    )
+    client = TestClient(web.app)
+    assert client.get("/health").status_code == 200
+    assert client.get("/").status_code == 200
+    assert len(records) == 1
+    assert records[0][1:] == ("/", 200)
+
+
 def test_rate_limit_circuit_serves_stale_data_without_repeating_provider_call():
     current = web.BrowserSession("cookie", 2026, [MFLLeague("12345", "0001", "One")], "csrf")
     calls = []
