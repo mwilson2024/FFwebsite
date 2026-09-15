@@ -129,6 +129,9 @@ def test_move_page_shows_full_board_projections_and_locks(monkeypatch) -> None:
         mfl_scores={"a1": 14.0},
         ml_scores={"a1": 15.0},
         ml_matched=1,
+        espn_ranks={"a1": 8.5},
+        espn_matched=1,
+        espn_source="ESPN weekly consensus (PPR)",
     )
     monkeypatch.setattr(
         web_app,
@@ -143,6 +146,8 @@ def test_move_page_shows_full_board_projections_and_locks(monkeypatch) -> None:
     assert response.status_code == 200
     assert "Recommended Add" in response.text
     assert "14.5" in response.text
+    assert "ESPN #8.5" in response.text
+    assert '<option value="espn-rank" selected>ESPN weekly rank</option>' in response.text
     assert "Strong target" in response.text
     assert "Locked Prospect" in response.text
     assert "Waiver claim only" in response.text
@@ -313,7 +318,7 @@ def test_lineup_page_shows_start_sit_recommendations(monkeypatch) -> None:
     assert 'data-roster-section="bench"' in response.text
     assert 'data-player-card="p1"' in response.text
     assert 'id="use-recommended"' in response.text
-    assert "lineup-4" in response.text
+    assert "20260915-matchup-context" in response.text
 
 
 def test_incomplete_lineup_preview_url_redirects_safely() -> None:
@@ -485,6 +490,11 @@ def test_league_hq_renders_intelligence_and_tracks_session_side_bets(monkeypatch
         "standings": [{"id":"0001","h2hw":"1","h2hl":"0","h2ht":"0","pf":"120","pa":"100"}],
         "groups": [{"id":"","name":"League standings","rows":[{"id":"0001","h2hw":"1","h2hl":"0","h2ht":"0","pf":"120","pa":"100"}]}],
         "schedule": games, "activity": activity,
+        "last_results_week": 1,
+        "last_week_results": [{"week": 1, "teams": (
+            {"id": "0001", "name": "Alpha", "logo_url": "", "score": 120.0, "winner": True},
+            {"id": "0002", "name": "Bravo", "logo_url": "", "score": 100.0, "winner": False},
+        )}],
         "catalog": {"p1": MFLPlayer("p1", "Pickup", "WR", "DET"), "p2": MFLPlayer("p2", "Drop", "RB", "GB")},
         "rankings": rankings, "rank_by_team": {row.franchise_id: row for row in rankings},
         "recap": build_recap(games, names, current_week=2), "trends": waiver_trends(activity),
@@ -513,11 +523,13 @@ def test_league_hq_renders_intelligence_and_tracks_session_side_bets(monkeypatch
     assert 'data-equal-scroll-cards' in response.text
     assert 'data-scroll-height-source' in response.text
     assert 'data-scroll-height-target' in response.text
-    assert "/static/league.css?v=6" in response.text
+    assert "/static/league.css?v=20260915-results" in response.text
     assert "/static/interface.js?v=4" in response.text
     assert 'class="bracket-round bracket-round-3"' in response.text
     assert "Championship" in response.text
     assert "Projected advancement" in response.text
+    assert "Week 1 results" in response.text
+    assert "120.00" in response.text
     assert "Side-bet tracker" in response.text
     response = client.post("/league/side-bets", data={
         "league":"11111", "csrf_token":"csrf", "title":"QB duel",
@@ -587,6 +599,46 @@ def test_kickoff_locks_are_enforced_server_side() -> None:
             statuses={"started": "S", "future": "NS"},
             locked_ids=locked,
         )
+
+
+def test_opponent_strength_uses_position_specific_league_points_allowed() -> None:
+    players = [
+        MFLPlayer("qb", "Quarterback", "QB", "BUF"),
+        MFLPlayer("wr", "Receiver", "WR", "BUF"),
+    ]
+    games = {"BUF": {"opponent_team": "DET", "opponent": "vs DET"}}
+    allowed = {
+        "DET": {"QB": 40.0, "WR+TE": 15.0},
+        "KCC": {"QB": 20.0, "WR+TE": 30.0},
+        "MIA": {"QB": 10.0, "WR+TE": 20.0},
+    }
+    strength = web_app._opponent_strength_by_player(players, games, allowed)
+    assert strength["qb"]["rank"] == 1
+    assert strength["qb"]["label"] == "Favorable"
+    assert strength["wr"]["rank"] == 3
+    assert strength["wr"]["label"] == "Tough"
+
+
+def test_recent_player_median_is_bounded_to_five_completed_weeks() -> None:
+    class ScoreClient:
+        config = MFLConfig(2026, "11111", "0001")
+        calls = []
+
+        def player_scores(self, *, period):
+            self.calls.append(period)
+            if period == "YTD":
+                return {"p1": 70.0}
+            if period == "AVG":
+                return {"p1": 14.0}
+            return {"p1": float(period)}
+
+    client = ScoreClient()
+    ytd, average, median = web_app._load_player_score_summaries(client, None, 8)
+    assert ytd == {"p1": 70.0}
+    assert average == {"p1": 14.0}
+    assert median == {"p1": 5.0}
+    assert client.calls == ["YTD", "AVG", 3, 4, 5, 6, 7]
+    assert client.player_median_window == 5
 
 
 def test_game_locked_free_agent_can_be_staged_as_waiver_but_not_fcfs(monkeypatch) -> None:

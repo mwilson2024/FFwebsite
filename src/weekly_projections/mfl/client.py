@@ -1007,6 +1007,7 @@ class MFLClient:
                     opponent = next((other.get("id", "") for other in teams if other.get("id") != team["id"]), "")
                     self.week_games[str(team["id"]).upper()] = {
                         "opponent": ("vs " if str(team.get("isHome")) == "1" else "@ ") + opponent,
+                        "opponent_team": str(opponent).upper(),
                         "kickoff": kickoff,
                         "final": str(matchup.get("gameSecondsRemaining")) == "0",
                     }
@@ -1158,16 +1159,53 @@ class MFLClient:
                 continue
         return scores
 
+    def points_allowed(self) -> dict[str, dict[str, float]]:
+        """Return league-scored fantasy points allowed by NFL team and position.
+
+        MFL's report is cumulative for the season and already applies the
+        selected league's scoring rules.  Team and position identifiers are
+        deliberately preserved here because the NFL schedule uses the same MFL
+        identifiers (for example ``KCC`` and ``WR+TE``).
+        """
+        payload = self.export("pointsAllowed")
+        root = payload.get("pointsAllowed") if isinstance(payload, dict) else None
+        if not isinstance(root, dict):
+            raise MFLApiError("MFL opponent-strength data is unavailable")
+        result: dict[str, dict[str, float]] = {}
+        for team in _iter_key(root, "team"):
+            if not isinstance(team, dict) or not team.get("id"):
+                continue
+            team_id = str(team["id"]).strip().upper()
+            positions: dict[str, float] = {}
+            for item in _iter_key(team, "position"):
+                if not isinstance(item, dict) or not item.get("name"):
+                    continue
+                try:
+                    positions[str(item["name"]).strip().upper()] = float(item.get("points"))
+                except (TypeError, ValueError):
+                    continue
+            if positions:
+                result[team_id] = positions
+        if not result:
+            raise MFLApiError("MFL opponent-strength data is unavailable")
+        return result
+
     def player_scores(
         self,
         *,
-        period: Literal["YTD", "AVG"],
+        period: int | Literal["YTD", "AVG"],
         player_ids: Iterable[str] | None = None,
     ) -> dict[str, float]:
-        """Return official MFL season-to-date or weekly-average player scores."""
+        """Return official MFL scores for a week, YTD, or weekly average."""
         normalized = str(period).upper()
         if normalized not in {"YTD", "AVG"}:
-            raise ValueError("Player score period must be YTD or AVG")
+            try:
+                week = int(normalized)
+            except ValueError as error:
+                raise ValueError("Player score period must be week 1-18, YTD, or AVG") from error
+            if not 1 <= week <= 18:
+                raise ValueError("Player score period must be week 1-18, YTD, or AVG")
+            normalized = str(week)
         players = ",".join(sorted({str(player_id) for player_id in player_ids or []})) or None
         payload = self.export("playerScores", W=normalized, PLAYERS=players)
         scores: dict[str, float] = {}

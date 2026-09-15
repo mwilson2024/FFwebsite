@@ -7,7 +7,7 @@
   <title>{{ league.name }} · League HQ</title>
   <link rel="stylesheet" href="/static/app.css?v=league-1">
   <link rel="stylesheet" href="/static/hub.css?v=league-1">
-  <link rel="stylesheet" href="/static/league.css?v=6">
+  <link rel="stylesheet" href="/static/league.css?v=20260915-results">
   <link rel="stylesheet" href="/static/lions.css?v=1">
   <script src="/static/diagnostics.js" defer></script>
   {% include '_theme_assets.html' %}
@@ -20,7 +20,7 @@
     {% else %}
     <section class="league-hq-hero">
       <div><p class="eyebrow">LEAGUE INTELLIGENCE</p><h1>{{ details.name or league.name }}</h1><p>Week {{ current_week }} · MFL data, one clear league view</p></div>
-      <nav class="league-jump" aria-label="League page sections"><a href="#power">Power</a><a href="#waivers">Waivers</a><a href="#activity">Feed</a><a href="#playoffs">Playoffs</a></nav>
+      <nav class="league-jump" aria-label="League page sections"><a href="#results">Results</a><a href="#power">Power</a><a href="#waivers">Waivers</a><a href="#activity">Feed</a><a href="#playoffs">Playoffs</a></nav>
     </section>
 
     {% if errors %}<details class="hq-notice"><summary>Some MFL reports are temporarily unavailable</summary><ul>{% for section,message in errors.items() %}<li>{{ section|title }}: {{ message }}</li>{% endfor %}</ul></details>{% endif %}
@@ -38,6 +38,18 @@
         <div class="franchise-title">{% if own and own.logo_url %}<img src="{{ own.logo_url }}" alt="">{% else %}<span>{{ (own.name if own else league.name)[:2]|upper }}</span>{% endif %}<div><h2>{{ own.name if own else league.name }}</h2>{% if own_rank %}<p>#{{ own_rank.rank }} power · {{ own_rank.record }}</p>{% endif %}</div></div>
         <div class="team-actions"><a href="/manager/{{ league.franchise_id }}?league={{ league.id }}">Open profile</a><a href="/lineup?league={{ league.id }}">Set lineup</a></div>
       </article>
+    </section>
+
+    <section class="league-card last-results-card" id="results">
+      <div class="league-section-heading"><div><span class="card-kicker">OFFICIAL MFL</span><h2>{% if last_results_week %}Week {{ last_results_week }} results{% else %}Last week results{% endif %}</h2></div>{% if last_results_week %}<a href="/scores?league={{ league.id }}&week={{ last_results_week }}">Open all scoring details →</a>{% endif %}</div>
+      {% if last_week_results %}<div class="results-grid">
+        {% for result in last_week_results %}<article class="result-matchup">
+          {% for team in result.teams %}<div class="result-team {{ 'winner' if team.winner else '' }}">
+            {% if team.logo_url %}<img src="{{ team.logo_url }}" alt="">{% else %}<span class="result-monogram">{{ team.name[:2]|upper }}</span>{% endif %}
+            <strong>{{ team.name }}</strong><b>{{ '%.2f'|format(team.score) }}</b>{% if team.winner %}<small>W</small>{% endif %}
+          </div>{% endfor %}
+        </article>{% endfor %}
+      </div>{% else %}<p class="empty-state">Completed matchup results will appear here after MFL posts the first final week.</p>{% endif %}
     </section>
 
     <section class="league-card" id="power">

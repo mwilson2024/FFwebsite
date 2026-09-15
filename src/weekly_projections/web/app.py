@@ -3,6 +3,7 @@ from __future__ import annotations
 import secrets
 import os
 import math
+import statistics
 import time
 import hashlib
 from datetime import datetime
@@ -726,6 +727,32 @@ def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
     )
     _remember_catalog(current, client)
     regular_schedule = tuple(game for game in schedule if game.week <= details.last_regular_season_week)
+    completed_games = [
+        game for game in regular_schedule
+        if game.week < current_week and len(game.team_ids) >= 2
+        and len(game.scores) == len(game.team_ids)
+        and all(score is not None for score in game.scores)
+    ]
+    last_results_week = max((game.week for game in completed_games), default=None)
+    last_week_results = []
+    if last_results_week is not None:
+        for game in completed_games:
+            if game.week != last_results_week:
+                continue
+            high_score = max(score for score in game.scores if score is not None)
+            last_week_results.append({
+                "week": game.week,
+                "teams": tuple({
+                    "id": team_id,
+                    "name": names.get(team_id, f"Team {team_id}"),
+                    "logo_url": details.franchises.get(team_id).logo_url
+                    if details.franchises.get(team_id) else "",
+                    "score": score,
+                    "winner": score == high_score and sum(
+                        candidate == high_score for candidate in game.scores
+                    ) == 1,
+                } for team_id, score in zip(game.team_ids, game.scores)),
+            })
     rankings = build_power_rankings(regular_schedule, names, current_week=current_week)
     rank_by_team = {row.franchise_id: row for row in rankings}
     recap = build_recap(regular_schedule, names, current_week=current_week)
@@ -748,6 +775,8 @@ def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
         "standings": standings,
         "groups": _standings_groups(standings, details),
         "schedule": schedule,
+        "last_results_week": last_results_week,
+        "last_week_results": last_week_results,
         "activity": activity,
         "catalog": catalog,
         "rankings": rankings,
@@ -766,8 +795,14 @@ def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
 def _load_player_score_summaries(
     client: MFLClient,
     current: BrowserSession | None,
-) -> tuple[dict[str, float], dict[str, float]]:
-    """Load broad, reusable MFL YTD and average player-score reports."""
+    through_week: int | None = None,
+) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+    """Load MFL YTD/average plus a bounded recent-game scoring median.
+
+    MFL has no median report, so at most the five most recent completed weekly
+    reports are read.  Each weekly result receives a long session cache, keeping
+    the extra context useful without causing a season's worth of requests.
+    """
     reports: dict[str, dict[str, float]] = {"YTD": {}, "AVG": {}}
     for period in reports:
         try:
@@ -801,9 +836,157 @@ def _load_player_score_summaries(
             # Lightweight synthetic clients used by internal views may not
             # implement optional season summaries.
             reports[period] = {}
+    weekly: list[dict[str, float]] = []
+    if through_week is not None and through_week > 1:
+        first_week = max(1, through_week - 5)
+        for score_week in range(first_week, through_week):
+            try:
+                if current is None:
+                    weekly.append(client.player_scores(period=score_week))
+                else:
+                    weekly.append(
+                        _cached_session_read(
+                            current,
+                            client.config.league_id,
+                            f"player-scores:week-{score_week}",
+                            lambda selected_week=score_week: client.player_scores(period=selected_week),
+                            ttl=7 * 86400,
+                            stale_ttl=30 * 86400,
+                        )
+                    )
+            except MFLApiError as error:
+                if current is not None:
+                    _log_provider_error_once(
+                        current,
+                        client.config.league_id,
+                        "player_score_median_unavailable",
+                        error,
+                    )
+                if isinstance(error, MFLRateLimitError):
+                    break
+            except AttributeError:
+                break
+    player_ids = {player_id for scores in weekly for player_id in scores}
+    medians = {
+        player_id: round(statistics.median(
+            scores[player_id] for scores in weekly if player_id in scores
+        ), 2)
+        for player_id in player_ids
+    }
     client.player_ytd_scores = reports["YTD"]
     client.player_avg_scores = reports["AVG"]
-    return reports["YTD"], reports["AVG"]
+    client.player_median_scores = medians
+    client.player_median_window = len(weekly)
+    return reports["YTD"], reports["AVG"], medians
+
+
+_MFL_TEAM_ALIASES = {
+    "GB": "GBP", "JAX": "JAC", "KC": "KCC", "LV": "LVR", "NE": "NEP",
+    "NO": "NOS", "SF": "SFO", "TB": "TBB",
+}
+
+
+def _mfl_team_code(value: str) -> str:
+    team = value.strip().upper()
+    return _MFL_TEAM_ALIASES.get(team, team)
+
+
+def _points_allowed_position(position: str) -> str:
+    normalized = position.strip().upper().replace("D/ST", "DEF")
+    if normalized in {"WR", "TE"}:
+        return "WR+TE"
+    if normalized in {"DST", "DEF"}:
+        return "DEF"
+    if normalized in {"K", "PK"}:
+        return "PK"
+    return normalized
+
+
+def _opponent_strength_by_player(
+    players: list[MFLPlayer],
+    games: dict[str, dict],
+    points_allowed: dict[str, dict[str, float]],
+) -> dict[str, dict[str, object]]:
+    """Rank the scheduled opponent by league-scored points allowed."""
+    rank_by_position: dict[str, dict[str, int]] = {}
+    totals_by_position: dict[str, int] = {}
+    positions = {position for values in points_allowed.values() for position in values}
+    for position in positions:
+        ordered = sorted(
+            (
+                (team_id, values[position])
+                for team_id, values in points_allowed.items()
+                if position in values
+            ),
+            key=lambda item: (-item[1], item[0]),
+        )
+        rank_by_position[position] = {team_id: index for index, (team_id, _) in enumerate(ordered, 1)}
+        totals_by_position[position] = len(ordered)
+
+    result: dict[str, dict[str, object]] = {}
+    for player in players:
+        team = _mfl_team_code(player.team)
+        game = games.get(team) or games.get(player.team.strip().upper()) or {}
+        opponent = _mfl_team_code(str(game.get("opponent_team") or ""))
+        if not opponent:
+            display = str(game.get("opponent") or "")
+            opponent = _mfl_team_code(display.replace("vs", "").replace("@", "").strip())
+        position = _points_allowed_position(player.position)
+        value = points_allowed.get(opponent, {}).get(position)
+        rank = rank_by_position.get(position, {}).get(opponent)
+        total = totals_by_position.get(position, 0)
+        if value is None or rank is None or total < 2:
+            continue
+        if rank <= max(1, total // 3):
+            label, tone = "Favorable", "easy"
+        elif rank > total - max(1, total // 3):
+            label, tone = "Tough", "tough"
+        else:
+            label, tone = "Neutral", "neutral"
+        result[player.id] = {
+            "opponent": opponent,
+            "position": position,
+            "points_allowed": round(value, 2),
+            "rank": rank,
+            "teams": total,
+            "label": label,
+            "tone": tone,
+        }
+    return result
+
+
+def _attach_opponent_strength(
+    client: MFLClient,
+    current: BrowserSession | None,
+    players: list[MFLPlayer],
+) -> None:
+    try:
+        points_allowed = (
+            client.points_allowed()
+            if current is None
+            else _cached_session_read(
+                current,
+                client.config.league_id,
+                "points-allowed",
+                client.points_allowed,
+                ttl=3600,
+                stale_ttl=7 * 86400,
+            )
+        )
+        client.opponent_strength = _opponent_strength_by_player(
+            players,
+            getattr(client, "week_games", {}),
+            points_allowed,
+        )
+    except (MFLApiError, AttributeError) as error:
+        client.opponent_strength = {}
+        if current is not None and isinstance(error, MFLApiError):
+            _log_provider_error_once(
+                current,
+                client.config.league_id,
+                "opponent_strength_unavailable",
+                error,
+            )
 
 
 def _load_player_board(
@@ -822,7 +1005,17 @@ def _load_player_board(
     if cache is not None:
         cached = cache.get(cache_key)
         if cached and cached[0] > now:
-            _load_player_score_summaries(client, current)
+            cached_week, _, cached_board, _, _ = cached[1]
+            _load_player_score_summaries(client, current, cached_week)
+            if len(cached) >= 4:
+                client.week_games = cached[2]
+                client.opponent_strength = cached[3]
+            else:
+                _attach_opponent_strength(
+                    client,
+                    current,
+                    [item.player for item in cached_board],
+                )
             return cached[1]
     def read(label, loader, *, ttl=60, stale_ttl=900):
         if current is None:
@@ -868,10 +1061,15 @@ def _load_player_board(
     bye_teams: set[str] = set()
     if week is not None:
         try:
-            kickoffs = read(
-                f"nfl-schedule:{week}", lambda: client.nfl_team_kickoffs(week=week),
+            def load_week_schedule():
+                loaded_kickoffs = client.nfl_team_kickoffs(week=week)
+                return loaded_kickoffs, dict(getattr(client, "week_games", {}))
+
+            kickoffs, week_games = read(
+                f"nfl-schedule:{week}", load_week_schedule,
                 ttl=300, stale_ttl=3600,
             )
+            client.week_games = week_games
             schedule_locked = _locked_player_ids(available_players, kickoffs)
             roster_locked = _locked_player_ids(roster, kickoffs)
             # Only infer a bye when the NFL feed is clearly complete enough.
@@ -910,6 +1108,8 @@ def _load_player_board(
             week=week,
             mfl_scores=projections,
             session=client.session,
+            include_espn=True,
+            espn_rank_type=os.getenv("WP_ESPN_RANKING_FORMAT", "PPR"),
         )
         if week is not None
         else ProjectionBlend(
@@ -930,13 +1130,19 @@ def _load_player_board(
         projections=blend.scores,
         bye_teams=bye_teams,
     )
-    _load_player_score_summaries(client, current)
+    _load_player_score_summaries(client, current, week)
+    _attach_opponent_strength(client, current, all_players)
     result = (week, roster, recommendations, blend, roster_locked)
     if cache is not None:
         # This board combines several large MFL exports. A brief cache keeps
         # home widgets and the player page from immediately repeating them,
         # while submission-time ownership and lock checks remain live.
-        cache[cache_key] = (time.monotonic() + 30, result)
+        cache[cache_key] = (
+            time.monotonic() + 30,
+            result,
+            dict(getattr(client, "week_games", {})),
+            dict(getattr(client, "opponent_strength", {})),
+        )
     return result
 
 
@@ -1060,8 +1266,11 @@ def _load_lineup(
         week=week,
         mfl_scores=projections,
         session=client.session,
+        include_espn=True,
+        espn_rank_type=os.getenv("WP_ESPN_RANKING_FORMAT", "PPR"),
     )
-    _load_player_score_summaries(client, current)
+    _load_player_score_summaries(client, current, week)
+    _attach_opponent_strength(client, current, roster)
     recommendation = recommend_lineup(
         roster=roster,
         settings=settings,
@@ -1703,10 +1912,16 @@ def moves(request: Request, league: str, q: str = "", error: str = ""):
             "projected_count": sum(item.projection is not None for item in recommendations),
             "projection_source": blend.source_label,
             "ml_matched": blend.ml_matched,
+            "espn_matched": blend.espn_matched,
+            "espn_source": blend.espn_source,
             "mfl_projections": blend.mfl_scores,
             "ml_projections": blend.ml_scores,
+            "espn_ranks": blend.espn_ranks or {},
             "ytd_scores": getattr(client, "player_ytd_scores", {}),
             "avg_scores": getattr(client, "player_avg_scores", {}),
+            "median_scores": getattr(client, "player_median_scores", {}),
+            "median_window": getattr(client, "player_median_window", 0),
+            "opponent_strength": getattr(client, "opponent_strength", {}),
             "roster_locked": roster_locked,
             "query": query,
             "error": api_error,
@@ -1759,11 +1974,17 @@ def lineup_page(request: Request, league: str, error: str = "", week: int | None
             "player_scores": getattr(client, "lineup_scores", {}),
             "ytd_scores": getattr(client, "player_ytd_scores", {}),
             "avg_scores": getattr(client, "player_avg_scores", {}),
+            "median_scores": getattr(client, "player_median_scores", {}),
+            "median_window": getattr(client, "player_median_window", 0),
+            "opponent_strength": getattr(client, "opponent_strength", {}),
             "settings": settings,
             "projection_source": blend.source_label,
             "ml_matched": blend.ml_matched,
+            "espn_matched": blend.espn_matched,
+            "espn_source": blend.espn_source,
             "mfl_projections": blend.mfl_scores,
             "ml_projections": blend.ml_scores,
+            "espn_ranks": blend.espn_ranks or {},
             "locked_count": sum(
                 item.locked for item in recommendation.players
             ) if recommendation else 0,

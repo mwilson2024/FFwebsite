@@ -6,12 +6,12 @@
   
   <meta name="csrf-token" content="{{ session.csrf_token }}">
   <title>{{ league.name }} · Lineup</title>
-  <link rel="stylesheet" href="/static/app.css?v=lineup-workspace-2">
+  <link rel="stylesheet" href="/static/app.css?v=20260915-matchup-context">
   <link rel="stylesheet" href="/static/workspace.css?v=2">
-  <link rel="stylesheet" href="/static/fantasy.css?v=4">
+  <link rel="stylesheet" href="/static/fantasy.css?v=20260915-matchup-context">
   <link rel="stylesheet" href="/static/lions.css?v=1">
   <script src="/static/diagnostics.js" defer></script>
-  <script src="/static/app.js?v=lineup-4" defer></script>
+  <script src="/static/app.js?v=20260915-espn-ranks" defer></script>
   {% include '_theme_assets.html' %}
 </head>
 <body class="lineup-editor-page">
@@ -48,7 +48,7 @@
             <a class="reload-mfl" href="/lineup?league={{ league.id }}&week={{ week }}">Reload from MFL</a>
             <p class="lineup-sync-note">{% if lineup_visible %}Loaded from MFL for Week {{ week }}. Changes stay here until you review and confirm.{% else %}MFL has not exposed a saved lineup for this week. This is an unsubmitted draft.{% endif %}</p>
             <div class="lineup-rules">{% for rule in settings.rules %}<span>{{ rule.name }} <strong>{{ rule.minimum }}{% if rule.minimum != rule.maximum %}–{{ rule.maximum }}{% endif %}</strong></span>{% endfor %}</div>
-            <p>{{ projection_source }} · {{ locked_count }} kickoff locks. Locked players cannot move.</p>
+            <p>{{ projection_source }}{% if espn_source %} · {{ espn_source }} reference{% endif %} · {{ locked_count }} kickoff locks. Locked players cannot move.</p>
           </details>
         </aside>
         <section class="roster-editor" aria-label="Roster and start sit controls">
@@ -65,9 +65,9 @@
                   <div class="editor-player-notes"><span class="recommendation {{ item.tone }}">{{ item.action }}</span>{% if item.injury %}<span class="injury-status">{{ item.injury.status }}</span>{% endif %}</div>
                 </div>
               </div>
-              {% set game = games.get(item.player.team, {}) %}
-              <div class="roster-game"><span>{{ game.get('opponent', 'BYE' if schedule_complete else '—') }}</span><small>{% if game.get('final') %}Final{% elif item.locked %}In progress{% elif game.get('kickoff') %}<time data-kickoff="{{ game.kickoff }}">Scheduled</time>{% elif schedule_complete %}Bye week{% else %}Schedule unavailable{% endif %}</small></div>
-              <div class="editor-player-projection"><strong>{% if item.projection is not none %}{{ '%.1f'|format(item.projection) }}{% else %}—{% endif %}</strong><small><span>YTD {% if ytd_scores.get(item.player.id) is not none %}{{ '%.1f'|format(ytd_scores[item.player.id]) }}{% else %}—{% endif %}</span><span>AVG {% if avg_scores.get(item.player.id) is not none %}{{ '%.1f'|format(avg_scores[item.player.id]) }}{% else %}—{% endif %}</span></small></div>
+              {% set game = games.get(item.player.team, {}) %}{% set strength = opponent_strength.get(item.player.id) %}
+              <div class="roster-game"><span>{{ game.get('opponent', 'BYE' if schedule_complete else '—') }}</span><small>{% if game.get('final') %}Final{% elif item.locked %}In progress{% elif game.get('kickoff') %}<time data-kickoff="{{ game.kickoff }}">Scheduled</time>{% elif schedule_complete %}Bye week{% else %}Schedule unavailable{% endif %}</small>{% if strength %}<small class="opponent-strength {{ strength.tone }}"><b>{{ strength.label }}</b> · #{{ strength.rank }} of {{ strength.teams }} · {{ '%.1f'|format(strength.points_allowed) }} pts allowed</small>{% endif %}</div>
+              <div class="editor-player-projection"><strong>{% if item.projection is not none %}{{ '%.1f'|format(item.projection) }}{% else %}—{% endif %}</strong><small class="player-performance-strip"><span>YTD {% if ytd_scores.get(item.player.id) is not none %}{{ '%.1f'|format(ytd_scores[item.player.id]) }}{% else %}—{% endif %}</span><span>AVG {% if avg_scores.get(item.player.id) is not none %}{{ '%.1f'|format(avg_scores[item.player.id]) }}{% else %}—{% endif %}</span><span>MED{% if median_window %}{{ median_window }}{% endif %} {% if median_scores.get(item.player.id) is not none %}{{ '%.1f'|format(median_scores[item.player.id]) }}{% else %}—{% endif %}</span></small>{% if espn_ranks.get(item.player.id) is not none or ml_projections.get(item.player.id) is not none %}<small class="projection-reference-line">{% if espn_ranks.get(item.player.id) is not none %}ESPN #{{ '%.1f'|format(espn_ranks[item.player.id]) }}{% endif %}{% if espn_ranks.get(item.player.id) is not none and ml_projections.get(item.player.id) is not none %} · {% endif %}{% if ml_projections.get(item.player.id) is not none %}ML {{ '%.1f'|format(ml_projections[item.player.id]) }}{% endif %}</small>{% endif %}</div>
               <div class="roster-score">{% if item.locked and item.player.id in player_scores %}{{ '%.2f'|format(player_scores[item.player.id]) }}{% else %}—{% endif %}</div>
               <div class="editor-player-control">
                 <input hidden type="checkbox" name="starter_ids" value="{{ item.player.id }}" aria-label="Start {{ item.player.name }}" {% if item.currently_starting %}checked{% endif %} {% if item.locked or item.roster_status in ['IR','TS'] %}disabled{% endif %}>

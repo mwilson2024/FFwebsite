@@ -499,7 +499,7 @@ def test_projected_scores_parse_league_scored_points(monkeypatch: pytest.MonkeyP
     assert recorded["PLAYERS"] == "100,200"
 
 
-def test_player_scores_parse_ytd_and_average_periods(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_player_scores_parse_ytd_average_and_week_periods(monkeypatch: pytest.MonkeyPatch) -> None:
     client = MFLClient(_config(user_cookie="cookie"))
     calls = []
 
@@ -512,9 +512,30 @@ def test_player_scores_parse_ytd_and_average_periods(monkeypatch: pytest.MonkeyP
 
     monkeypatch.setattr(client, "export", export)
     assert client.player_scores(period="YTD", player_ids=["200", "100"]) == {"100": 31.25}
-    assert calls == [("playerScores", {"W": "YTD", "PLAYERS": "100,200"})]
-    with pytest.raises(ValueError, match="YTD or AVG"):
+    assert client.player_scores(period=2) == {"100": 31.25}
+    assert calls == [
+        ("playerScores", {"W": "YTD", "PLAYERS": "100,200"}),
+        ("playerScores", {"W": "2", "PLAYERS": None}),
+    ]
+    with pytest.raises(ValueError, match="week 1-18"):
         client.player_scores(period="week")
+
+
+def test_points_allowed_parses_league_scored_position_totals(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = MFLClient(_config(user_cookie="cookie"))
+    monkeypatch.setattr(client, "export", lambda request_type, **kwargs: {
+        "pointsAllowed": {"team": [
+            {"id": "DET", "position": [
+                {"name": "QB", "points": "34.2"},
+                {"name": "WR+TE", "points": "74.8"},
+            ]},
+            {"id": "KCC", "position": {"name": "RB", "points": "9.7"}},
+        ]}
+    })
+    assert client.points_allowed() == {
+        "DET": {"QB": 34.2, "WR+TE": 74.8},
+        "KCC": {"RB": 9.7},
+    }
 
 
 def test_preview_rejects_locked_player(monkeypatch: pytest.MonkeyPatch) -> None:

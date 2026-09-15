@@ -6,6 +6,8 @@ matchups, league standings, trades, the trade block, and league-scored weekly
 projections. League HQ adds a transaction feed, waiver trends and FAAB balances,
 power rankings, an expected-wins luck index, playoff outlooks, score-driven weekly
 recaps, current-season manager profiles, and a private session-only prop tracker.
+League HQ also shows the most recent completed MFL matchups. Player views include
+MFL YTD, average, a bounded recent-game median, and league-scored opponent strength.
 
 The player market combines MFL free agents, waiver players, and every league
 roster. It can filter by name, position, NFL team, availability, fantasy team,
@@ -56,6 +58,22 @@ WP_SESSION_DB=/data/sessions.sqlite3
 WP_SESSION_SECRET=<your generated Fernet key>
 ```
 
+Free weekly consensus rankings are loaded from ESPN Fantasy's unauthenticated
+read feed. No FantasyPros subscription or API key is required. The optional
+format setting can be added in Railway Variables or a private local environment:
+
+```text
+WP_ESPN_RANKING_FORMAT=PPR
+```
+
+`WP_ESPN_RANKING_FORMAT` accepts `PPR` or `STANDARD` and defaults to `PPR`.
+Rankings are cached for one hour, are shown as a separate reference, and fail
+softly if ESPN changes or temporarily disables the feed. ESPN access never uses
+your ESPN account, cookies, or credentials. This does not add ESPN league login
+or management; MFL remains the application's only league provider. The player
+market defaults to ESPN's weekly consensus order, with MFL league projections,
+season performance, matchup strength, and recommendation order still available.
+
 Generate the secret once with:
 
 ```powershell
@@ -82,6 +100,10 @@ commit `.env`, the key, or MFL login details.
   checked again before player-move submissions.
 - Live scoring automatically polls only while an NFL game is in progress.
 - MFL scores remain authoritative when detailed stat feeds differ.
+- ESPN weekly consensus ranks and StatHead ML projections are separately labeled
+  references; neither silently replaces or changes MFL's league-scored projection.
+- Opponent strength comes from MFL's league-scored points-allowed report. A player's
+  recent median uses at most the five latest completed weeks, cached for seven days.
 - Incomplete rosters keep visible open rows for every unfilled legal starter slot.
 - MFL display reads are shared within a signed-in session, temporarily fall back to
   recent data during provider trouble, and stop retrying during an MFL 429 cooldown.

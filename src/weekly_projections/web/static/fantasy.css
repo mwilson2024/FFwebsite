@@ -91,6 +91,8 @@
 .lineup-editor-page .editor-player-projection,.roster-score { font-size:.9375rem; text-align:right; font-variant-numeric:tabular-nums; font-weight:600; }
 .lineup-editor-page .editor-player-projection>strong { display:block; }
 .lineup-editor-page .editor-player-projection>small { display:flex; justify-content:flex-end; gap:.45rem; margin-top:.2rem; color:#6c7e95; font-size:.65rem; font-weight:500; white-space:nowrap; }
+.lineup-editor-page .editor-player-projection>.projection-reference-line { color:var(--site-muted); font-size:.61rem; letter-spacing:.01em; }
+.lineup-editor-page .roster-game>.opponent-strength { margin-top:.3rem; font-size:.61rem; }
 .roster-game { font-size:.875rem; color:#285ca6; }
 .roster-game small { display:block; font-size:.8125rem; color:#6c7e95; }
 .lineup-editor-page .start-control { min-height:40px; padding:.4rem; border-radius:7px; }

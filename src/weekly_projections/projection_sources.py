@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import statistics
 import time
@@ -15,8 +16,23 @@ from weekly_projections.mfl.client import MFLPlayer
 STATHEAD_WEEKLY_URL = (
     "https://www.stathead.app/data/weekly-projections-{year}.json"
 )
+ESPN_WEEKLY_RANKINGS_URL = (
+    "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/"
+    "{year}/segments/0/leaguedefaults/{scoring_id}"
+)
 _CACHE_SECONDS = 15 * 60
 _stathead_cache: dict[int, tuple[float, dict[str, Any]]] = {}
+_espn_cache: dict[tuple[int, int, str], tuple[float, dict[str, Any]]] = {}
+
+_ESPN_TEAM_IDS = {
+    1: "ATL", 2: "BUF", 3: "CHI", 4: "CIN", 5: "CLE", 6: "DAL",
+    7: "DEN", 8: "DET", 9: "GB", 10: "TEN", 11: "IND", 12: "KC",
+    13: "LV", 14: "LA", 15: "MIA", 16: "MIN", 17: "NE", 18: "NO",
+    19: "NYG", 20: "NYJ", 21: "PHI", 22: "ARI", 23: "PIT", 24: "LAC",
+    25: "SF", 26: "SEA", 27: "TB", 28: "WAS", 29: "CAR", 30: "JAX",
+    33: "BAL", 34: "HOU",
+}
+_ESPN_POSITION_IDS = {1: "QB", 2: "RB", 3: "WR", 4: "TE", 5: "K", 16: "DST"}
 
 
 class ProjectionSourceError(RuntimeError):
@@ -30,6 +46,9 @@ class ProjectionBlend:
     ml_scores: dict[str, float]
     ml_matched: int
     generated_at: str | None = None
+    espn_ranks: dict[str, float] | None = None
+    espn_matched: int = 0
+    espn_source: str | None = None
 
     @property
     def source_label(self) -> str:
@@ -152,6 +171,147 @@ def stathead_weekly_scores(
     return matched, str(generated_at) if generated_at else None
 
 
+def _download_espn_rankings(
+    year: int,
+    week: int,
+    rank_type: str,
+    session: requests.Session | None = None,
+) -> dict[str, Any]:
+    scoring_id = 3 if rank_type == "STANDARD" else 1
+    cache_key = (year, week, rank_type)
+    cached = _espn_cache.get(cache_key)
+    now = time.monotonic()
+    # ESPN publishes these ranks periodically, so hourly refreshes are sufficient.
+    if cached and now - cached[0] < 60 * 60:
+        return cached[1]
+    fantasy_filter = {
+        "players": {
+            "limit": 2000,
+            "offset": 0,
+            "sortPercOwned": {"sortPriority": 1, "sortAsc": False},
+            "filterRanksForScoringPeriodIds": {"value": [week]},
+            "filterRanksForRankTypes": {"value": [rank_type]},
+        }
+    }
+    try:
+        response = (session or requests).get(
+            ESPN_WEEKLY_RANKINGS_URL.format(year=year, scoring_id=scoring_id),
+            params={
+                "scoringPeriodId": week,
+                "view": "kona_player_info",
+            },
+            headers={
+                "X-Fantasy-Filter": json.dumps(fantasy_filter, separators=(",", ":")),
+                "User-Agent": "WeeklyProjectionsML/0.6 (+personal MFL client)",
+            },
+            timeout=(3.05, 12),
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError) as error:
+        raise ProjectionSourceError("ESPN weekly rankings are unavailable") from error
+    if not isinstance(payload, dict) or not isinstance(payload.get("players"), list):
+        raise ProjectionSourceError("ESPN returned an unexpected ranking format")
+    _espn_cache[cache_key] = (now, payload)
+    return payload
+
+
+def espn_weekly_ranks(
+    players: Iterable[MFLPlayer],
+    *,
+    year: int,
+    week: int,
+    rank_type: str = "PPR",
+    session: requests.Session | None = None,
+) -> dict[str, float]:
+    """Match ESPN's free weekly consensus ranks to MFL's player catalog."""
+    rank_type = rank_type.strip().upper()
+    if rank_type not in {"PPR", "STANDARD"}:
+        rank_type = "PPR"
+    if week < 1 or week > 18:
+        return {}
+    payload = _download_espn_rankings(year, week, rank_type, session)
+    by_espn_id: dict[str, float] = {}
+    by_name_team: dict[tuple[str, str], float] = {}
+    by_name_position: dict[tuple[str, str], float] = {}
+    defenses: dict[str, float] = {}
+    for entry in payload["players"]:
+        if not isinstance(entry, dict):
+            continue
+        row = entry.get("player")
+        if not isinstance(row, dict):
+            continue
+        rankings = row.get("rankings")
+        week_rankings = rankings.get(str(week), []) if isinstance(rankings, dict) else []
+        if isinstance(week_rankings, dict):
+            week_rankings = [week_rankings]
+        if not isinstance(week_rankings, list):
+            continue
+        matching = [
+            rank for rank in week_rankings
+            if isinstance(rank, dict)
+            and str(rank.get("rankType", "")).upper() == rank_type
+        ]
+        consensus = next(
+            (
+                rank for rank in matching
+                if str(rank.get("rankSourceId", "")) == "0"
+                and rank.get("averageRank") not in (None, "")
+            ),
+            None,
+        )
+        raw_rank = consensus.get("averageRank") if consensus else None
+        if raw_rank in (None, ""):
+            published: list[float] = []
+            for rank in matching:
+                try:
+                    value = float(rank.get("rank"))
+                except (TypeError, ValueError):
+                    continue
+                if value > 0:
+                    published.append(value)
+            raw_rank = statistics.mean(published) if published else None
+        try:
+            weekly_rank = round(float(raw_rank), 1)
+        except (TypeError, ValueError):
+            continue
+        if weekly_rank <= 0:
+            continue
+        espn_id = row.get("id")
+        if espn_id not in (None, ""):
+            by_espn_id[str(espn_id)] = weekly_rank
+        name = _canonical_name(str(row.get("fullName") or row.get("name") or ""))
+        try:
+            team = _ESPN_TEAM_IDS.get(int(row.get("proTeamId")), "")
+        except (TypeError, ValueError):
+            team = ""
+        try:
+            position = _ESPN_POSITION_IDS.get(int(row.get("defaultPositionId")), "")
+        except (TypeError, ValueError):
+            position = ""
+        if name:
+            by_name_team[(name, team)] = weekly_rank
+            by_name_position[(name, position)] = weekly_rank
+        if position == "DST" and team:
+            defenses[team] = weekly_rank
+
+    matched: dict[str, float] = {}
+    for player in players:
+        position = _position_bucket(player.position)
+        team = _canonical_team(player.team)
+        weekly_rank = by_espn_id.get(player.espn_id) if player.espn_id else None
+        if weekly_rank is None and position == "DST":
+            weekly_rank = defenses.get(team)
+        if weekly_rank is None:
+            name = _canonical_name(player.name)
+            weekly_rank = by_name_team.get((name, team))
+            if weekly_rank is None:
+                weekly_rank = by_name_position.get((name, position))
+        if weekly_rank is not None:
+            matched[player.id] = weekly_rank
+    return matched
+
+
 def blend_projection_scores(
     players: Iterable[MFLPlayer],
     *,
@@ -197,6 +357,8 @@ def projection_blend(
     week: int,
     mfl_scores: Mapping[str, float],
     session: requests.Session | None = None,
+    include_espn: bool = False,
+    espn_rank_type: str = "PPR",
 ) -> ProjectionBlend:
     player_list = list(players)
     generated_at: str | None = None
@@ -206,6 +368,24 @@ def projection_blend(
         )
     except ProjectionSourceError:
         ml_scores = {}
+    espn_ranks: dict[str, float] = {}
+    espn_source: str | None = None
+    espn_rank_type = espn_rank_type.strip().upper()
+    if espn_rank_type not in {"PPR", "STANDARD"}:
+        espn_rank_type = "PPR"
+    if include_espn:
+        try:
+            espn_ranks = espn_weekly_ranks(
+                player_list,
+                year=year,
+                week=week,
+                rank_type=espn_rank_type,
+                session=session,
+            )
+            if espn_ranks:
+                espn_source = f"ESPN weekly consensus ({espn_rank_type})"
+        except ProjectionSourceError:
+            espn_ranks = {}
     # MFL applies each league's exact rules to FantasySharks' raw projected stats.
     # Generic ML point totals cannot reproduce yardage bonuses or scoring tiers.
     # Keep ML as a separate comparison, never fill missing league points with it.
@@ -216,4 +396,7 @@ def projection_blend(
         ml_scores=ml_scores,
         ml_matched=len(ml_scores),
         generated_at=generated_at,
+        espn_ranks=espn_ranks,
+        espn_matched=len(espn_ranks),
+        espn_source=espn_source,
     )
