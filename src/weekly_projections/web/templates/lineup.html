@@ -8,10 +8,10 @@
   <title>{{ league.name }} · Lineup</title>
   <link rel="stylesheet" href="/static/app.css?v=lineup-workspace-2">
   <link rel="stylesheet" href="/static/workspace.css?v=2">
-  <link rel="stylesheet" href="/static/fantasy.css?v=3">
+  <link rel="stylesheet" href="/static/fantasy.css?v=4">
   <link rel="stylesheet" href="/static/lions.css?v=1">
   <script src="/static/diagnostics.js" defer></script>
-  <script src="/static/app.js?v=lineup-3" defer></script>
+  <script src="/static/app.js?v=lineup-4" defer></script>
   {% include '_theme_assets.html' %}
 </head>
 <body class="lineup-editor-page">
@@ -53,7 +53,7 @@
         </aside>
         <section class="roster-editor" aria-label="Roster and start sit controls">
           <header class="roster-editor-heading"><div><h2>Roster</h2><p id="drag-status" role="status" aria-live="polite">Drag between starters and bench, or use ⋯.</p></div><span>{{ recommendation.players|length }} players · Week {{ week }}</span></header>
-          <div class="roster-column-head"><span>SLOT</span><span>PLAYER</span><span>OPP / STATUS</span><span>PROJ</span><span>SCORE</span><span aria-label="Actions">⋯</span></div>
+          <div class="roster-column-head"><span>SLOT</span><span>PLAYER</span><span>OPP / STATUS</span><span>POINTS</span><span>SCORE</span><span aria-label="Actions">⋯</span></div>
           {% for group in ['starters','bench'] %}
           <h3 class="roster-section-title" data-roster-target="{{ group }}">{{ 'Starters' if group == 'starters' else 'Bench / Reserve' }}</h3>
           <div class="editor-player-list" data-roster-section="{{ group }}">
@@ -66,8 +66,8 @@
                 </div>
               </div>
               {% set game = games.get(item.player.team, {}) %}
-              <div class="roster-game"><span>{{ game.get('opponent', '—') }}</span><small>{% if game.get('final') %}Final{% elif item.locked %}In progress{% elif game.get('kickoff') %}<time data-kickoff="{{ game.kickoff }}">Scheduled</time>{% else %}Schedule unavailable{% endif %}</small></div>
-              <div class="editor-player-projection">{% if item.projection is not none %}{{ '%.1f'|format(item.projection) }}{% else %}—{% endif %}</div>
+              <div class="roster-game"><span>{{ game.get('opponent', 'BYE' if schedule_complete else '—') }}</span><small>{% if game.get('final') %}Final{% elif item.locked %}In progress{% elif game.get('kickoff') %}<time data-kickoff="{{ game.kickoff }}">Scheduled</time>{% elif schedule_complete %}Bye week{% else %}Schedule unavailable{% endif %}</small></div>
+              <div class="editor-player-projection"><strong>{% if item.projection is not none %}{{ '%.1f'|format(item.projection) }}{% else %}—{% endif %}</strong><small><span>YTD {% if ytd_scores.get(item.player.id) is not none %}{{ '%.1f'|format(ytd_scores[item.player.id]) }}{% else %}—{% endif %}</span><span>AVG {% if avg_scores.get(item.player.id) is not none %}{{ '%.1f'|format(avg_scores[item.player.id]) }}{% else %}—{% endif %}</span></small></div>
               <div class="roster-score">{% if item.locked and item.player.id in player_scores %}{{ '%.2f'|format(player_scores[item.player.id]) }}{% else %}—{% endif %}</div>
               <div class="editor-player-control">
                 <input hidden type="checkbox" name="starter_ids" value="{{ item.player.id }}" aria-label="Start {{ item.player.name }}" {% if item.currently_starting %}checked{% endif %} {% if item.locked or item.roster_status in ['IR','TS'] %}disabled{% endif %}>

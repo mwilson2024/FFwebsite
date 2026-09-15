@@ -95,15 +95,24 @@ class MFLAvailability:
     player_id: str
     status: str = "available"
     locked: bool = False
+    cant_add: bool = False
 
     @property
     def claimable(self) -> bool:
-        return not self.locked
+        """Whether MFL currently permits an immediate FCFS add."""
+        return not self.locked and not self.cant_add
+
+    @property
+    def waiver_claimable(self) -> bool:
+        """Whether the free agent may still be included in a future waiver claim."""
+        return not self.cant_add
 
     @property
     def label(self) -> str:
+        if self.cant_add:
+            return "Unavailable"
         if self.locked:
-            return "Locked"
+            return "Waiver claim only"
         if self.status.casefold() in {"waiver", "waivers"}:
             return "Waivers"
         return "Free agent"
@@ -1104,12 +1113,14 @@ class MFLClient:
             if isinstance(item, dict) and item.get("id"):
                 player_id = str(item["id"])
                 status = str(item.get("status") or "available").strip().casefold()
-                locked_flag = str(item.get("locked") or item.get("cant_add") or "").casefold()
+                locked_flag = str(item.get("locked") or "").casefold()
+                cant_add_flag = str(item.get("cant_add") or "").casefold()
                 locked = status == "locked" or locked_flag in {"1", "true", "yes", "locked"}
                 available[player_id] = MFLAvailability(
                     player_id=player_id,
                     status=status,
                     locked=locked,
+                    cant_add=cant_add_flag in {"1", "true", "yes", "locked"},
                 )
             elif isinstance(item, (str, int)):
                 player_id = str(item)
@@ -1136,7 +1147,37 @@ class MFLClient:
             if not isinstance(item, dict):
                 continue
             player_id = item.get("id") or item.get("player_id")
-            raw_score = item.get("score") or item.get("points")
+            raw_score = item.get("score")
+            if raw_score in (None, ""):
+                raw_score = item.get("points")
+            if not player_id or raw_score in (None, ""):
+                continue
+            try:
+                scores[str(player_id)] = float(raw_score)
+            except (TypeError, ValueError):
+                continue
+        return scores
+
+    def player_scores(
+        self,
+        *,
+        period: Literal["YTD", "AVG"],
+        player_ids: Iterable[str] | None = None,
+    ) -> dict[str, float]:
+        """Return official MFL season-to-date or weekly-average player scores."""
+        normalized = str(period).upper()
+        if normalized not in {"YTD", "AVG"}:
+            raise ValueError("Player score period must be YTD or AVG")
+        players = ",".join(sorted({str(player_id) for player_id in player_ids or []})) or None
+        payload = self.export("playerScores", W=normalized, PLAYERS=players)
+        scores: dict[str, float] = {}
+        for item in _iter_key(payload, "playerScore"):
+            if not isinstance(item, dict):
+                continue
+            player_id = item.get("id") or item.get("player_id")
+            raw_score = item.get("score")
+            if raw_score in (None, ""):
+                raw_score = item.get("points")
             if not player_id or raw_score in (None, ""):
                 continue
             try:
@@ -1208,9 +1249,12 @@ class MFLClient:
         availability = free_agents.get(add_player.id)
         if not availability:
             raise ValueError(f"{add_player.name} is not listed as a free agent in this league")
-        if not availability.claimable:
+        if availability.cant_add:
+            raise ValueError(f"{add_player.name} cannot be added or claimed in MFL right now")
+        if mode == "fcfs" and availability.locked:
             raise ValueError(
-                f"{add_player.name} is currently locked by MFL; keep the recommendation and submit when the league reopens"
+                f"{add_player.name} cannot be added immediately because the game is locked; "
+                "choose a priority or blind-bid waiver claim"
             )
         if drop_player.id not in self.roster_ids():
             raise ValueError(f"{drop_player.name} is not on franchise {self.config.franchise_id}")
@@ -1271,8 +1315,13 @@ class MFLClient:
         availability = self.free_agents().get(preview.add.id)
         if availability is None:
             raise ValueError(f"{preview.add.name} is no longer a free agent in this league. Rebuild the review.")
-        if not availability.claimable:
-            raise ValueError(f"{preview.add.name} is locked by MFL. Rebuild the review when claims reopen.")
+        if availability.cant_add:
+            raise ValueError(f"{preview.add.name} can no longer be added or claimed in MFL. Rebuild the review.")
+        if preview.mode == "fcfs" and availability.locked:
+            raise ValueError(
+                f"{preview.add.name} is no longer available for an immediate add. "
+                "Rebuild it as a waiver claim."
+            )
         if preview.drop.id not in self.roster_ids():
             raise ValueError(f"{preview.drop.name} is no longer on your roster. Rebuild the review.")
 

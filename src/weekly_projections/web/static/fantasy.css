@@ -76,7 +76,7 @@
 .lineup-editor-page .editor-player-info small { font-size:.8125rem; }
 .lineup-editor-page .editor-player-info strong { font-size:.9375rem; }
 .lineup-editor-page .editor-player-notes { margin-top:.2rem; }
-.lineup-editor-page .editor-player,.roster-column-head { display:grid; grid-template-columns:45px minmax(210px,1fr) 170px 65px 65px 100px; gap:.75rem; align-items:center; }
+.lineup-editor-page .editor-player,.roster-column-head { display:grid; grid-template-columns:45px minmax(210px,1fr) 170px 110px 65px 100px; gap:.75rem; align-items:center; }
 .lineup-empty-slot { min-height:68px; border-top:1px dashed var(--site-line,#dfe6f1) !important; background:color-mix(in srgb,var(--site-raised,#f7f9fc) 58%,transparent) !important; }
 .lineup-empty-slot:hover { background:color-mix(in srgb,var(--site-raised,#f7f9fc) 58%,transparent) !important; }
 .lineup-empty-copy strong { display:block; color:var(--site-muted,#60728d); font-size:.9rem; }
@@ -89,6 +89,8 @@
 .lineup-editor-page .editor-player-info small { margin:0; }
 .lineup-editor-page .editor-player-notes { padding-left:58px; }
 .lineup-editor-page .editor-player-projection,.roster-score { font-size:.9375rem; text-align:right; font-variant-numeric:tabular-nums; font-weight:600; }
+.lineup-editor-page .editor-player-projection>strong { display:block; }
+.lineup-editor-page .editor-player-projection>small { display:flex; justify-content:flex-end; gap:.45rem; margin-top:.2rem; color:#6c7e95; font-size:.65rem; font-weight:500; white-space:nowrap; }
 .roster-game { font-size:.875rem; color:#285ca6; }
 .roster-game small { display:block; font-size:.8125rem; color:#6c7e95; }
 .lineup-editor-page .start-control { min-height:40px; padding:.4rem; border-radius:7px; }
@@ -176,7 +178,7 @@
 .other-matchup-grid article > div { display:flex; justify-content:space-between; gap:1rem; font-size:.875rem; padding:.4rem 0; }
 @media(min-width:701px) and (max-width:950px) {
   .lineup-editor-page .editor-shell { padding-inline:1rem; }
-  .lineup-editor-page .editor-player,.roster-column-head { grid-template-columns:30px minmax(160px,1fr) 105px 50px 55px 80px; gap:.5rem; }
+  .lineup-editor-page .editor-player,.roster-column-head { grid-template-columns:30px minmax(160px,1fr) 105px 90px 55px 80px; gap:.5rem; }
 }
 @media(max-width:700px) {
   .lineup-editor-page .editor-shell { padding:1rem .6rem 2rem; }
@@ -196,10 +198,11 @@
   .lineup-editor-page .editor-player-notes { padding-left:0; }
   .lineup-editor-page .roster-game { grid-column:2; grid-row:2; }
   .lineup-editor-page .editor-player-projection { grid-column:3; grid-row:1; align-self:start; }
-  .lineup-editor-page .editor-player-projection::after { content:' proj'; color:#6c7e95; font-size:.75rem; font-weight:400; }
-  .lineup-editor-page .roster-score { grid-column:3; grid-row:1; align-self:end; font-size:.8125rem; color:#627b9d; }
+  .lineup-editor-page .editor-player-projection>strong::after { content:' proj'; color:#6c7e95; font-size:.7rem; font-weight:400; }
+  .lineup-editor-page .editor-player-projection>small { display:grid; gap:.05rem; font-size:.62rem; }
+  .lineup-editor-page .roster-score { grid-column:3; grid-row:2; align-self:start; font-size:.8125rem; color:#627b9d; }
   .lineup-editor-page .roster-score::after { content:' pts'; font-size:.75rem; }
-  .lineup-editor-page .editor-player-control { grid-column:3; grid-row:2; }
+  .lineup-editor-page .editor-player-control { grid-column:3; grid-row:3; }
   .gameday-shell { padding:1rem .5rem 2rem; }
   .gameday-toolbar { flex-direction:column; align-items:stretch; }
   .gameday-toolbar h1 { font-size:1.5rem; }

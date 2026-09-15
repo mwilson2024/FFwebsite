@@ -7,7 +7,7 @@
   <title>{{ league.name }} · League HQ</title>
   <link rel="stylesheet" href="/static/app.css?v=league-1">
   <link rel="stylesheet" href="/static/hub.css?v=league-1">
-  <link rel="stylesheet" href="/static/league.css?v=5">
+  <link rel="stylesheet" href="/static/league.css?v=6">
   <link rel="stylesheet" href="/static/lions.css?v=1">
   <script src="/static/diagnostics.js" defer></script>
   {% include '_theme_assets.html' %}
@@ -103,7 +103,28 @@
 
     <section class="league-card" id="playoffs">
       <div class="league-section-heading"><div><span class="card-kicker">LOCAL PROJECTION</span><h2>Playoff bracket</h2></div><p>Division leaders seed 1–3; best remaining records fill 4–8</p></div>
-      {% if playoff_games %}<div class="bracket-scroll"><div class="bracket">{% for item in playoff_games %}{% set game=item.game %}<article><span>Projected quarterfinal · Week {{ game.week }}</span>{% for team_id in game.team_ids %}<div><strong><i class="seed-number">{{ item.seeds[loop.index0] }}</i> {{ names.get(team_id, 'TBD') }}</strong>{% if item.probability %}<b>{{ item.probability[loop.index0] }}%</b>{% else %}<b>—</b>{% endif %}</div>{% endfor %}</article>{% endfor %}</div></div><p class="data-note">Calculated here from official standings; MFL's playoff bracket is not used.</p>{% else %}<p class="empty-state">The projected bracket appears when standings contain at least two teams.</p>{% endif %}
+      {% if playoff_rounds %}
+      <div class="bracket-scroll" aria-label="Projected playoff bracket">
+        <div class="bracket">
+          {% for round in playoff_rounds %}
+          <section class="bracket-round bracket-round-{{ loop.index }}" aria-labelledby="bracket-round-{{ loop.index }}">
+            <header><strong id="bracket-round-{{ loop.index }}">{{ round.name }}</strong>{% if round.games %}<span>Week {{ round.games[0].game.week }}</span>{% endif %}</header>
+            <div class="bracket-round-games">
+              {% for item in round.games %}{% set game=item.game %}
+              <article class="bracket-game">
+                {% if item.projected_advancement %}<small>Projected advancement</small>{% endif %}
+                {% for team_id in game.team_ids %}
+                <div><strong><i class="seed-number">{{ item.seeds[loop.index0] }}</i><span>{{ names.get(team_id, 'TBD') }}</span></strong>{% if item.probability %}<b>{{ item.probability[loop.index0] }}%</b>{% else %}<b>—</b>{% endif %}</div>
+                {% endfor %}
+              </article>
+              {% endfor %}
+            </div>
+          </section>
+          {% endfor %}
+        </div>
+      </div>
+      <p class="data-note">Seeds come from official standings. Later-round teams are projected from current power ratings; MFL's playoff bracket is not used.</p>
+      {% else %}<p class="empty-state">The projected bracket appears when standings contain eight eligible teams.</p>{% endif %}
     </section>
 
     <section class="league-card">

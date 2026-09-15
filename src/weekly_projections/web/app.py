@@ -47,11 +47,10 @@ from weekly_projections.live_stats import weekly_boxscore, scoring_components
 from weekly_projections.recommendations import PlayerRecommendation, build_player_board
 from weekly_projections.trade_engine import suggest_trades, analyze_target_trade
 from weekly_projections.league_intelligence import (
-    build_local_playoff_games,
+    build_projected_playoff_rounds,
     build_playoff_seeds,
     build_power_rankings,
     build_recap,
-    playoff_probability,
     waiver_trends,
 )
 from weekly_projections.web.diagnostics import client_ip, initialize_log, log_access, log_error, request_context
@@ -735,16 +734,12 @@ def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
     seeds = build_playoff_seeds(
         standings, division_by_team, (division_id for division_id, _ in details.divisions), field_size=8,
     )
-    playoff_games = []
-    for game in build_local_playoff_games(seeds, first_playoff_week=details.last_regular_season_week + 1):
-        probability = None
-        if len(game.team_ids) == 2:
-            probability = playoff_probability(rank_by_team.get(game.team_ids[0]), rank_by_team.get(game.team_ids[1]))
-        playoff_games.append({
-            "game": game,
-            "probability": probability,
-            "seeds": tuple(seeds.index(team_id) + 1 for team_id in game.team_ids),
-        })
+    playoff_rounds = build_projected_playoff_rounds(
+        seeds,
+        rank_by_team,
+        first_playoff_week=details.last_regular_season_week + 1,
+    )
+    playoff_games = list(playoff_rounds[0].games) if playoff_rounds else []
     result = {
         "details": details,
         "teams": details.franchises,
@@ -760,11 +755,55 @@ def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
         "recap": recap,
         "trends": trends[:12],
         "playoff_games": playoff_games,
+        "playoff_rounds": playoff_rounds,
         "playoff_seeds": seeds,
         "errors": errors,
     }
     current.read_cache[cache_key] = (time.monotonic() + 90, result)
     return result
+
+
+def _load_player_score_summaries(
+    client: MFLClient,
+    current: BrowserSession | None,
+) -> tuple[dict[str, float], dict[str, float]]:
+    """Load broad, reusable MFL YTD and average player-score reports."""
+    reports: dict[str, dict[str, float]] = {"YTD": {}, "AVG": {}}
+    for period in reports:
+        try:
+            if current is None:
+                reports[period] = client.player_scores(period=period)
+            else:
+                reports[period] = _cached_session_read(
+                    current,
+                    client.config.league_id,
+                    f"player-scores:{period.lower()}",
+                    lambda selected_period=period: client.player_scores(period=selected_period),
+                    ttl=300,
+                    stale_ttl=86400,
+                )
+        except MFLApiError as error:
+            # These summaries add context but must not take down the page when
+            # MFL has not published the report or has paused reads.
+            if current is not None:
+                _log_provider_error_once(
+                    current,
+                    client.config.league_id,
+                    f"player_scores_{period.lower()}_unavailable",
+                    error,
+                )
+            else:
+                log_error(f"player_scores_{period.lower()}_unavailable", error)
+            reports[period] = {}
+            if isinstance(error, MFLRateLimitError):
+                break
+        except AttributeError:
+            # Lightweight synthetic clients used by internal views may not
+            # implement optional season summaries.
+            reports[period] = {}
+    client.player_ytd_scores = reports["YTD"]
+    client.player_avg_scores = reports["AVG"]
+    return reports["YTD"], reports["AVG"]
 
 
 def _load_player_board(
@@ -783,6 +822,7 @@ def _load_player_board(
     if cache is not None:
         cached = cache.get(cache_key)
         if cached and cached[0] > now:
+            _load_player_score_summaries(client, current)
             return cached[1]
     def read(label, loader, *, ttl=60, stale_ttl=900):
         if current is None:
@@ -890,6 +930,7 @@ def _load_player_board(
         projections=blend.scores,
         bye_teams=bye_teams,
     )
+    _load_player_score_summaries(client, current)
     result = (week, roster, recommendations, blend, roster_locked)
     if cache is not None:
         # This board combines several large MFL exports. A brief cache keeps
@@ -979,10 +1020,18 @@ def _load_lineup(
         "lineup-settings", client.lineup_settings,
         ttl=7 * 86400, stale_ttl=30 * 86400,
     )
-    kickoffs = read(
-        f"nfl-schedule:{week}", lambda: client.nfl_team_kickoffs(week=week),
+    def load_week_schedule():
+        kickoffs = client.nfl_team_kickoffs(week=week)
+        return kickoffs, dict(getattr(client, "week_games", {}))
+
+    kickoffs, week_games = read(
+        f"nfl-schedule:{week}", load_week_schedule,
         ttl=300, stale_ttl=3600, global_feed=True,
     )
+    # Restore display metadata when this global report came from a cache entry
+    # populated while viewing another league.
+    client.week_games = week_games
+    client.week_schedule_complete = len(kickoffs) >= 24
     locked_player_ids = _locked_player_ids(roster, kickoffs)
     if any(statuses.get(player_id, "R") not in {"S","NS","IR","TS"} for player_id in locked_player_ids):
         raise MFLApiError("MFL has not exposed the saved lineup for a locked player. Reconnect MFL and reload this week; no lineup changes were made.")
@@ -1012,6 +1061,7 @@ def _load_lineup(
         mfl_scores=projections,
         session=client.session,
     )
+    _load_player_score_summaries(client, current)
     recommendation = recommend_lineup(
         roster=roster,
         settings=settings,
@@ -1219,9 +1269,13 @@ def _stage_move(
             [preview.add, preview.drop],
             client.nfl_team_kickoffs(week=week),
         )
-        if locked:
+        blocked = {
+            player_id for player_id in locked
+            if player_id == preview.drop.id or mode == "fcfs"
+        }
+        if blocked:
             names = ", ".join(
-                player.name for player in (preview.add, preview.drop) if player.id in locked
+                player.name for player in (preview.add, preview.drop) if player.id in blocked
             )
             raise ValueError(f"Game already started; MFL has locked: {names}")
     _remember_catalog(current, client)
@@ -1651,6 +1705,8 @@ def moves(request: Request, league: str, q: str = "", error: str = ""):
             "ml_matched": blend.ml_matched,
             "mfl_projections": blend.mfl_scores,
             "ml_projections": blend.ml_scores,
+            "ytd_scores": getattr(client, "player_ytd_scores", {}),
+            "avg_scores": getattr(client, "player_avg_scores", {}),
             "roster_locked": roster_locked,
             "query": query,
             "error": api_error,
@@ -1699,7 +1755,10 @@ def lineup_page(request: Request, league: str, error: str = "", week: int | None
             "current_slots": {player.id: slot for slot,player in assign_lineup_slots((item.player for item in recommendation.players if item.currently_starting), settings) if player} if recommendation and settings else {},
             "lineup_visible": getattr(client, "lineup_visible", True),
             "games": getattr(client, "week_games", {}),
+            "schedule_complete": getattr(client, "week_schedule_complete", False),
             "player_scores": getattr(client, "lineup_scores", {}),
+            "ytd_scores": getattr(client, "player_ytd_scores", {}),
+            "avg_scores": getattr(client, "player_avg_scores", {}),
             "settings": settings,
             "projection_source": blend.source_label,
             "ml_matched": blend.ml_matched,
@@ -2094,11 +2153,15 @@ def submit_move(request: Request, pending_id: str, csrf_token: str = Form(...)):
                 [preview.add, preview.drop],
                 client.nfl_team_kickoffs(week=week),
             )
-            if locked:
+            blocked = {
+                player_id for player_id in locked
+                if player_id == preview.drop.id or preview.mode == "fcfs"
+            }
+            if blocked:
                 names = ", ".join(
                     player.name
                     for player in (preview.add, preview.drop)
-                    if player.id in locked
+                    if player.id in blocked
                 )
                 raise ValueError(f"Game already started; MFL has locked: {names}")
         try:

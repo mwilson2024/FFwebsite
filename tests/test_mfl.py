@@ -458,7 +458,23 @@ def test_free_agents_preserve_mfl_lock_state(monkeypatch: pytest.MonkeyPatch) ->
     assert free_agents["100"].claimable is True
     assert free_agents["100"].label == "Free agent"
     assert free_agents["200"].claimable is False
-    assert free_agents["200"].label == "Locked"
+    assert free_agents["200"].waiver_claimable is True
+    assert free_agents["200"].label == "Waiver claim only"
+
+
+def test_free_agents_preserve_absolute_cant_add_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = MFLClient(_config(user_cookie="cookie"))
+    monkeypatch.setattr(
+        client,
+        "export",
+        lambda request_type, **kwargs: {
+            "freeAgents": {"player": {"id": "200", "locked": "1", "cant_add": "1"}}
+        },
+    )
+    player = client.free_agents()["200"]
+    assert player.claimable is False
+    assert player.waiver_claimable is False
+    assert player.label == "Unavailable"
 
 
 def test_projected_scores_parse_league_scored_points(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -483,6 +499,24 @@ def test_projected_scores_parse_league_scored_points(monkeypatch: pytest.MonkeyP
     assert recorded["PLAYERS"] == "100,200"
 
 
+def test_player_scores_parse_ytd_and_average_periods(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = MFLClient(_config(user_cookie="cookie"))
+    calls = []
+
+    def export(request_type: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append((request_type, kwargs))
+        return {"playerScores": {"playerScore": [
+            {"id": "100", "score": "31.25"},
+            {"id": "200", "score": "unavailable"},
+        ]}}
+
+    monkeypatch.setattr(client, "export", export)
+    assert client.player_scores(period="YTD", player_ids=["200", "100"]) == {"100": 31.25}
+    assert calls == [("playerScores", {"W": "YTD", "PLAYERS": "100,200"})]
+    with pytest.raises(ValueError, match="YTD or AVG"):
+        client.player_scores(period="week")
+
+
 def test_preview_rejects_locked_player(monkeypatch: pytest.MonkeyPatch) -> None:
     client = MFLClient(_config(user_cookie="cookie"))
     players = {
@@ -497,8 +531,14 @@ def test_preview_rejects_locked_player(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setattr(client, "roster_ids", lambda: {"200"})
 
-    with pytest.raises(ValueError, match="currently locked by MFL"):
+    with pytest.raises(ValueError, match="cannot be added immediately"):
         client.preview_add_drop(add="100", drop="200")
+
+    preview = client.preview_add_drop(
+        add="100", drop="200", mode="waiver", round_number=1,
+    )
+    assert preview.mode == "waiver"
+    client.validate_add_drop(preview)
 
 
 def test_lineup_settings_parse_fixed_and_flex_ranges(

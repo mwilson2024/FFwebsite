@@ -26,7 +26,9 @@ class PlayerRecommendation:
 
     @property
     def is_claimable(self) -> bool:
-        return not self.is_rostered and self.availability.claimable
+        # A kickoff lock prevents an immediate FCFS add, but MFL can still
+        # accept a priority/FAAB claim for processing in the next waiver run.
+        return not self.is_rostered and self.availability.waiver_claimable
 
     @property
     def market_status(self) -> str:
@@ -43,15 +45,17 @@ def _recommendation_copy(
 ) -> tuple[str, str, str]:
     if projection is None:
         return (
-            "Watch list" if locked else "Needs projection",
+            "Waiver watch" if locked else "Needs projection",
             "muted",
-            "MFL has not published a projection for this player yet.",
+            "MFL has not published a projection for this player yet."
+            + (" Immediate FCFS is locked, but a waiver claim can still be filed." if locked else ""),
         )
     if delta is None:
         return (
-            "Watch list" if locked else "Review fit",
+            "Waiver watch" if locked else "Review fit",
             "muted",
-            "There is no projected roster player at the same position to compare.",
+            "There is no projected roster player at the same position to compare."
+            + (" Immediate FCFS is locked, but a waiver claim can still be filed." if locked else ""),
         )
     if delta >= 4:
         label, tone = "Strong target", "strong"
@@ -62,13 +66,15 @@ def _recommendation_copy(
     else:
         label, tone = "Depth only", "muted"
     if locked and delta >= 0.5:
-        label = "Target when open"
+        label = "Waiver target"
     elif locked:
-        label = "Watch list"
+        label = "Waiver watch"
     reason = (
         f"Projects {abs(delta):.1f} points {'above' if delta >= 0 else 'below'} "
         "your lowest projected player at this position."
     )
+    if locked:
+        reason += " Immediate FCFS is locked, but a waiver claim can still be filed."
     return label, tone, reason
 
 

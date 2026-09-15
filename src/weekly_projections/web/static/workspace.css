@@ -161,6 +161,6 @@ body { background: #f1f4f9; color: #172337; }
   .editor-roster-footer { flex-direction:column; align-items:stretch; }
   .waiver-table tr { background:#fff; border-color:#d7e1ef; }
   .waiver-table tr:has(input:checked) { background:#edf5ff; }
-  .waiver-table td:nth-child(6) { border-color:#e0e8f2; }
+  .waiver-table td:nth-child(8) { border-color:#e0e8f2; }
   .mobile-move-shortcut { bottom:16px; background:#2858c6; color:#fff; border-color:#426ed0; }
 }

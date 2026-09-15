@@ -5,6 +5,7 @@ import pytest
 
 from weekly_projections.lineup import LineupPlayerRecommendation, LineupRecommendation
 from weekly_projections.mfl.client import (
+    AddDropPreview,
     MFLAvailability,
     MFLConfig,
     MFLFranchise,
@@ -144,9 +145,13 @@ def test_move_page_shows_full_board_projections_and_locks(monkeypatch) -> None:
     assert "14.5" in response.text
     assert "Strong target" in response.text
     assert "Locked Prospect" in response.text
-    assert "Locked" in response.text
+    assert "Waiver claim only" in response.text
     assert 'value="a2"' in response.text
-    assert 'value="a2"' in response.text and "disabled" in response.text
+    locked_control = response.text.split('value="a2"', 1)[1].split(">", 1)[0]
+    assert "disabled" not in locked_control
+    assert 'data-waiver-only="true"' in locked_control
+    assert "YTD" in response.text
+    assert "Avg" in response.text
     assert "MFL league scoring" in response.text
     assert "Roster Bench · BUF · LOCKED" in response.text
     assert "Other Team Star" in response.text
@@ -308,7 +313,7 @@ def test_lineup_page_shows_start_sit_recommendations(monkeypatch) -> None:
     assert 'data-roster-section="bench"' in response.text
     assert 'data-player-card="p1"' in response.text
     assert 'id="use-recommended"' in response.text
-    assert "lineup-3" in response.text
+    assert "lineup-4" in response.text
 
 
 def test_incomplete_lineup_preview_url_redirects_safely() -> None:
@@ -344,7 +349,10 @@ def test_lineup_global_reads_are_shared_across_leagues(monkeypatch) -> None:
         def named_players(self, ids): return [MFLPlayer(next(iter(ids)), "Player", "WR", "DET")]
         def lineup_settings(self): return MFLLineupSettings(1, (MFLLineupRule("WR", 1, 1),))
         def player_roster_statuses(self, ids, *, week): reads["status"] += 1; return {next(iter(ids)): "S"}
-        def nfl_team_kickoffs(self, *, week): reads["schedule"] += 1; return {"DET": 9999999999}
+        def nfl_team_kickoffs(self, *, week):
+            reads["schedule"] += 1
+            self.week_games = {"DET": {"opponent": "vs BUF", "kickoff": 9999999999}}
+            return {"DET": 9999999999}
         def live_scoring(self, *, week):
             reads["live"] += 1
             player_id = f"p-{self.config.league_id}"
@@ -359,12 +367,15 @@ def test_lineup_global_reads_are_shared_across_leagues(monkeypatch) -> None:
         web_app, "projection_blend",
         lambda players, **kwargs: ProjectionBlend({}, {}, {}, 0),
     )
-    web_app._load_lineup(LineupClient("11111", "0001"), current=current)
-    web_app._load_lineup(LineupClient("22222", "0002"), current=current)
+    first = LineupClient("11111", "0001")
+    second = LineupClient("22222", "0002")
+    web_app._load_lineup(first, current=current)
+    web_app._load_lineup(second, current=current)
     assert reads == {
         "week": 1, "schedule": 1, "injuries": 1,
         "live": 2, "roster": 0, "status": 0,
     }
+    assert second.week_games == first.week_games
 
 
 def test_client_uses_the_league_specific_mfl_host() -> None:
@@ -464,6 +475,10 @@ def test_league_hq_renders_intelligence_and_tracks_session_side_bets(monkeypatch
     names = {key: team.name for key, team in teams.items()}
     rankings = build_power_rankings(games, names, current_week=2)
     activity = (MFLTransaction("t1", "WAIVER", 100, ("0001",), ("p1",), ("p2",), bid=3),)
+    bracket_item = {
+        "game": MFLFantasyGame(15, ("0001", "0002"), (None, None)),
+        "probability": (60, 40), "seeds": (1, 8),
+    }
     hq = {
         "details": MFLLeagueDetails((), teams, name="Test HQ", end_week=17),
         "teams": teams, "names": names, "current_week": 2,
@@ -473,7 +488,13 @@ def test_league_hq_renders_intelligence_and_tracks_session_side_bets(monkeypatch
         "catalog": {"p1": MFLPlayer("p1", "Pickup", "WR", "DET"), "p2": MFLPlayer("p2", "Drop", "RB", "GB")},
         "rankings": rankings, "rank_by_team": {row.franchise_id: row for row in rankings},
         "recap": build_recap(games, names, current_week=2), "trends": waiver_trends(activity),
-        "playoff_games": [], "errors": {},
+        "playoff_games": [bracket_item],
+        "playoff_rounds": [
+            {"name": "Quarterfinals", "games": [bracket_item]},
+            {"name": "Semifinals", "games": [{**bracket_item, "projected_advancement": True}]},
+            {"name": "Championship", "games": [{**bracket_item, "projected_advancement": True}]},
+        ],
+        "errors": {},
     }
     monkeypatch.setattr(web_app, "_league_hq", lambda current, selected: dict(hq))
     client = TestClient(web_app.app)
@@ -492,8 +513,11 @@ def test_league_hq_renders_intelligence_and_tracks_session_side_bets(monkeypatch
     assert 'data-equal-scroll-cards' in response.text
     assert 'data-scroll-height-source' in response.text
     assert 'data-scroll-height-target' in response.text
-    assert "/static/league.css?v=5" in response.text
+    assert "/static/league.css?v=6" in response.text
     assert "/static/interface.js?v=4" in response.text
+    assert 'class="bracket-round bracket-round-3"' in response.text
+    assert "Championship" in response.text
+    assert "Projected advancement" in response.text
     assert "Side-bet tracker" in response.text
     response = client.post("/league/side-bets", data={
         "league":"11111", "csrf_token":"csrf", "title":"QB duel",
@@ -506,6 +530,44 @@ def test_league_hq_renders_intelligence_and_tracks_session_side_bets(monkeypatch
     assert "FRANCHISE PROFILE" in profile.text
     assert "Alpha" in profile.text
     assert "without inventing results" in profile.text
+
+
+def test_local_playoff_projection_builds_full_three_round_bracket(monkeypatch) -> None:
+    league = MFLLeague("11111", "0001", "League")
+    current = web_app.BrowserSession("cookie", 2026, [league], "csrf")
+    teams = {
+        f"{index:04d}": MFLFranchise(
+            f"{index:04d}", f"Team {index}", f"0{((index - 1) % 3) + 1}",
+        )
+        for index in range(1, 9)
+    }
+    standings = [
+        {"id": team_id, "h2hw": str(9 - index), "h2hl": str(index - 1),
+         "h2ht": "0", "pf": str(1000 - index * 10), "pa": "800"}
+        for index, team_id in enumerate(teams, 1)
+    ]
+
+    class BracketClient:
+        config = MFLConfig(2026, league.id, league.franchise_id, user_cookie="cookie")
+        _players = {}
+        def league_details(self):
+            return MFLLeagueDetails(
+                (("01", "One"), ("02", "Two"), ("03", "Three")), teams,
+                last_regular_season_week=14,
+            )
+        def current_week(self): return 2
+        def league_standings(self): return standings
+        def fantasy_schedule(self):
+            return (MFLFantasyGame(1, tuple(teams), tuple(120 - index for index in range(8))),)
+        def transactions(self, **kwargs): return ()
+        def players(self): return {}
+
+    monkeypatch.setattr(web_app, "_client", lambda *args: BracketClient())
+    hq = web_app._league_hq(current, league)
+    assert [len(round_.games) for round_ in hq["playoff_rounds"]] == [4, 2, 1]
+    assert [round_.name for round_ in hq["playoff_rounds"]] == [
+        "Quarterfinals", "Semifinals", "Championship",
+    ]
 
 
 def test_kickoff_locks_are_enforced_server_side() -> None:
@@ -524,6 +586,38 @@ def test_kickoff_locks_are_enforced_server_side() -> None:
             selected_ids=set(),
             statuses={"started": "S", "future": "NS"},
             locked_ids=locked,
+        )
+
+
+def test_game_locked_free_agent_can_be_staged_as_waiver_but_not_fcfs(monkeypatch) -> None:
+    league = MFLLeague("11111", "0001", "League")
+    current = web_app.BrowserSession("cookie", 2026, [league], "csrf")
+    add = MFLPlayer("add", "Waiver Target", "WR", "BUF")
+    drop = MFLPlayer("drop", "Drop Player", "WR", "DET")
+
+    class MoveClient:
+        _players = None
+        def preview_add_drop(self, **kwargs):
+            return AddDropPreview(
+                kwargs["mode"], add, drop, league.id, league.franchise_id,
+                bid=kwargs["bid"], round=kwargs["round_number"],
+                replace_existing=kwargs["replace_existing"],
+            )
+        def current_week(self): return 2
+        def nfl_team_kickoffs(self, *, week): return {"BUF": 1, "DET": 9999999999}
+
+    monkeypatch.setattr(web_app, "_client", lambda *args: MoveClient())
+    pending_id, preview, _ = web_app._stage_move(
+        current, league_id=league.id, add_id=add.id, drop_id=drop.id,
+        mode="waiver", bid=None, round_number=1,
+    )
+    assert pending_id in current.pending_moves
+    assert preview.mode == "waiver"
+
+    with pytest.raises(ValueError, match="Game already started"):
+        web_app._stage_move(
+            current, league_id=league.id, add_id=add.id, drop_id=drop.id,
+            mode="fcfs", bid=None, round_number=None,
         )
 
 

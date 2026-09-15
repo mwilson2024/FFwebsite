@@ -1,5 +1,6 @@
 from weekly_projections.league_intelligence import (
     build_local_playoff_games,
+    build_projected_playoff_rounds,
     build_playoff_seeds,
     build_power_rankings,
     build_recap,
@@ -29,6 +30,18 @@ def test_power_rankings_luck_and_current_week_exclusion():
     assert any(row.luck != 0 for row in rankings)
     assert rankings[0].power_score >= rankings[-1].power_score
     assert build_power_rankings((), names, current_week=1) == ()
+
+
+def test_power_ranking_copy_uses_actual_completed_week_span():
+    names = {"0001": "One", "0002": "Two"}
+    rankings = build_power_rankings(
+        (MFLFantasyGame(1, ("0001", "0002"), (120.0, 90.0)),),
+        names,
+        current_week=2,
+    )
+    assert rankings[0].form_weeks == 1
+    assert rankings[0].one_liner == "A strong opening week has this team near the top."
+    assert "three weeks" not in rankings[0].one_liner
 
 
 def test_trends_recap_probability_and_ros_pace():
@@ -66,3 +79,15 @@ def test_local_playoff_seeding_puts_three_division_leaders_first():
     assert [game.team_ids for game in games] == [
         (seeds[0], seeds[7]), (seeds[3], seeds[4]), (seeds[1], seeds[6]), (seeds[2], seeds[5])
     ]
+    rankings = build_power_rankings(
+        (MFLFantasyGame(1, tuple(seeds), tuple(120 - index for index in range(8))),),
+        {team_id: team_id for team_id in seeds},
+        current_week=2,
+    )
+    rounds = build_projected_playoff_rounds(
+        seeds,
+        {row.franchise_id: row for row in rankings},
+        first_playoff_week=15,
+    )
+    assert [len(round_.games) for round_ in rounds] == [4, 2, 1]
+    assert [round_.name for round_ in rounds] == ["Quarterfinals", "Semifinals", "Championship"]

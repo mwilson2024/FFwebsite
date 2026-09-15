@@ -35,8 +35,9 @@ def test_locked_upgrade_is_kept_on_board_as_future_target() -> None:
         roster=[MFLPlayer("r1", "Roster Bench", "RB", "NYG")],
         projections={"a1": 12.0, "r1": 8.0},
     )
-    assert board[0].recommendation == "Target when open"
+    assert board[0].recommendation == "Waiver target"
     assert board[0].availability.claimable is False
+    assert board[0].is_claimable is True
 
 
 def test_available_player_is_labeled_as_bye_week_fit() -> None:

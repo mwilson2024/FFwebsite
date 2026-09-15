@@ -18,6 +18,7 @@ class TeamIntelligence:
     points_against: float
     expected_wins: float
     recent_form: float
+    form_weeks: int
     power_score: float
     rank: int
 
@@ -39,6 +40,10 @@ class TeamIntelligence:
         if self.luck <= -1:
             return "The points say this team deserves a better record."
         if self.recent_form >= .7:
+            if self.form_weeks == 1:
+                return "A strong opening week has this team near the top."
+            if self.form_weeks == 2:
+                return "One of the league's hottest teams through two weeks."
             return "One of the league's hottest teams over the last three weeks."
         if self.rank <= 3:
             return "Strong scoring and point differential keep this team near the top."
@@ -62,6 +67,20 @@ class LeagueRecap:
     headline: str
     story: str
     awards: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
+class ProjectedPlayoffGame:
+    game: MFLFantasyGame
+    probability: tuple[int, int] | None
+    seeds: tuple[int, int]
+    projected_advancement: bool = False
+
+
+@dataclass(frozen=True)
+class ProjectedPlayoffRound:
+    name: str
+    games: tuple[ProjectedPlayoffGame, ...]
 
 
 def _scale(values: Mapping[str, float]) -> dict[str, float]:
@@ -150,6 +169,7 @@ def build_power_rankings(
             wins=wins[team_id], losses=losses[team_id], ties=ties[team_id],
             points_for=round(points_for[team_id], 2), points_against=round(points_against[team_id], 2),
             expected_wins=round(expected[team_id], 2), recent_form=round(recent[team_id], 3),
+            form_weeks=min(3, len(weekly_results[team_id])),
             power_score=round(raw_power[team_id], 1), rank=index,
         )
         for index, team_id in enumerate(ordered, 1)
@@ -261,6 +281,65 @@ def build_local_playoff_games(
         if left < len(seeded) and right < len(seeded):
             games.append(MFLFantasyGame(first_playoff_week, (seeded[left], seeded[right]), (None, None)))
     return tuple(games)
+
+
+def build_projected_playoff_rounds(
+    seeds: Iterable[str],
+    rankings: Mapping[str, TeamIntelligence],
+    *,
+    first_playoff_week: int,
+) -> tuple[ProjectedPlayoffRound, ...]:
+    """Build a complete local 8-team bracket with projected advancement."""
+    seeded = tuple(seeds)[:8]
+    seed_number = {team_id: index for index, team_id in enumerate(seeded, 1)}
+
+    def view(game: MFLFantasyGame, *, advanced: bool = False) -> ProjectedPlayoffGame:
+        probability = playoff_probability(
+            rankings.get(game.team_ids[0]), rankings.get(game.team_ids[1]),
+        )
+        return ProjectedPlayoffGame(
+            game=game,
+            probability=probability,
+            seeds=(seed_number[game.team_ids[0]], seed_number[game.team_ids[1]]),
+            projected_advancement=advanced,
+        )
+
+    quarterfinals = tuple(
+        view(game)
+        for game in build_local_playoff_games(
+            seeded, first_playoff_week=first_playoff_week,
+        )
+    )
+    if len(quarterfinals) != 4:
+        return ()
+
+    def winner(item: ProjectedPlayoffGame) -> str:
+        if item.probability and item.probability[1] > item.probability[0]:
+            return item.game.team_ids[1]
+        return item.game.team_ids[0]
+
+    def next_round(
+        source: tuple[ProjectedPlayoffGame, ...], *, week: int,
+    ) -> tuple[ProjectedPlayoffGame, ...]:
+        return tuple(
+            view(
+                MFLFantasyGame(
+                    week,
+                    (winner(source[index]), winner(source[index + 1])),
+                    (None, None),
+                ),
+                advanced=True,
+            )
+            for index in range(0, len(source), 2)
+        )
+
+    semifinals = next_round(quarterfinals, week=first_playoff_week + 1)
+    championship = next_round(semifinals, week=first_playoff_week + 2)
+    return (
+        ProjectedPlayoffRound("Quarterfinals", quarterfinals),
+        ProjectedPlayoffRound("Semifinals", semifinals),
+        ProjectedPlayoffRound("Championship", championship),
+    )
 
 
 def rest_of_season_pace(weekly_projection: float | None, *, week: int, end_week: int) -> float | None:

@@ -133,13 +133,14 @@ small { font-size: .8125rem; }
 .lineup-actions { display: flex; gap: .6rem; flex-shrink: 0; }
 .secondary-button.accent { color: var(--acid); border-color: #3b8d82; background: var(--accent-soft); }
 .waiver-table-wrap,.lineup-table-wrap { overflow: auto; max-height: 65vh; }
-.waiver-table { width: 100%; min-width: 920px; border-collapse: collapse; text-align: left; font-size: .875rem; }
+.waiver-table { width: 100%; min-width: 1080px; border-collapse: collapse; text-align: left; font-size: .875rem; }
 .waiver-table th { position: sticky; top: 0; z-index: 2; padding: .85rem 1rem; color: #a6b8d0; background: #162237; border-bottom: 1px solid var(--line); font-size: .75rem; font-weight: 650; }
 .waiver-table td { padding: 1rem; border-bottom: 1px solid #24324a; vertical-align: middle; }
 .waiver-row,.lineup-row { cursor: pointer; }
 .waiver-row:hover,.lineup-row:hover { background: #1c2b42; }
 .waiver-row:has(input:checked),.lineup-row:has(input:checked) { background: #19343865; }
 .is-locked,.locked-lineup-row { cursor: not-allowed; }
+.is-waiver-only { cursor:pointer; }
 .select-cell { width: 60px; text-align: center; }
 .player-identity { display: flex; align-items: center; gap: .75rem; min-width: 180px; }
 .player-identity > span:last-child { min-width: 0; }
@@ -318,10 +319,14 @@ small { font-size: .8125rem; }
   .waiver-table td:nth-child(3) { grid-column: 1 / 3; grid-row: 2; }
   .waiver-table td:nth-child(4) { grid-column: 3; grid-row: 1 / 3; text-align: right; }
   .waiver-table td:nth-child(4)::before { display: block; content: "Projected"; color: var(--muted); font-size: .75rem; margin-bottom: .25rem; }
-  .waiver-table td:nth-child(5) { grid-column: 1 / -1; grid-row: 3; }
-  .waiver-table td:nth-child(6) { grid-column: 1 / -1; grid-row: 4; padding-top: .6rem; border-top: 1px solid #33445d; }
-  .waiver-table:not(.lineup-table) td:nth-child(5)::before { content: "Roster edge "; color: var(--muted); font-size: .8125rem; }
-  .waiver-table:not(.lineup-table) td:nth-child(5) > strong { display: inline; }
+  .waiver-table td:nth-child(5) { grid-column: 1; grid-row: 3; }
+  .waiver-table td:nth-child(6) { grid-column: 2; grid-row: 3; }
+  .waiver-table td:nth-child(7) { grid-column: 3; grid-row: 3; text-align:right; }
+  .waiver-table td:nth-child(8) { grid-column: 1 / -1; grid-row: 4; padding-top: .6rem; border-top: 1px solid #33445d; }
+  .waiver-table:not(.lineup-table) td:nth-child(5)::before { content: "YTD "; color: var(--muted); font-size: .75rem; }
+  .waiver-table:not(.lineup-table) td:nth-child(6)::before { content: "AVG "; color: var(--muted); font-size: .75rem; }
+  .waiver-table:not(.lineup-table) td:nth-child(7)::before { content: "Edge "; color: var(--muted); font-size: .75rem; }
+  .waiver-table:not(.lineup-table) :is(td:nth-child(5),td:nth-child(6),td:nth-child(7)) > strong { display: inline; font-size:1rem; }
   .player-identity { min-width: 0; gap: .5rem; flex-wrap: wrap; }
   .player-identity .position-token { min-width: 30px; height: 24px; border-radius: 6px; font-size: .75rem; }
   .player-identity > span:last-child { flex: 1 1 100%; }

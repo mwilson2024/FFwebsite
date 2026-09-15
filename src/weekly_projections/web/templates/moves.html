@@ -6,12 +6,12 @@
   
   <meta name="csrf-token" content="{{ session.csrf_token }}">
   <title>{{ league.name }} · Player Market</title>
-  <link rel="stylesheet" href="/static/app.css?v=20260912-player-market">
-  <link rel="stylesheet" href="/static/workspace.css?v=2">
-  <link rel="stylesheet" href="/static/fantasy.css?v=3">
+  <link rel="stylesheet" href="/static/app.css?v=20260915-waiver-stats">
+  <link rel="stylesheet" href="/static/workspace.css?v=3">
+  <link rel="stylesheet" href="/static/fantasy.css?v=4">
   <link rel="stylesheet" href="/static/lions.css?v=1">
   <script src="/static/diagnostics.js" defer></script>
-  <script src="/static/app.js?v=20260912-player-market-2" defer></script>
+  <script src="/static/app.js?v=20260915-waiver-stats" defer></script>
   {% include '_theme_assets.html' %}
 </head>
 <body>
@@ -52,10 +52,10 @@
                 <label><span>Search</span><input id="player-filter" type="search" value="{{ query }}" placeholder="Player or team"></label>
                 <label><span>Position</span><select id="position-filter"><option value="all">All</option>{% for position in positions %}<option value="{{ position }}">{{ position }}</option>{% endfor %}</select></label>
                 <label><span>NFL team</span><select id="nfl-team-filter"><option value="all">All teams</option>{% for team in nfl_teams %}<option value="{{ team }}">{{ team }}</option>{% endfor %}</select></label>
-                <label><span>Availability</span><select id="status-filter"><option value="all">All players</option><option value="open">Free agents</option><option value="waiver">On waivers</option><option value="locked">Locked</option><option value="rostered">Other rosters</option><option value="mine">My roster</option></select></label>
+                <label><span>Availability</span><select id="status-filter"><option value="all">All players</option><option value="open">Free agents</option><option value="waiver">On waivers</option><option value="locked">Waiver claim only</option><option value="rostered">Other rosters</option><option value="mine">My roster</option></select></label>
                 <label><span>Fantasy team</span><select id="fantasy-team-filter"><option value="all">All fantasy teams</option>{% for team_id, team_name in fantasy_teams %}<option value="{{ team_id }}">{{ team_name }}</option>{% endfor %}</select></label>
                 <label><span>Projection</span><select id="projection-filter"><option value="all">All</option><option value="projected">Has projection</option><option value="missing">No projection</option></select></label>
-                <label><span>Sort</span><select id="player-sort"><option value="recommended">Recommended</option><option value="projection">Projected points</option><option value="edge">Roster edge</option><option value="name">Name A–Z</option><option value="nfl-team">NFL team</option><option value="fantasy-team">Fantasy team</option></select></label>
+                <label><span>Sort</span><select id="player-sort"><option value="recommended">Recommended</option><option value="projection">Projected points</option><option value="ytd">YTD points</option><option value="avg">Average points</option><option value="edge">Roster edge</option><option value="name">Name A–Z</option><option value="nfl-team">NFL team</option><option value="fantasy-team">Fantasy team</option></select></label>
                 <div class="filter-actions"><button type="button" class="quiet-button" id="clear-player-filters">Clear filters</button></div>
               </div>
             </details>
@@ -63,14 +63,16 @@
 
           <div class="waiver-table-wrap">
             <table class="waiver-table">
-              <thead><tr><th scope="col">Add</th><th scope="col">Player</th><th scope="col">Availability / team</th><th scope="col">Projection</th><th scope="col">Roster edge</th><th scope="col">Recommendation</th></tr></thead>
+              <thead><tr><th scope="col">Add</th><th scope="col">Player</th><th scope="col">Availability / team</th><th scope="col">Projection</th><th scope="col">YTD</th><th scope="col">Avg</th><th scope="col">Roster edge</th><th scope="col">Recommendation</th></tr></thead>
               <tbody>
               {% for item in recommendations %}
-                <tr class="waiver-row {% if item.availability.locked %}is-locked{% endif %} {% if item.is_rostered %}is-rostered{% endif %}" data-player-row data-search="{{ item.player.name|lower }} {{ item.player.team|lower }} {{ item.player.position|lower }} {{ item.fantasy_team_name|lower }}" data-position="{{ board_positions.get(item.player.id, item.player.position) }}" data-nfl-team="{{ item.player.team }}" data-status="{{ item.market_status }}" data-fantasy-team="{{ item.fantasy_team_id or 'none' }}" data-projected="{% if item.projection is not none %}projected{% else %}missing{% endif %}" data-projection="{{ item.projection if item.projection is not none else -9999 }}" data-edge="{{ item.roster_delta if item.roster_delta is not none else -9999 }}" data-name="{{ item.player.name|lower }}" data-original-order="{{ loop.index0 }}">
-                  <td class="select-cell">{% if not item.is_rostered %}<input type="radio" name="add_id" value="{{ item.player.id }}" aria-label="Add {{ item.player.name }}" data-player-name="{{ item.player.name }}" data-market-status="{{ item.market_status }}" {% if not item.is_claimable %}disabled{% endif %}>{% else %}<span class="not-addable" title="Rostered players cannot be added">—</span>{% endif %}</td>
+                <tr class="waiver-row {% if item.availability.locked %}is-waiver-only{% endif %} {% if item.is_rostered %}is-rostered{% endif %}" data-player-row data-search="{{ item.player.name|lower }} {{ item.player.team|lower }} {{ item.player.position|lower }} {{ item.fantasy_team_name|lower }}" data-position="{{ board_positions.get(item.player.id, item.player.position) }}" data-nfl-team="{{ item.player.team }}" data-status="{{ item.market_status }}" data-fantasy-team="{{ item.fantasy_team_id or 'none' }}" data-projected="{% if item.projection is not none %}projected{% else %}missing{% endif %}" data-projection="{{ item.projection if item.projection is not none else -9999 }}" data-ytd="{{ ytd_scores.get(item.player.id, -9999) }}" data-avg="{{ avg_scores.get(item.player.id, -9999) }}" data-edge="{{ item.roster_delta if item.roster_delta is not none else -9999 }}" data-name="{{ item.player.name|lower }}" data-original-order="{{ loop.index0 }}">
+                  <td class="select-cell">{% if not item.is_rostered %}<input type="radio" name="add_id" value="{{ item.player.id }}" aria-label="Add or claim {{ item.player.name }}" data-player-name="{{ item.player.name }}" data-market-status="{{ item.market_status }}" data-waiver-only="{{ 'true' if item.availability.locked else 'false' }}" {% if not item.is_claimable %}disabled{% endif %}>{% else %}<span class="not-addable" title="Rostered players cannot be added">—</span>{% endif %}</td>
                   <td>{% set player = item.player %}{% include '_player_identity.html' %}</td>
                   <td>{% if item.is_rostered %}<span class="availability-badge rostered">{{ item.fantasy_team_name }}</span><small class="ownership-note">{% if item.market_status == 'mine' %}Your roster{% else %}Rostered · trade only{% endif %}</small>{% else %}<span class="availability-badge {{ item.market_status }}">{% if item.availability.locked %}<span aria-hidden="true">⌁</span>{% endif %} {{ item.availability.label }}</span>{% endif %}</td>
                   <td class="number-cell">{% if item.projection is not none %}<strong>{{ '%.1f'|format(item.projection) }}</strong><small>League scoring{% if ml_projections.get(item.player.id) is not none %} · ML reference {{ '%.1f'|format(ml_projections.get(item.player.id)) }} (different scoring){% endif %}</small>{% else %}<span class="no-data">—</span>{% endif %}</td>
+                  <td class="number-cell season-cell">{% if ytd_scores.get(item.player.id) is not none %}<strong>{{ '%.1f'|format(ytd_scores[item.player.id]) }}</strong>{% else %}<span class="no-data">—</span>{% endif %}</td>
+                  <td class="number-cell season-cell">{% if avg_scores.get(item.player.id) is not none %}<strong>{{ '%.1f'|format(avg_scores[item.player.id]) }}</strong>{% else %}<span class="no-data">—</span>{% endif %}</td>
                   <td class="number-cell">{% if item.roster_delta is not none %}<strong class="{% if item.roster_delta >= 0.5 %}positive{% elif item.roster_delta < 0 %}negative{% endif %}">{% if item.roster_delta > 0 %}+{% endif %}{{ '%.1f'|format(item.roster_delta) }}</strong><small>{% if item.suggested_drop %}vs {{ item.suggested_drop.name }}{% endif %}</small>{% else %}<span class="no-data">—</span>{% endif %}</td>
                   <td><span class="recommendation {{ item.recommendation_tone }}">{{ item.recommendation }}</span><small class="recommendation-reason">{{ item.reason }}</small></td>
                 </tr>
@@ -84,7 +86,7 @@
 
         <a class="mobile-move-shortcut" id="jump-to-move" href="#move-builder" hidden>Build selected move <span aria-hidden="true">→</span></a>
         <section class="move-builder" id="move-builder" aria-labelledby="move-builder-heading">
-          <div class="builder-title"><p class="eyebrow" id="move-builder-heading">BUILD THE MOVE</p><strong id="selected-player">Choose an unlocked player above</strong></div>
+          <div class="builder-title"><p class="eyebrow" id="move-builder-heading">BUILD THE MOVE</p><strong id="selected-player">Choose a free agent or waiver target above</strong></div>
           <label>Drop from your roster<select name="drop_id" required><option value="">Choose the player to drop</option>{% for player in roster %}<option value="{{ player.id }}" {% if player.id in roster_locked %}disabled{% endif %}>{{ player.position }} · {{ player.name }} · {{ player.team }}{% if player.id in roster_locked %} · LOCKED{% endif %}</option>{% endfor %}</select><small>Started games stay locked and cannot be dropped.</small></label>
           <label>Transaction type<select name="mode" id="move-mode"><option value="fcfs">FCFS · add immediately</option><option value="waiver">Priority waiver claim</option><option value="blind-bid">Blind-bid waiver · FAAB</option></select><small>Choose the transaction period currently open in MFL.</small></label>
           <label class="conditional-field" data-mode-field="bid" hidden>FAAB bid<input name="bid" type="number" min="0" inputmode="numeric" placeholder="Bid amount"><small>MFL validates your balance and league minimum.</small></label>

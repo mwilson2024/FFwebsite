@@ -169,7 +169,9 @@
 
   const updateReviewState = () => {
     const picked = document.querySelector('input[name="add_id"]:checked');
-    if (selectedCopy) selectedCopy.textContent = picked?.dataset.playerName || "Choose an unlocked player above";
+    if (selectedCopy) selectedCopy.textContent = picked
+      ? `${picked.dataset.playerName}${picked.dataset.waiverOnly === "true" ? " · waiver claim only" : ""}`
+      : "Choose a free agent or waiver target above";
     if (reviewButton) reviewButton.disabled = !(picked && dropSelect?.value);
     if (moveShortcut) moveShortcut.hidden = !picked || moveBuilderVisible;
   };
@@ -203,6 +205,8 @@
     const text = (row, key) => row.dataset[key] || "";
     const sorted = rows.slice().sort((left, right) => {
       if (selected === "projection") return number(right, "projection") - number(left, "projection") || text(left, "name").localeCompare(text(right, "name"));
+      if (selected === "ytd") return number(right, "ytd") - number(left, "ytd") || number(right, "avg") - number(left, "avg");
+      if (selected === "avg") return number(right, "avg") - number(left, "avg") || number(right, "ytd") - number(left, "ytd");
       if (selected === "edge") return number(right, "edge") - number(left, "edge") || number(right, "projection") - number(left, "projection");
       if (selected === "name") return text(left, "name").localeCompare(text(right, "name"));
       if (selected === "nfl-team") return text(left, "nflTeam").localeCompare(text(right, "nflTeam")) || text(left, "name").localeCompare(text(right, "name"));
@@ -213,6 +217,11 @@
   };
 
   const updateModeFields = () => {
+    const picked = document.querySelector('input[name="add_id"]:checked');
+    const waiverOnly = picked?.dataset.waiverOnly === "true";
+    const immediateOption = modeSelect?.querySelector('option[value="fcfs"]');
+    if (immediateOption) immediateOption.disabled = waiverOnly;
+    if (waiverOnly && modeSelect?.value === "fcfs") modeSelect.value = "waiver";
     const mode = modeSelect?.value || "fcfs";
     document.querySelectorAll("[data-mode-field]").forEach((field) => {
       const kind = field.dataset.modeField;
@@ -237,7 +246,7 @@
     search?.focus();
   });
   document.querySelectorAll('input[name="add_id"]').forEach((radio) => radio.addEventListener("change", () => {
-    if (radio.checked && radio.dataset.marketStatus === "waiver" && modeSelect) modeSelect.value = "waiver";
+    if (radio.checked && ["waiver", "locked"].includes(radio.dataset.marketStatus) && modeSelect) modeSelect.value = "waiver";
     if (radio.checked && radio.dataset.marketStatus === "open" && modeSelect?.value === "waiver") modeSelect.value = "fcfs";
     updateModeFields();
     updateReviewState();
@@ -247,14 +256,14 @@
     const radio = row.querySelector('input[name="add_id"]:not(:disabled)');
     if (radio) {
       radio.checked = true;
-      if (radio.dataset.marketStatus === "waiver" && modeSelect) modeSelect.value = "waiver";
+      if (["waiver", "locked"].includes(radio.dataset.marketStatus) && modeSelect) modeSelect.value = "waiver";
       if (radio.dataset.marketStatus === "open" && modeSelect?.value === "waiver") modeSelect.value = "fcfs";
       updateModeFields();
       updateReviewState();
     }
   }));
   dropSelect?.addEventListener("change", updateReviewState);
-  modeSelect?.addEventListener("change", updateModeFields);
+  modeSelect?.addEventListener("change", () => { updateModeFields(); updateReviewState(); });
   applyFilters();
   applySort();
   updateModeFields();
