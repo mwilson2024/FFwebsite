@@ -1149,7 +1149,7 @@ class MFLClient:
         """Return MFL's current NFL week when the status feed is available."""
         try:
             response = self.session.get(
-                f"{self.config.base_url}/fflnetdynamic{self.config.year}/mfl_status.json",
+                f"https://api.myfantasyleague.com/fflnetdynamic{self.config.year}/mfl_status.json",
                 timeout=(10, 30),
             )
             payload = self._decode(response)

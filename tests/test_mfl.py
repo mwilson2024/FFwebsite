@@ -181,9 +181,12 @@ def test_global_feeds_use_api_host_without_league_or_login(feed):
 def test_default_week_is_current_scoring_week_not_next_lineup_week():
     class StatusSession:
         def get(self, url, **kwargs):
+            self.url = url
             return JsonResponse({"mfl_status": {"weeks": {"LineupWeek": "2", "UpcomingWeek": "2", "CurrentWeek": "1", "LiveScoringWeek": "1"}}})
-    client = MFLClient(_config(), session=StatusSession())
+    session = StatusSession()
+    client = MFLClient(_config(base_url="https://www49.myfantasyleague.com"), session=session)
     assert client.current_week() == 1
+    assert session.url == "https://api.myfantasyleague.com/fflnetdynamic2026/mfl_status.json"
 
 
 def test_player_card_uses_api_metadata_and_valid_photo_id():

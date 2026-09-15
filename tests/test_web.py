@@ -311,6 +311,62 @@ def test_lineup_page_shows_start_sit_recommendations(monkeypatch) -> None:
     assert "lineup-3" in response.text
 
 
+def test_incomplete_lineup_preview_url_redirects_safely() -> None:
+    web_app.sessions.clear()
+    client = TestClient(web_app.app)
+    assert client.get("/lineup/preview", follow_redirects=False).headers["location"] == "/"
+    web_app.sessions["preview-session"] = web_app.BrowserSession(
+        "cookie", 2026, [MFLLeague("11111", "0001", "League")], "csrf",
+    )
+    client.cookies.set("wp_session", "preview-session")
+    response = client.get("/lineup/preview", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/dashboard"
+
+
+def test_lineup_global_reads_are_shared_across_leagues(monkeypatch) -> None:
+    current = web_app.BrowserSession(
+        "cookie", 2026,
+        [MFLLeague("11111", "0001", "One"), MFLLeague("22222", "0002", "Two")],
+        "csrf",
+    )
+    reads = {"week": 0, "schedule": 0, "injuries": 0, "live": 0, "roster": 0, "status": 0}
+
+    class LineupClient:
+        def __init__(self, league_id, franchise_id):
+            self.config = MFLConfig(2026, league_id, franchise_id, user_cookie="cookie")
+            self.session = None
+            self.lineup_visible = True
+            self.lineup_scores = {}
+
+        def current_week(self): reads["week"] += 1; return 2
+        def roster_ids(self): reads["roster"] += 1; return {f"p-{self.config.league_id}"}
+        def named_players(self, ids): return [MFLPlayer(next(iter(ids)), "Player", "WR", "DET")]
+        def lineup_settings(self): return MFLLineupSettings(1, (MFLLineupRule("WR", 1, 1),))
+        def player_roster_statuses(self, ids, *, week): reads["status"] += 1; return {next(iter(ids)): "S"}
+        def nfl_team_kickoffs(self, *, week): reads["schedule"] += 1; return {"DET": 9999999999}
+        def live_scoring(self, *, week):
+            reads["live"] += 1
+            player_id = f"p-{self.config.league_id}"
+            return MFLLiveScoring(week, (MFLLiveMatchup((MFLLiveFranchise(
+                self.config.franchise_id, 0, True, 1, 0, 3600,
+                (MFLLivePlayer(player_id, 0, "starter", 3600),),
+            ),)),))
+        def projected_scores(self, **kwargs): return {}
+        def injuries(self, **kwargs): reads["injuries"] += 1; return {}
+
+    monkeypatch.setattr(
+        web_app, "projection_blend",
+        lambda players, **kwargs: ProjectionBlend({}, {}, {}, 0),
+    )
+    web_app._load_lineup(LineupClient("11111", "0001"), current=current)
+    web_app._load_lineup(LineupClient("22222", "0002"), current=current)
+    assert reads == {
+        "week": 1, "schedule": 1, "injuries": 1,
+        "live": 2, "roster": 0, "status": 0,
+    }
+
+
 def test_client_uses_the_league_specific_mfl_host() -> None:
     league = MFLLeague(
         "11111", "0001", "Home League",
@@ -337,6 +393,8 @@ def test_uncertain_lineup_write_is_verified_by_readback(monkeypatch) -> None:
     )
     current = web_app.BrowserSession("cookie", 2026, [league], "csrf")
     current.pending_lineups["pending"] = preview
+    live_cache_key = "2026:11111:report:live-scoring:1"
+    current.read_cache[live_cache_key] = (9999999999, "old lineup")
     web_app.sessions[session_id] = current
 
     class UncertainLineupClient:
@@ -367,6 +425,7 @@ def test_uncertain_lineup_write_is_verified_by_readback(monkeypatch) -> None:
     assert "starters were verified after submission" in response.text
     assert fake.status_reads == 2
     assert fake.submit_calls == 1
+    assert live_cache_key not in current.read_cache
 
 
 def test_lineup_submit_get_redirects_without_mutating_state() -> None:

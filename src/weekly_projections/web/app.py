@@ -603,7 +603,8 @@ def _cached_session_read(
                 return stale[1]
             remaining = max(1, math.ceil(cooldown_until - now))
             raise MFLRateLimitError(
-                f"MFL reads are paused for {remaining} seconds after a rate limit. Existing page data remains available.",
+                f"MFL reads are paused for {remaining} seconds after a rate limit. "
+                "Cached reports are reused where available.",
                 retry_after=remaining,
             )
         try:
@@ -903,51 +904,89 @@ def _load_lineup(
     requested_week: int | None = None,
     current: BrowserSession | None = None,
 ) -> tuple[int, LineupRecommendation, MFLLineupSettings, ProjectionBlend]:
-    def read(label, loader, *, ttl=60, stale_ttl=900):
+    def read(label, loader, *, ttl=60, stale_ttl=900, global_feed=False):
         if current is None:
             return loader()
         return _cached_session_read(
-            current, client.config.league_id, label, loader, ttl=ttl, stale_ttl=stale_ttl,
+            current,
+            "mfl-global" if global_feed else client.config.league_id,
+            label,
+            loader,
+            ttl=ttl,
+            stale_ttl=stale_ttl,
         )
 
     week = requested_week if requested_week is not None else read(
-        "week", client.current_week, ttl=300, stale_ttl=86400,
+        "week", client.current_week, ttl=300, stale_ttl=86400, global_feed=True,
     )
     if week is None:
         raise MFLApiError("MFL did not return the current lineup week")
     if not 1 <= week <= 18:
         raise MFLApiError("Choose a week from 1 through 18")
-    roster_ids = read(
-        f"roster:{client.config.franchise_id}", client.roster_ids, ttl=30, stale_ttl=300,
-    )
-    roster = client.named_players(roster_ids)
-    settings = read("lineup-settings", client.lineup_settings, ttl=300, stale_ttl=86400)
-    statuses = read(
-        f"roster-status:{client.config.franchise_id}:{week}",
-        lambda: client.player_roster_statuses(roster_ids, week=week), ttl=30, stale_ttl=300,
-    )
-    kickoffs = read(
-        f"nfl-schedule:{week}", lambda: client.nfl_team_kickoffs(week=week),
-        ttl=300, stale_ttl=3600,
-    )
-    locked_player_ids = _locked_player_ids(roster, kickoffs)
-    if any(statuses.get(player_id, "R") not in {"S","NS","IR","TS"} for player_id in locked_player_ids):
-        raise MFLApiError("MFL has not exposed the saved lineup for a locked player. Reconnect MFL and reload this week; no lineup changes were made.")
-    client.lineup_visible = any(value in {"S", "NS"} for value in statuses.values())
-    client.lineup_scores = {}
+    live = None
+    live_statuses: dict[str, str] = {}
     try:
         live = read(
             f"live-scoring:{week}", lambda: client.live_scoring(week=week),
             ttl=30, stale_ttl=300,
         )
-        client.lineup_scores = {
-            item.player_id: item.score for matchup in live.matchups
-            for franchise in matchup.franchises
-            if franchise.franchise_id == client.config.franchise_id
-            for item in franchise.players
-        }
-    except MFLApiError as error:
-        log_error("lineup_scores_unavailable", error)
+        for matchup in live.matchups:
+            own = next(
+                (
+                    franchise for franchise in matchup.franchises
+                    if franchise.franchise_id.lstrip("0")
+                    == client.config.franchise_id.lstrip("0")
+                ),
+                None,
+            )
+            if own is None:
+                continue
+            for item in own.players:
+                raw_status = item.status.strip().upper().replace("-", "")
+                status = {
+                    "STARTER": "S",
+                    "NONSTARTER": "NS",
+                    "INJUREDRESERVE": "IR",
+                    "TAXISQUAD": "TS",
+                }.get(raw_status, raw_status)
+                if status in {"S", "NS", "IR", "TS"}:
+                    live_statuses[item.player_id] = status
+            client.lineup_scores = {item.player_id: item.score for item in own.players}
+            break
+    except MFLApiError:
+        # The authoritative roster/status fallback below will surface one
+        # actionable error if the provider cooldown prevents it too.
+        pass
+
+    if live_statuses:
+        # MFL live scoring provides the complete weekly roster plus saved
+        # starter state in one league read. This materially reduces 429 risk.
+        roster_ids = set(live_statuses)
+        statuses = live_statuses
+    else:
+        roster_ids = read(
+            f"roster:{client.config.franchise_id}", client.roster_ids,
+            ttl=30, stale_ttl=300,
+        )
+        statuses = read(
+            f"roster-status:{client.config.franchise_id}:{week}",
+            lambda: client.player_roster_statuses(roster_ids, week=week),
+            ttl=30, stale_ttl=300,
+        )
+        client.lineup_scores = {}
+    roster = client.named_players(roster_ids)
+    settings = read(
+        "lineup-settings", client.lineup_settings,
+        ttl=7 * 86400, stale_ttl=30 * 86400,
+    )
+    kickoffs = read(
+        f"nfl-schedule:{week}", lambda: client.nfl_team_kickoffs(week=week),
+        ttl=300, stale_ttl=3600, global_feed=True,
+    )
+    locked_player_ids = _locked_player_ids(roster, kickoffs)
+    if any(statuses.get(player_id, "R") not in {"S","NS","IR","TS"} for player_id in locked_player_ids):
+        raise MFLApiError("MFL has not exposed the saved lineup for a locked player. Reconnect MFL and reload this week; no lineup changes were made.")
+    client.lineup_visible = any(value in {"S", "NS"} for value in statuses.values())
     try:
         all_projections = read(
             f"projections:{week}", lambda: client.projected_scores(week=week),
@@ -962,7 +1001,7 @@ def _load_lineup(
     try:
         injuries = read(
             f"injuries:{week}", lambda: client.injuries(week=week),
-            ttl=300, stale_ttl=3600,
+            ttl=300, stale_ttl=3600, global_feed=True,
         )
     except MFLApiError:
         injuries = {}
@@ -1638,7 +1677,13 @@ def lineup_page(request: Request, league: str, error: str = "", week: int | None
         )
         _remember_catalog(current, client)
     except MFLApiError as caught:
-        log_error("lineup_load_failed", caught)
+        _log_provider_error_once(
+            current,
+            selected.id,
+            "lineup_load_failed",
+            caught,
+            window=caught.retry_after if isinstance(caught, MFLRateLimitError) else 120,
+        )
         api_error = str(caught)
     if week is not None and 1 <= week <= 18:
         current.selected_week = week
@@ -1868,6 +1913,13 @@ def show_lineup_preview(request: Request, pending_id: str):
     )
 
 
+@app.get("/lineup/preview", include_in_schema=False)
+def revisit_lineup_preview(request: Request):
+    """Handle incomplete or stale lineup-preview links without a 405 error."""
+    current = _session(request)
+    return RedirectResponse("/dashboard" if current else "/", status_code=303)
+
+
 @app.post("/lineup/submit/{pending_id}", response_class=HTMLResponse)
 def submit_lineup(request: Request, pending_id: str, csrf_token: str = Form(...)):
     current = _require_session(request)
@@ -1927,6 +1979,14 @@ def submit_lineup(request: Request, pending_id: str, csrf_token: str = Form(...)
                 f"MFL saved your Week {preview.week} lineup. "
                 "The starters were verified after submission."
             )
+        current.read_cache.pop(
+            f"{current.year}:{league.id}:report:live-scoring:{preview.week}", None,
+        )
+        current.read_cache.pop(
+            f"{current.year}:{league.id}:report:roster-status:"
+            f"{league.franchise_id}:{preview.week}",
+            None,
+        )
         error = None
     except (MFLApiError, ValueError) as caught:
         log_error("lineup_submit_failed", caught)
