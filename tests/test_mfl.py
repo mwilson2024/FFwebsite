@@ -11,6 +11,7 @@ from weekly_projections.mfl.client import (
     MFLAvailability,
     MFLClient,
     MFLConfig,
+    MFLLeague,
     MFLPlayer,
     MFLRateLimitError,
     MFLWriteUncertainError,
@@ -71,6 +72,12 @@ class HtmlResponse:
         raise requests.exceptions.JSONDecodeError("not json", self.text, 0)
 
 
+class RedirectResponse:
+    text = ""
+    status_code = 302
+    headers = {"Location": "https://www42.myfantasyleague.com/2026/import"}
+
+
 def test_http_429_returns_actionable_message_without_retrying():
     response = requests.Response()
     response.status_code = 429
@@ -101,6 +108,36 @@ def test_import_html_response_is_unconfirmed_and_never_retried(monkeypatch):
     with pytest.raises(MFLWriteUncertainError, match="readable transaction receipt"):
         client.import_request("fcfsWaiver", ADD="100", DROP="200")
     assert len(calls) == 1
+    assert calls[0][1]["allow_redirects"] is False
+
+
+def test_import_redirect_requires_reconnect_and_is_never_followed(monkeypatch):
+    client = MFLClient(_config(user_cookie="cookie"))
+    calls = []
+
+    def post(*args, **kwargs):
+        calls.append((args, kwargs))
+        return RedirectResponse()
+
+    monkeypatch.setattr(client.session, "post", post)
+    with pytest.raises(MFLApiError, match="Sign out and reconnect"):
+        client.import_request("lineup", W=1, STARTERS="100")
+    assert len(calls) == 1
+    assert calls[0][1]["allow_redirects"] is False
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("https://www42.myfantasyleague.com/2026/home/12345", "https://www42.myfantasyleague.com"),
+        ("http://www7.myfantasyleague.com/2026/home/12345", "https://www7.myfantasyleague.com"),
+        ("https://www42.myfantasyleague.com.evil.example/2026", "https://api.myfantasyleague.com"),
+        ("https://user:secret@www42.myfantasyleague.com/2026", "https://api.myfantasyleague.com"),
+        ("", "https://api.myfantasyleague.com"),
+    ],
+)
+def test_league_api_base_url_only_accepts_mfl_hosts(url, expected):
+    assert MFLLeague("12345", "0001", "League", url).api_base_url == expected
 
 
 class LeagueSession(LoginSession):

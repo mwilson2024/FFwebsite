@@ -166,6 +166,25 @@ class MFLLeague:
     name: str
     url: str = ""
 
+    @property
+    def api_base_url(self) -> str:
+        """Return the validated MFL league host advertised by ``myleagues``."""
+        try:
+            parsed = urlsplit(self.url)
+            hostname = (parsed.hostname or "").lower()
+            port = parsed.port
+        except ValueError:
+            return "https://api.myfantasyleague.com"
+        if (
+            parsed.scheme in {"http", "https"}
+            and port is None
+            and parsed.username is None
+            and parsed.password is None
+            and re.fullmatch(r"www\d+\.myfantasyleague\.com", hostname)
+        ):
+            return f"https://{hostname}"
+        return "https://api.myfantasyleague.com"
+
 
 @dataclass(frozen=True)
 class MFLFranchise:
@@ -451,13 +470,19 @@ class MFLClient:
                 f"{self.year_url}/import",
                 data=data,
                 timeout=(10, 60),
-                allow_redirects=True,
+                allow_redirects=False,
             )
         except requests.RequestException as error:
             raise MFLWriteUncertainError(
                 "MFL transaction status is uncertain after a network error; "
                 "check MFL's Transactions report before trying again"
             ) from error
+        status_code = int(getattr(response, "status_code", 0) or 0)
+        if 300 <= status_code < 400:
+            raise MFLApiError(
+                "MFL moved this league to another server. Sign out and reconnect "
+                "your MFL account before submitting again."
+            )
         response_text = str(getattr(response, "text", "") or "").lstrip().casefold()
         if not response_text or response_text.startswith(("<html", "<!doctype html")):
             raise MFLWriteUncertainError(

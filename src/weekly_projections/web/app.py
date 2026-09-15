@@ -570,6 +570,7 @@ def _client(current: BrowserSession, league: MFLLeague) -> MFLClient:
             league_id=league.id,
             franchise_id=league.franchise_id,
             user_cookie=current.mfl_cookie,
+            base_url=league.api_base_url,
         )
     )
     client._players = current.player_catalog
@@ -1894,11 +1895,38 @@ def submit_lineup(request: Request, pending_id: str, csrf_token: str = Form(...)
             statuses=statuses,
             locked_ids=locked_ids,
         )
-        result = client.submit_lineup(
-            week=preview.week,
-            starter_ids=[player.id for player in preview.starters],
-        )
-        success = f"MFL accepted your Week {preview.week} lineup."
+        try:
+            result = client.submit_lineup(
+                week=preview.week,
+                starter_ids=[player.id for player in preview.starters],
+            )
+            success = f"MFL accepted your Week {preview.week} lineup."
+        except MFLWriteUncertainError as write_error:
+            # Never retry an ambiguous write. Confirm the authoritative saved
+            # starters with a separate read before reporting success.
+            try:
+                saved_statuses = client.player_roster_statuses(
+                    roster_ids, week=preview.week
+                )
+            except MFLApiError as verify_error:
+                log_error("lineup_submit_readback_failed", verify_error)
+                raise MFLWriteUncertainError(
+                    "MFL's response could not be confirmed. Do not submit again "
+                    "until you check the Week "
+                    f"{preview.week} lineup on MFL."
+                ) from write_error
+            saved_starters = {
+                player_id
+                for player_id, status in saved_statuses.items()
+                if status == "S"
+            }
+            if saved_starters != selected_ids:
+                raise write_error
+            result = {"status": "verified-by-lineup-readback"}
+            success = (
+                f"MFL saved your Week {preview.week} lineup. "
+                "The starters were verified after submission."
+            )
         error = None
     except (MFLApiError, ValueError) as caught:
         log_error("lineup_submit_failed", caught)
@@ -1921,6 +1949,17 @@ def submit_lineup(request: Request, pending_id: str, csrf_token: str = Form(...)
         },
         status_code=200 if success else 502,
     )
+
+
+@app.get("/lineup/submit/{pending_id}", include_in_schema=False)
+def revisit_lineup_submission(request: Request, pending_id: str):
+    """Turn refreshes or copied confirmation URLs back into safe GET pages."""
+    current = _session(request)
+    if not current:
+        return RedirectResponse("/", status_code=303)
+    if pending_id in current.pending_lineups:
+        return RedirectResponse(f"/lineup/preview/{pending_id}", status_code=303)
+    return RedirectResponse("/dashboard", status_code=303)
 @app.post("/preview")
 def preview_move(
     request: Request,

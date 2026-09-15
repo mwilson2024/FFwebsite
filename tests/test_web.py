@@ -19,6 +19,7 @@ from weekly_projections.mfl.client import (
     MFLLineupRule,
     MFLLineupSettings,
     MFLPlayer,
+    MFLWriteUncertainError,
 )
 from weekly_projections.recommendations import PlayerRecommendation
 from weekly_projections.projection_sources import ProjectionBlend
@@ -308,6 +309,85 @@ def test_lineup_page_shows_start_sit_recommendations(monkeypatch) -> None:
     assert 'data-player-card="p1"' in response.text
     assert 'id="use-recommended"' in response.text
     assert "lineup-3" in response.text
+
+
+def test_client_uses_the_league_specific_mfl_host() -> None:
+    league = MFLLeague(
+        "11111", "0001", "Home League",
+        "https://www42.myfantasyleague.com/2026/home/11111",
+    )
+    current = web_app.BrowserSession("cookie", 2026, [league], "csrf")
+    assert web_app._client(current, league).config.base_url == "https://www42.myfantasyleague.com"
+
+
+def test_uncertain_lineup_write_is_verified_by_readback(monkeypatch) -> None:
+    web_app.sessions.clear()
+    session_id = "lineup-submit-session"
+    league = MFLLeague("11111", "0001", "Home League")
+    starter = MFLPlayer("p1", "Starter", "WR", "DET")
+    bench = MFLPlayer("p2", "Bench", "WR", "GB")
+    preview = web_app.LineupPreview(
+        league_id=league.id,
+        franchise_id=league.franchise_id,
+        week=1,
+        current_starters=(bench,),
+        starters=(starter,),
+        current_projection=8.0,
+        projected_total=12.0,
+    )
+    current = web_app.BrowserSession("cookie", 2026, [league], "csrf")
+    current.pending_lineups["pending"] = preview
+    web_app.sessions[session_id] = current
+
+    class UncertainLineupClient:
+        def __init__(self):
+            self.status_reads = 0
+            self.submit_calls = 0
+
+        def roster_ids(self): return {"p1", "p2"}
+        def named_players(self, ids): return [player for player in (starter, bench) if player.id in ids]
+        def player_roster_statuses(self, ids, *, week):
+            self.status_reads += 1
+            return {"p1": "NS", "p2": "S"} if self.status_reads == 1 else {"p1": "S", "p2": "NS"}
+        def lineup_settings(self): return MFLLineupSettings(1, (MFLLineupRule("WR", 1, 1),))
+        def nfl_team_kickoffs(self, *, week): return {}
+        def submit_lineup(self, **kwargs):
+            self.submit_calls += 1
+            raise MFLWriteUncertainError("unreadable receipt")
+
+    fake = UncertainLineupClient()
+    monkeypatch.setattr(web_app, "_client", lambda current, selected: fake)
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", session_id)
+    response = client.post(
+        "/lineup/submit/pending",
+        data={"csrf_token": "csrf"},
+    )
+    assert response.status_code == 200
+    assert "starters were verified after submission" in response.text
+    assert fake.status_reads == 2
+    assert fake.submit_calls == 1
+
+
+def test_lineup_submit_get_redirects_without_mutating_state() -> None:
+    web_app.sessions.clear()
+    session_id = "lineup-submit-get-session"
+    league = MFLLeague("11111", "0001", "Home League")
+    player = MFLPlayer("p1", "Starter", "WR", "DET")
+    current = web_app.BrowserSession("cookie", 2026, [league], "csrf")
+    current.pending_lineups["pending"] = web_app.LineupPreview(
+        league.id, league.franchise_id, 1, (), (player,), 0, 10,
+    )
+    web_app.sessions[session_id] = current
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", session_id)
+    response = client.get("/lineup/submit/pending", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/lineup/preview/pending"
+    assert "pending" in current.pending_lineups
+    expired = client.get("/lineup/submit/expired", follow_redirects=False)
+    assert expired.status_code == 303
+    assert expired.headers["location"] == "/dashboard"
 
 
 def test_league_hq_renders_intelligence_and_tracks_session_side_bets(monkeypatch) -> None:
