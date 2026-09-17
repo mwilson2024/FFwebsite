@@ -1,0 +1,55 @@
+<details class="defense-streaming" open>
+  <summary>Defense streaming <span>Week {{ week or '—' }} · Talent + matchup</span></summary>
+  <div class="defense-stream-content">
+    <p class="defense-source"><a href="{{ talent_source_url }}" target="_blank" rel="noopener noreferrer">ESPN / Mike Clay unit grades</a> · {{ talent_source_date }} talent snapshot. Not live offensive performance or injury-adjusted ratings.</p>
+    <p class="defense-method">Fit scores weigh defense talent and opposing offense weakness equally. Where available, MFL DEF points-allowed matchup ranks contribute 10% (45/45/10). Fit is not fantasy points or a win probability. Talent ranks: #1 strongest, #32 weakest.</p>
+    {% if defense_pricing.bids %}
+      <section class="defense-price-history" aria-label="Defense waiver pricing">
+        <h2 class="defense-section-title">Waiver pricing · {% if defense_pricing.balance is not none %}{{ defense_pricing.balance }} FAAB remaining{% else %}Balance unavailable{% endif %}</h2>
+        <p class="defense-method">Recent successful defense bids · last 21 days, up to 200 league transactions. Estimates do not reserve funds for other pending claims. MFL validates your actual balance and minimum bid.</p>
+        {% if defense_pricing_error %}<p role="status" class="defense-method">{{ defense_pricing_error }}{% include '_error_reference.html' %}</p>{% endif %}
+        {% if defense_pricing.history %}
+          <ul>{% for award in defense_pricing.history %}<li>{{ award.name }} <strong>{{ award.bid }} FAAB</strong></li>{% endfor %}</ul>
+          <p class="defense-method">{{ defense_pricing.sample_count }} defense awards · Median {{ defense_pricing.median }} FAAB</p>
+        {% else %}<p class="defense-method">No verified recent defense prices loaded. Any estimate below is a budget heuristic, not league market history.</p>{% endif %}
+      </section>
+    {% endif %}
+    {% for title, streams in [('Your defense', owned_defenses), ('Available streaming targets', defense_targets)] %}
+      <h2 class="defense-section-title">{{ title }}</h2>
+      <div class="defense-stream-grid">
+        {% for stream in streams %}
+          <article class="defense-stream-card">
+            <div class="defense-stream-heading">
+              <div><h3>{{ stream.item.player.name }}</h3><p>{{ stream.item.player.team }} · {% if stream.opponent %}vs {{ stream.opponent }}{% else %}Opponent unavailable{% endif %}</p></div>
+              <div class="defense-fit"><strong>{{ stream.score if stream.score is not none else '—' }}</strong><small>fit / 100</small></div>
+            </div>
+            <p class="defense-fit-label">{{ stream.label }}</p>
+            <dl class="defense-ranks">
+              <div><dt>Defense talent</dt><dd>{% if stream.talent_rank is not none %}#{{ stream.talent_rank }}{% else %}—{% endif %}</dd></div>
+              <div><dt>Opponent offense</dt><dd>{% if stream.offense_rank is not none %}#{{ stream.offense_rank }}{% else %}—{% endif %}</dd></div>
+              <div><dt>MFL projection</dt><dd>{% if stream.item.projection is not none %}{{ '%.1f'|format(stream.item.projection) }} pts{% else %}Unavailable{% endif %}</dd></div>
+            </dl>
+            <p class="defense-explanation">{{ stream.explanation }}</p>
+            {% if stream.item.is_rostered %}
+              <p class="defense-availability">Your roster · MFL league scoring</p>
+            {% else %}
+              <p class="defense-availability">{% if stream.item.availability.locked %}Waiver claim only · Immediate add locked{% elif stream.item.market_status == 'waiver' %}On waivers{% else %}Free agent{% endif %} · MFL league scoring</p>
+              <button type="button" class="quiet-button" data-stream-pick="{{ stream.item.player.id }}" aria-label="Select {{ stream.item.player.name }} for add/drop review">{% if stream.item.availability.locked or stream.item.market_status == 'waiver' %}Select waiver target{% else %}Select defense{% endif %}</button>
+              {% set bid = defense_pricing.bids.get(stream.item.player.id) %}
+              {% if bid %}
+                <div class="defense-bid">
+                  <p>{% if bid.suggested is not none %}<strong>Suggested bid: {{ bid.suggested }} FAAB</strong> · Range {{ bid.low }}–{{ bid.high }}{% else %}<strong>Bid estimate unavailable</strong>{% endif %}</p>
+                  <p class="defense-method">{{ bid.explanation }}</p>
+                  {% if bid.suggested is not none %}<button type="button" class="quiet-button" data-stream-pick="{{ stream.item.player.id }}" data-stream-bid="{{ bid.suggested }}" aria-label="Draft a {{ bid.suggested }} FAAB bid for {{ stream.item.player.name }}">Use suggested blind bid</button>{% endif %}
+                </div>
+              {% endif %}
+            {% endif %}
+          </article>
+        {% else %}
+          <p class="defense-empty">{% if title == 'Your defense' %}No team defense found on your loaded roster.{% else %}No claimable defenses in the loaded market. Check availability or refresh manually when provider data is available.{% endif %}</p>
+        {% endfor %}
+      </div>
+    {% endfor %}
+    <p class="defense-method">Up to six targets shown, highest fit first. Schedule, ownership and locks are rechecked before a move is submitted. Talent cards reuse loaded data; waiver prices share the League HQ activity cache.</p>
+  </div>
+</details>

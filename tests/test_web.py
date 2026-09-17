@@ -7,6 +7,7 @@ from weekly_projections.lineup import LineupPlayerRecommendation, LineupRecommen
 from weekly_projections.mfl.client import (
     AddDropPreview,
     MFLAvailability,
+    MFLApiError,
     MFLConfig,
     MFLFranchise,
     MFLLeague,
@@ -170,6 +171,67 @@ def test_move_page_shows_full_board_projections_and_locks(monkeypatch) -> None:
     assert 'id="clear-player-filters"' in response.text
     assert "Blind-bid waiver · FAAB" in response.text
     assert 'name="replace_existing"' in response.text
+
+
+@pytest.mark.parametrize("pricing_unavailable", [False, True])
+def test_defense_streaming_cards_use_loaded_data_and_existing_move_builder(monkeypatch, pricing_unavailable) -> None:
+    from types import SimpleNamespace
+    from tests.test_defense_streaming import defense, game
+
+    session_id = "defense-stream-session"
+    web_app.sessions[session_id] = web_app.BrowserSession(
+        mfl_cookie="synthetic", year=2026,
+        leagues=[MFLLeague("11111", "0001", "Home League")], csrf_token="csrf",
+    )
+    board = [defense("HST"), defense("DET", owned=True), defense("SEA", locked=True)]
+    fake = SimpleNamespace(week_games={"HOU": game("MIA", kickoff=4_000_000_000),
+                                     "DET": game("BUF", kickoff=4_000_000_000),
+                                     "SEA": game("ARI", kickoff=4_000_000_000)},
+                           opponent_strength={})
+    reads = {"details": 0, "activity": 0}
+
+    def details():
+        reads["details"] += 1
+        return MFLLeagueDetails((), {"0001": MFLFranchise("0001", "My Team", faab_balance=43)})
+
+    def transactions(**kwargs):
+        assert kwargs == {"days": 21, "count": 200}
+        reads["activity"] += 1
+        if pricing_unavailable:
+            raise MFLApiError("Synthetic unavailable activity")
+        return (MFLTransaction("def-award", "BBID_WAIVER", int(web_app.time.time()) - 100,
+                               ("0002",), ("HST",), (), bid=3),)
+
+    fake.league_details = details
+    fake.transactions = transactions
+    web_app.sessions[session_id].player_catalog = {item.player.id: item.player for item in board}
+    monkeypatch.setattr(web_app, "_client", lambda *args: fake)
+    monkeypatch.setattr(web_app, "_remember_catalog", lambda *args: None)
+    monkeypatch.setattr(web_app, "_load_player_board", lambda *args: (
+        2, [board[1].player], board, ProjectionBlend(scores={}, mfl_scores={}, ml_scores={}, ml_matched=0), set()))
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", session_id)
+    response = client.get("/moves?league=11111")
+    assert response.status_code == 200
+    panel = response.text.split('<details class="defense-streaming"', 1)[1].split('<form method="post"', 1)[0]
+    assert "Your defense" in panel and "Available streaming targets" in panel
+    assert 'data-stream-pick="HST"' in panel
+    assert 'data-stream-pick="DET"' not in panel
+    assert 'data-stream-pick="SEA"' in panel and "Select waiver target" in panel
+    assert "98.4" in panel and "8.0 pts" in panel
+    assert "2026-09-09" in panel and "Not live offensive performance" in panel
+    assert "43 FAAB remaining" in panel and "Suggested bid:" in panel
+    assert 'data-stream-bid=' in panel
+    if pricing_unavailable:
+        assert "budget-only heuristic" in panel
+        assert "No verified recent defense prices" in panel
+    else:
+        assert "3 FAAB" in panel
+        assert client.get("/moves?league=11111").status_code == 200
+        assert reads == {"details": 1, "activity": 1}
+        assert f"2026:11111:report:activity" in web_app.sessions[session_id].read_cache
+    assert "20260917-defense-stream" in response.text
+    assert "themes.css" in response.text and "viewport-fit=cover" in response.text
 
 
 def test_player_market_keeps_team_defense_and_removes_idp() -> None:

@@ -274,6 +274,20 @@
   if (filterPanel && window.matchMedia("(max-width: 760px)").matches && !search?.value) filterPanel.open = false;
 
   const moveBuilder = document.querySelector("#move-builder");
+  document.querySelectorAll("[data-stream-pick]").forEach((button) => button.addEventListener("click", () => {
+    const radio = [...document.querySelectorAll('input[name="add_id"]')].find((input) => input.value === button.dataset.streamPick);
+    if (!radio || radio.disabled) return;
+    radio.click(); // Preserve normal availability/move-mode validation and review.
+    if (button.dataset.streamBid !== undefined && modeSelect) {
+      modeSelect.value = "blind-bid";
+      const bidInput = document.querySelector('#waiver-form input[name="bid"]');
+      if (bidInput) bidInput.value = button.dataset.streamBid;
+      updateModeFields();
+      updateReviewState();
+    }
+    moveBuilder?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+    dropSelect?.focus({ preventScroll: true });
+  }));
   if (moveBuilder && moveShortcut && "IntersectionObserver" in window) {
     new IntersectionObserver(([entry]) => {
       moveBuilderVisible = entry.isIntersecting;

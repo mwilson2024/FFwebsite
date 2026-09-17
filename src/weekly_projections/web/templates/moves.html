@@ -6,12 +6,12 @@
   
   <meta name="csrf-token" content="{{ session.csrf_token }}">
   <title>{{ league.name }} · Player Market</title>
-  <link rel="stylesheet" href="/static/app.css?v=20260915-espn-ranks">
+  <link rel="stylesheet" href="/static/app.css?v=20260917-defense-stream">
   <link rel="stylesheet" href="/static/workspace.css?v=3">
   <link rel="stylesheet" href="/static/fantasy.css?v=4">
   <link rel="stylesheet" href="/static/lions.css?v=1">
   <script src="/static/diagnostics.js" defer></script>
-  <script src="/static/app.js?v=20260915-espn-ranks" defer></script>
+  <script src="/static/app.js?v=20260917-defense-stream" defer></script>
   {% include '_theme_assets.html' %}
 </head>
 <body>
@@ -36,6 +36,8 @@
         <span><small>ESPN weekly ranks</small><strong>{% if espn_source %}{{ espn_matched }} players{% else %}Temporarily unavailable{% endif %}</strong></span>
         <p>ESPN is the primary weekly ranking view. MFL remains authoritative for league scoring, locks, ownership, and moves.</p>
       </section>
+
+      {% include '_defense_streaming.html' %}
 
       <form method="post" action="/preview" id="waiver-form">
         <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">

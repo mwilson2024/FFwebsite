@@ -46,6 +46,7 @@ from weekly_projections.lineup import (
 from weekly_projections.projection_sources import ProjectionBlend, projection_blend
 from weekly_projections.live_stats import weekly_boxscore, scoring_components
 from weekly_projections.recommendations import PlayerRecommendation, build_player_board
+from weekly_projections.defense_streaming import rank_defense_streams, defense_waiver_pricing, TALENT_SOURCE_URL, TALENT_SOURCE_DATE
 from weekly_projections.trade_engine import suggest_trades, analyze_target_trade
 from weekly_projections.league_intelligence import (
     build_projected_playoff_rounds,
@@ -719,6 +720,7 @@ def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
         "activity",
         lambda: _cached_session_read(
             current, selected.id, "activity", lambda: client.transactions(days=21, count=200),
+            ttl=90,
         ),
         (),
     )
@@ -1884,6 +1886,33 @@ def moves(request: Request, league: str, q: str = "", error: str = ""):
         key=lambda value: (value not in {"QB", "RB", "WR", "TE", "PK", "DEF"}, value),
     )
     nfl_teams = sorted({item.player.team for item in recommendations if item.player.team})
+    defense_streams = rank_defense_streams(
+        recommendations,
+        year=current.year,
+        games=getattr(client, "week_games", {}) if week is not None else {},
+        opponent_strength=getattr(client, "opponent_strength", {}),
+        now=time.time(),
+    )
+    waiver_defenses = [row for row in defense_streams if not row.item.is_rostered
+                       and row.item.market_status in {"waiver", "locked"}]
+    balance = None
+    activity = ()
+    pricing_error = None
+    if waiver_defenses:
+        try:
+            details = _cached_session_read(current, selected.id, "details", client.league_details, ttl=300)
+            franchise = details.franchises.get(selected.franchise_id.zfill(4))
+            balance = franchise.faab_balance if franchise else None
+            activity = _cached_session_read(
+                current, selected.id, "activity", lambda: client.transactions(days=21, count=200), ttl=90,
+            )
+        except MFLApiError as caught:
+            _log_provider_error_once(current, selected.id, "defense_pricing_unavailable", caught)
+            pricing_error = "Recent pricing or budget data is unavailable. Suggestions may use a budget-only heuristic."
+    defense_pricing = defense_waiver_pricing(
+        waiver_defenses, balance=balance, transactions=activity,
+        catalog=current.player_catalog or {}, now=time.time(),
+    )
     fantasy_teams = sorted(
         {
             (item.fantasy_team_id, item.fantasy_team_name)
@@ -1902,6 +1931,12 @@ def moves(request: Request, league: str, q: str = "", error: str = ""):
             "recommendations": recommendations,
             "positions": positions,
             "board_positions": {item.player.id: _board_position(item.player) for item in recommendations},
+            "defense_targets": [row for row in defense_streams if not row.item.is_rostered][:6],
+            "owned_defenses": [row for row in defense_streams if row.item.market_status == "mine"],
+            "talent_source_url": TALENT_SOURCE_URL,
+            "talent_source_date": TALENT_SOURCE_DATE,
+            "defense_pricing": defense_pricing,
+            "defense_pricing_error": pricing_error,
             "nfl_teams": nfl_teams,
             "fantasy_teams": fantasy_teams,
             "week": week,

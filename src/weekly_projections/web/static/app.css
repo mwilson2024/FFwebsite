@@ -393,4 +393,30 @@ small { font-size: .8125rem; }
   .review-actions { align-items: stretch; flex-direction: column; }
   .review-actions form,.review-actions button { width: 100%; }
 }
+.defense-streaming { margin: 1.25rem 0; border: 1px solid var(--site-line); border-radius: 16px; background: var(--site-panel); color: var(--site-text); }
+.defense-streaming > summary { padding: 1rem; cursor: pointer; font-weight: 750; color: var(--site-accent); }
+.defense-streaming > summary span { margin-left: .6rem; font-size: .85rem; font-weight: 400; color: var(--site-muted); }
+.defense-stream-content { padding: 0 1rem 1rem; }
+.defense-source,.defense-method,.defense-explanation,.defense-availability,.defense-empty { font-size: .85rem; line-height: 1.5; color: var(--site-muted); }
+.defense-source a { color: var(--site-link); }
+.defense-section-title { font-size: 1rem; margin: 1.25rem 0 .75rem; }
+.defense-stream-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: .75rem; }
+.defense-stream-card { padding: 1rem; border: 1px solid var(--site-line); border-radius: 12px; background: var(--site-raised); min-width: 0; }
+.defense-stream-heading { display: flex; justify-content: space-between; align-items: start; gap: .75rem; }
+.defense-stream-heading h3 { margin: 0; font-size: 1rem; }
+.defense-stream-heading p { font-size: .85rem; color: var(--site-muted); margin: .35rem 0; }
+.defense-fit { display: grid; text-align: right; flex-shrink: 0; }
+.defense-fit strong { font-size: 1.6rem; color: var(--site-accent); }
+.defense-fit small { color: var(--site-muted); }
+.defense-fit-label { font-size: .85rem; font-weight: 700; color: var(--site-accent); }
+.defense-ranks { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .6rem; margin: 1rem 0; }
+.defense-ranks dt { font-size: .75rem; color: var(--site-muted); }
+.defense-ranks dd { font-size: .9rem; margin: .4rem 0 0; font-weight: 700; }
+.defense-stream-card button { min-height: 44px; width: 100%; }
+.defense-price-history { background: var(--site-raised); border: 1px solid var(--site-line); padding: 0 1rem .75rem; border-radius: 12px; }
+.defense-price-history ul { padding-left: 1.25rem; font-size: .85rem; line-height: 1.8; }
+.defense-price-history strong { color: var(--site-accent); margin-left: .5rem; }
+.defense-bid { border-top: 1px solid var(--site-line); margin-top: 1rem; padding-top: .75rem; font-size: .85rem; }
+.defense-streaming summary:focus-visible { outline: 2px solid var(--site-accent); outline-offset: 3px; }
+@media (max-width: 480px) { .defense-streaming > summary span { display: block; margin: .4rem 0 0; } }
 @media (prefers-reduced-motion: reduce) { *,*::before,*::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }

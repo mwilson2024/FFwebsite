@@ -74,6 +74,26 @@ or management; MFL remains the application's only league provider. The player
 market defaults to ESPN's weekly consensus order, with MFL league projections,
 season performance, matchup strength, and recommendation order still available.
 
+The Players page also includes a free **Defense streaming** panel comparing your
+defense with up to six claimable targets. An explainable 0–100 fit score uses
+ESPN Mike Clay's [2026 unit talent grades](https://g.espncdn.com/s/ffldraftkit/26/NFLDK2026_CS_ClayProjections2026.pdf)
+(September 9, page 63): 50% defensive talent and 50% opposing offense weakness.
+When existing MFL DEF points-allowed matchup ranks are present, weights become
+45/45/10. These are dated analyst talent ranks, not live offensive results,
+injury-adjusted ratings, fantasy points, or probabilities. MFL projected points
+remain separate and league-scored. Talent cards require no paid key or extra
+runtime provider calls. Waiver targets also show advisory whole-unit FAAB bids
+using the owner's MFL balance and the median single-defense BBID awards in the
+last 21 days (bounded to 200 transactions, sharing League HQ's 90-second cache).
+Fit adjusts the median and a conservative 10%-of-remaining-budget ceiling applies.
+Without history, an explicitly labeled 2%-of-remaining-budget heuristic is used;
+missing balances produce no bid. Recent defense prices are shown alongside the
+estimate. Suggestions are not winning-bid predictions or pending-claim reservations.
+The opt-in button only fills the blind-bid draft; normal review remains required.
+Missing ranks/schedules and games already started receive no fit
+score; the 2026 snapshot is never reused for another season. Selecting a target
+uses the normal add/drop builder and still requires review and confirmation.
+
 Generate the secret once with:
 
 ```powershell
