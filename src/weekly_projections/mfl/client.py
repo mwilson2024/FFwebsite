@@ -237,6 +237,35 @@ class MFLTransaction:
     bid: int | None = None
 
 
+@dataclass(frozen=True)
+class MFLMessageThread:
+    id: str
+    subject: str
+    franchise_id: str = ""
+    author: str = ""
+    timestamp: int | None = None
+    replies: int | None = None
+
+
+@dataclass(frozen=True)
+class MFLMessagePost:
+    id: str
+    thread_id: str
+    body: str
+    franchise_id: str = ""
+    author: str = ""
+    timestamp: int | None = None
+
+
+@dataclass(frozen=True)
+class MFLChatMessage:
+    id: str
+    body: str
+    franchise_id: str = ""
+    timestamp: int | None = None
+    to_franchise_id: str = ""
+
+
 def _compact_roster_move(
     raw_parts: list[str], kind: str,
 ) -> tuple[tuple[str, ...], tuple[str, ...], int | None] | None:
@@ -783,6 +812,148 @@ class MFLClient:
                 bid=bid,
             ))
         return tuple(sorted(result, key=lambda item: item.timestamp or 0, reverse=True))
+
+    @staticmethod
+    def _message_value(item: dict[str, Any], *names: str) -> str:
+        normalized = {str(key).replace("_", "").casefold(): value for key, value in item.items()}
+        for name in names:
+            value = normalized.get(name.replace("_", "").casefold())
+            if isinstance(value, dict):
+                value = value.get("$t", "")
+            if value not in (None, ""):
+                return str(value).strip()
+        return ""
+
+    @staticmethod
+    def _message_time(value: str) -> int | None:
+        try:
+            return int(value) if value else None
+        except (TypeError, ValueError):
+            return None
+
+    def message_board(self, *, count: int = 12) -> tuple[MFLMessageThread, ...]:
+        count = min(25, max(1, int(count)))
+        payload = self.export("messageBoard", COUNT=count)
+        rows = []
+        for item in _iter_key(payload, "thread"):
+            if not isinstance(item, dict):
+                continue
+            thread_id = self._message_value(item, "id", "thread", "thread_id")
+            subject = self._message_value(item, "subject", "title")
+            if not thread_id or not subject:
+                continue
+            replies = self._message_value(item, "replies", "reply_count", "count", "posts")
+            rows.append(MFLMessageThread(
+                thread_id, subject,
+                self._message_value(item, "franchise_id", "franchise", "fid").zfill(4),
+                self._message_value(item, "author", "name", "poster"),
+                self._message_time(self._message_value(item, "timestamp", "last_post_time", "time")),
+                int(replies) if replies.isdecimal() else None,
+            ))
+        return tuple(rows[:count])
+
+    def message_board_thread(self, thread_id: str) -> tuple[MFLMessagePost, ...]:
+        thread_id = str(thread_id).strip()
+        if not thread_id or len(thread_id) > 80 or not all(char.isalnum() or char in "-_" for char in thread_id):
+            raise ValueError("Choose a valid message-board thread")
+        payload = self.export("messageBoardThread", THREAD=thread_id)
+        rows = []
+        candidates = [*_iter_key(payload, "post"), *_iter_key(payload, "message")]
+        seen = set()
+        for index, item in enumerate(candidates):
+            if not isinstance(item, dict):
+                continue
+            body = self._message_value(item, "body", "message", "text", "$t")
+            post_id = self._message_value(item, "id", "post_id") or f"{thread_id}-{index}"
+            if body and post_id not in seen:
+                seen.add(post_id)
+                rows.append(MFLMessagePost(
+                    post_id,
+                    thread_id, body,
+                    self._message_value(item, "franchise_id", "franchise", "fid").zfill(4),
+                    self._message_value(item, "author", "name", "poster"),
+                    self._message_time(self._message_value(item, "timestamp", "time", "posted")),
+                ))
+        return tuple(rows)
+
+    def league_chat(self, *, count: int = 30) -> tuple[MFLChatMessage, ...]:
+        self.login()
+        url = f"{self.config.base_url}/fflnetdynamic{self.config.year}/{self.config.league_id}_chat.xml"
+        try:
+            response = self.session.get(url, timeout=(10, 30))
+            if response.status_code == 404:
+                return ()
+            if response.status_code == 429:
+                retry_after = str(response.headers.get("Retry-After") or "").strip()
+                raise MFLRateLimitError(
+                    "MFL's chat request limit was reached (HTTP 429).",
+                    retry_after=int(retry_after) if retry_after.isdecimal() else 120,
+                )
+            response.raise_for_status()
+        except requests.RequestException as error:
+            raise MFLApiError(f"Could not load MFL league chat: {error}") from error
+        if len(response.text) > 1_000_000:
+            raise MFLApiError("MFL league chat response was unexpectedly large")
+        try:
+            root = ET.fromstring(response.text)
+        except ET.ParseError as error:
+            raise MFLApiError("MFL league chat returned unreadable XML") from error
+        rows, seen = [], set()
+        for index, node in enumerate(root.iter()):
+            if node is root:
+                continue
+            values = {str(key).replace("_", "").casefold(): str(value) for key, value in node.attrib.items()}
+            for child in node:
+                if child.text:
+                    values[child.tag.replace("_", "").casefold()] = child.text.strip()
+            body = next((values.get(key, "") for key in ("message", "body", "text", "msg") if values.get(key)), "")
+            if not body and not list(node) and (node.text or "").strip() and node.tag.casefold() in {"message", "chatmessage", "entry"}:
+                body = (node.text or "").strip()
+            if not body:
+                continue
+            item_id = next((values.get(key, "") for key in ("id", "messageid", "timestamp") if values.get(key)), f"chat-{index}")
+            if item_id in seen:
+                continue
+            seen.add(item_id)
+            rows.append(MFLChatMessage(
+                item_id, body,
+                next((values.get(key, "") for key in ("franchiseid", "franchise", "fid") if values.get(key)), "").zfill(4),
+                self._message_time(next((values.get(key, "") for key in ("timestamp", "time", "posted") if values.get(key)), "")),
+                next((values.get(key, "") for key in ("tofid", "tofranchiseid") if values.get(key)), "").zfill(4),
+            ))
+        rows.sort(key=lambda item: item.timestamp or 0, reverse=True)
+        return tuple(rows[:min(50, max(1, int(count)))])
+
+    def post_message_board(self, *, subject: str, body: str, thread_id: str = "") -> Any:
+        return self.import_request("messageBoard", SUBJECT=subject or None, BODY=body, THREAD=thread_id or None)
+
+    def post_chat(self, *, body: str, to_franchise_id: str = "") -> None:
+        """Post once to MFL chat. POST is deliberately never retried."""
+        self.login()
+        try:
+            response = self.session.post(
+                f"{self.year_url}/chat_save",
+                data={"L": self.config.league_id, "MESSAGE": body,
+                      **({"TO_FID": to_franchise_id} if to_franchise_id else {})},
+                timeout=(10, 30), allow_redirects=False,
+            )
+        except requests.RequestException as error:
+            raise MFLWriteUncertainError(
+                "MFL chat status is uncertain after a network error; check league chat before trying again"
+            ) from error
+        if response.status_code >= 400:
+            if response.status_code == 429:
+                retry_after = str(response.headers.get("Retry-After") or "").strip()
+                raise MFLRateLimitError(
+                    "MFL rejected the chat message because its request limit was reached (HTTP 429).",
+                    retry_after=int(retry_after) if retry_after.isdecimal() else 120,
+                )
+            raise MFLApiError(f"MFL rejected the chat message (HTTP {response.status_code})")
+        if 300 <= response.status_code < 400 and "login" in str(response.headers.get("Location") or "").casefold():
+            raise MFLApiError("MFL login expired. Sign out and reconnect before posting again.")
+        response_text = str(getattr(response, "text", "") or "").casefold()
+        if "password" in response_text and "login" in response_text:
+            raise MFLApiError("MFL login expired. Sign out and reconnect before posting again.")
 
     @staticmethod
     def _mfl_image_url(value: Any) -> str:

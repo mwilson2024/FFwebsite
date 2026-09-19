@@ -17,7 +17,7 @@ from urllib.parse import urlencode, urlsplit
 import uvicorn
 import requests
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
@@ -43,7 +43,20 @@ from weekly_projections.lineup import (
     lineup_is_legal,
     recommend_lineup,
 )
-from weekly_projections.projection_sources import ProjectionBlend, projection_blend
+from weekly_projections.projection_sources import (
+    ProjectionBlend,
+    ProjectionSourceError,
+    espn_weekly_ranks,
+    projection_blend,
+    stathead_weekly_scores,
+)
+from weekly_projections.insights import (
+    ProjectionAccuracyReport,
+    canonical_team,
+    depth_chart_roles,
+    evaluate_projection_accuracy,
+    weather_for_roster,
+)
 from weekly_projections.live_stats import weekly_boxscore, scoring_components
 from weekly_projections.recommendations import PlayerRecommendation, build_player_board
 from weekly_projections.defense_streaming import rank_defense_streams, defense_waiver_pricing, TALENT_SOURCE_URL, TALENT_SOURCE_DATE
@@ -283,6 +296,20 @@ class SideBet:
 
 
 @dataclass
+class SocialPostDraft:
+    league_id: str
+    franchise_id: str
+    kind: str
+    subject: str
+    body: str
+    thread_id: str = ""
+    to_franchise_id: str = ""
+    created_at: float = field(default_factory=time.monotonic)
+    status: str = "draft"
+    message: str = ""
+
+
+@dataclass
 class BrowserSession:
     mfl_cookie: str
     year: int
@@ -300,6 +327,8 @@ class BrowserSession:
     provider_cooldowns: dict[str, float] = field(default_factory=dict)
     provider_error_logs: dict[str, float] = field(default_factory=dict)
     side_bets: dict[str, list[SideBet]] = field(default_factory=dict)
+    social_posts: dict[str, SocialPostDraft] = field(default_factory=dict)
+    depth_snapshots: dict[str, dict[str, int]] = field(default_factory=dict)
     remember_token: str = ""
     owner_fingerprint: str = ""
     created_at: float = field(default_factory=time.monotonic)
@@ -312,6 +341,7 @@ login_attempts: dict[str, list[float]] = {}
 login_attempts_lock = Lock()
 login_slots = BoundedSemaphore(4)
 trade_send_lock = Lock()
+social_send_lock = Lock()
 initialize_log()
 app = FastAPI(title="Weekly Projections · MFL Moves", docs_url=None, redoc_url=None)
 
@@ -375,7 +405,7 @@ async def secure_local_responses(request: Request, call_next):
         response.delete_cookie("wp_remember", path="/", httponly=True, samesite="strict", secure=_secure_cookies(request))
     league_id = request.query_params.get("league")
     if (current and request.method == "GET" and response.status_code == 200
-            and request.url.path in {"/home", "/lineup", "/moves", "/scores", "/trades", "/standings", "/league"}
+            and request.url.path in {"/home", "/lineup", "/moves", "/scores", "/trades", "/standings", "/league", "/insights"}
             and any(item.id == league_id for item in current.leagues)):
         response.set_cookie("wp_last_league", f"{current.year}:{league_id}", max_age=365*86400,
                             httponly=True, samesite="strict", secure=_secure_cookies(request))
@@ -724,6 +754,23 @@ def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
         ),
         (),
     )
+    message_threads = read(
+        "message_board",
+        lambda: _cached_session_read(
+            current, selected.id, "message-board", lambda: client.message_board(count=12), ttl=90,
+        ),
+        (),
+    ) if hasattr(client, "message_board") else ()
+    chat_messages = read(
+        "league_chat",
+        lambda: _cached_session_read(
+            current, selected.id, "league-chat", lambda: client.league_chat(count=30), ttl=60,
+        ),
+        (),
+    ) if hasattr(client, "league_chat") else ()
+    own_id = selected.franchise_id.zfill(4)
+    chat_messages = tuple(item for item in chat_messages if not item.to_franchise_id.strip("0")
+                          or item.to_franchise_id == own_id or item.franchise_id == own_id)
     catalog = read(
         "players", lambda: _cached_session_read(current, selected.id, "players", client.players, ttl=900), {},
     )
@@ -780,6 +827,8 @@ def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
         "last_results_week": last_results_week,
         "last_week_results": last_week_results,
         "activity": activity,
+        "message_threads": message_threads,
+        "chat_messages": chat_messages,
         "catalog": catalog,
         "rankings": rankings,
         "rank_by_team": rank_by_team,
@@ -1284,6 +1333,176 @@ def _load_lineup(
     return week, recommendation, settings, blend
 
 
+def _projection_accuracy(
+    current: BrowserSession,
+    selected: MFLLeague,
+    client: MFLClient,
+    *,
+    week: int,
+    roster_ids: set[str],
+    current_blend: ProjectionBlend,
+) -> ProjectionAccuracyReport:
+    def load_report() -> ProjectionAccuracyReport:
+        catalog = _cached_session_read(
+            current, "mfl-global", "players", client.players, ttl=3600, stale_ttl=86400,
+        )
+        completed = tuple(range(max(1, week - 3), week))
+        history = []
+        for history_week in completed:
+            try:
+                mfl = _cached_session_read(
+                    current, selected.id, f"accuracy-projections:{history_week}",
+                    lambda selected_week=history_week: client.projected_scores(week=selected_week),
+                    ttl=12 * 3600, stale_ttl=7 * 86400,
+                )
+                actual = _cached_session_read(
+                    current, selected.id, f"accuracy-actual:{history_week}",
+                    lambda selected_week=history_week: client.player_scores(period=selected_week),
+                    ttl=12 * 3600, stale_ttl=30 * 86400,
+                )
+            except MFLRateLimitError:
+                break
+            except MFLApiError:
+                continue
+            try:
+                ml, _ = stathead_weekly_scores(catalog.values(), year=current.year, week=history_week)
+            except ProjectionSourceError:
+                ml = {}
+            try:
+                espn = espn_weekly_ranks(
+                    catalog.values(), year=current.year, week=history_week,
+                    rank_type=os.getenv("WP_ESPN_RANKING_FORMAT", "PPR"),
+                )
+            except ProjectionSourceError:
+                espn = {}
+            history.append((history_week, mfl, ml, espn, actual))
+        return evaluate_projection_accuracy(
+            catalog,
+            history,
+            current_mfl=current_blend.mfl_scores,
+            current_ml=current_blend.ml_scores,
+            current_ids=roster_ids,
+        )
+
+    return _cached_session_read(
+        current, selected.id, f"projection-accuracy:{week}", load_report,
+        ttl=12 * 3600, stale_ttl=7 * 86400,
+    )
+
+
+def _load_insights(
+    current: BrowserSession,
+    selected: MFLLeague,
+    *,
+    include_external: bool,
+    include_accuracy: bool,
+) -> dict:
+    client = _client(current, selected)
+    week, lineup, settings, blend = _load_lineup(client, current=current)
+    roster = [item.player for item in lineup.players]
+    errors: dict[str, str] = {}
+    depth_roles, depth_updated = {}, ""
+    weather = {}
+    if include_external:
+        try:
+            depth_roles, depth_updated, snapshot = depth_chart_roles(
+                roster, year=current.year, previous=current.depth_snapshots.get(selected.id),
+            )
+            current.depth_snapshots[selected.id] = snapshot
+        except RuntimeError as error:
+            errors["depth charts"] = str(error)
+            _log_provider_error_once(current, selected.id, "insights_depth_unavailable", error, window=1800)
+        try:
+            weather = weather_for_roster(roster, getattr(client, "week_games", {}))
+        except RuntimeError as error:
+            errors["weather"] = str(error)
+            _log_provider_error_once(current, selected.id, "insights_weather_unavailable", error, window=900)
+    accuracy = ProjectionAccuracyReport((), (), (), ())
+    if include_accuracy:
+        try:
+            accuracy = _projection_accuracy(
+                current, selected, client, week=week,
+                roster_ids={player.id for player in roster}, current_blend=blend,
+            )
+        except (MFLApiError, ValueError, requests.RequestException) as error:
+            errors["projection accuracy"] = "Projection history is temporarily unavailable."
+            _log_provider_error_once(current, selected.id, "projection_accuracy_unavailable", error, window=1800)
+
+    rows = []
+    for item in lineup.players:
+        team = item.player.team.upper()
+        injury = item.injury
+        status = injury.status if injury else "No MFL injury designation"
+        severity = "danger" if injury and any(
+            word in injury.status.casefold() for word in ("out", "inactive", "reserve", "suspend")
+        ) else "warning" if injury else "good"
+        role = depth_roles.get(item.player.id)
+        outlook = weather.get(canonical_team(team))
+        rows.append({
+            "item": item,
+            "injury_status": status,
+            "injury_details": injury.details if injury else "",
+            "severity": severity,
+            "depth": role,
+            "weather": outlook,
+            "news_url": "https://www.myfantasyleague.com/" + str(current.year) + "/news_articles?" + urlencode({
+                "L": selected.id, "P": item.player.id,
+            }),
+        })
+
+    actions = []
+    open_slots = max(0, settings.starter_count - len(lineup.current_starters))
+    if open_slots:
+        actions.append({
+            "tone": "danger", "title": f"Fill {open_slots} open starter slot{'s' if open_slots != 1 else ''}",
+            "detail": "MFL's saved lineup is short of the league starter maximum.",
+            "href": f"/lineup?league={selected.id}&week={week}", "label": "Fix lineup",
+        })
+    changes = [item for item in lineup.players if item.action in {"START", "SIT"}]
+    if changes and lineup.projected_gain > .05:
+        actions.append({
+            "tone": "strong", "title": f"Best-lineup suggestion adds {lineup.projected_gain:.1f} projected points",
+            "detail": "Review the legal start/sit changes before confirming anything with MFL.",
+            "href": f"/lineup?league={selected.id}&week={week}", "label": "Review suggestion",
+        })
+    for row in rows:
+        if row["severity"] in {"danger", "warning"} and row["item"].recommended_start:
+            actions.append({
+                "tone": row["severity"], "title": f"{row['item'].player.name}: {row['injury_status']}",
+                "detail": row["injury_details"] or "MFL lists an injury designation for a recommended starter.",
+                "href": row["news_url"], "label": "MFL news",
+            })
+    for team, outlook in weather.items():
+        if outlook.caution:
+            player_names = ", ".join(
+                item.player.name for item in lineup.players
+                if canonical_team(item.player.team) == team
+            )[:120]
+            actions.append({
+                "tone": "warning", "title": f"Weather watch: {player_names or team}",
+                "detail": f"{outlook.label}; {outlook.temperature_f or '—'}°F, {outlook.precipitation_percent or 0:.0f}% precipitation, {outlook.wind_mph or 0:.0f} mph wind.",
+                "href": f"/insights?league={selected.id}#weather", "label": "See forecast",
+            })
+    if not actions:
+        actions.append({
+            "tone": "good", "title": "No urgent roster alerts",
+            "detail": "Your saved lineup has no visible open slots or high-priority MFL injury conflicts.",
+            "href": f"/lineup?league={selected.id}&week={week}", "label": "Check lineup",
+        })
+    reference_by_player = {item.player_id: item for item in accuracy.references}
+    reference_rows = [
+        {"player": item.player, "reference": reference_by_player[item.player.id]}
+        for item in lineup.players if item.player.id in reference_by_player
+    ]
+    return {
+        "week": week, "lineup": lineup, "settings": settings, "blend": blend,
+        "rows": rows, "actions": actions[:8],
+        "alert_count": sum(action["tone"] in {"danger", "warning"} for action in actions[:8]),
+        "depth_updated": depth_updated,
+        "accuracy": accuracy, "reference_rows": reference_rows, "errors": errors,
+    }
+
+
 def _locked_player_ids(
     players: list[MFLPlayer] | tuple[MFLPlayer, ...],
     team_kickoffs: dict[str, int],
@@ -1501,6 +1720,28 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/manifest.webmanifest", include_in_schema=False)
+def web_manifest() -> FileResponse:
+    return FileResponse(
+        PACKAGE_DIR / "static" / "manifest.webmanifest",
+        media_type="application/manifest+json",
+    )
+
+
+@app.get("/service-worker.js", include_in_schema=False)
+def service_worker() -> FileResponse:
+    return FileResponse(
+        PACKAGE_DIR / "static" / "service-worker.js",
+        media_type="application/javascript",
+        headers={"Service-Worker-Allowed": "/"},
+    )
+
+
+@app.get("/offline", response_class=HTMLResponse, include_in_schema=False)
+def offline_page(request: Request):
+    return templates.TemplateResponse(request=request, name="offline.html", context={})
+
+
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     current = _session(request)
@@ -1632,10 +1873,18 @@ def login(
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
-def dashboard(request: Request):
+def dashboard(request: Request, source: str = ""):
     current = _session(request)
     if not current:
         return RedirectResponse("/", status_code=303)
+    if source in {"pwa-lineup", "pwa-briefing"}:
+        remembered = request.cookies.get("wp_last_league", "")
+        selected = next(
+            (item for item in current.leagues if remembered == f"{current.year}:{item.id}"),
+            current.leagues[0],
+        )
+        route = "/lineup" if source == "pwa-lineup" else "/insights"
+        return RedirectResponse(route + "?" + urlencode({"league": selected.id}), status_code=303)
     return RedirectResponse(_league_home_url(request, current), status_code=303)
 
 
@@ -1656,6 +1905,30 @@ def standings_page(request: Request, league: str):
         return RedirectResponse("/", status_code=303)
     return templates.TemplateResponse(request=request, name="home.html", context={
         "session": current, "league": _league(current, league), "active_tool": "standings"})
+
+
+@app.get("/insights", response_class=HTMLResponse)
+def insights_page(request: Request, league: str):
+    current = _require_session(request)
+    selected = _league(current, league)
+    try:
+        context = _load_insights(
+            current, selected, include_external=True, include_accuracy=True,
+        )
+        context.update(session=current, league=selected, active_tool="home", error=None)
+    except (MFLApiError, ValueError, requests.RequestException) as error:
+        if isinstance(error, MFLApiError):
+            _log_provider_error_once(current, selected.id, "insights_unavailable", error)
+        else:
+            log_error("insights_unavailable", error)
+        context = {
+            "session": current, "league": selected, "active_tool": "home",
+            "error": "Roster intelligence is temporarily unavailable. Existing league pages are still available.",
+            "errors": {}, "rows": (), "actions": (),
+            "accuracy": ProjectionAccuracyReport((), (), (), ()), "week": None,
+            "depth_updated": "", "reference_rows": (), "alert_count": 0,
+        }
+    return templates.TemplateResponse(request=request, name="insights.html", context=context)
 
 
 @app.get("/league", response_class=HTMLResponse)
@@ -1689,15 +1962,146 @@ def league_page(request: Request, league: str):
             "assets": assets,
             "when": _activity_time(item.timestamp),
         })
+    message_threads = [{
+        "item": item,
+        "author": item.author or context["names"].get(item.franchise_id, "League member"),
+        "when": _activity_time(item.timestamp),
+    } for item in context.get("message_threads", ())]
+    chat_rows = [{
+        "item": item,
+        "author": context["names"].get(item.franchise_id, "League member"),
+        "recipient": context["names"].get(item.to_franchise_id, "") if item.to_franchise_id.strip("0") else "",
+        "when": _activity_time(item.timestamp),
+    } for item in context.get("chat_messages", ())]
     context.update(
         session=current,
         league=selected,
         active_tool="league",
         error=None,
         activity_rows=activity_rows,
+        message_threads=message_threads,
+        chat_rows=chat_rows,
         side_bets=current.side_bets.get(selected.id, []),
     )
     return templates.TemplateResponse(request=request, name="league.html", context=context)
+
+
+@app.get("/league/message-thread/{thread_id}", response_class=HTMLResponse)
+def league_message_thread(request: Request, thread_id: str, league: str):
+    current = _require_session(request)
+    selected = _league(current, league)
+    client = _client(current, selected)
+    try:
+        posts = _cached_session_read(
+            current, selected.id, f"message-thread:{thread_id}",
+            lambda: client.message_board_thread(thread_id), ttl=60, stale_ttl=300,
+        )
+        names = _cached_session_read(current, selected.id, "franchise-names", client.franchise_names, ttl=300)
+        threads = _cached_session_read(
+            current, selected.id, "message-board", lambda: client.message_board(count=12), ttl=90,
+        )
+    except (MFLApiError, ValueError) as error:
+        log_error("message_thread_unavailable", error)
+        raise HTTPException(status_code=404, detail="That MFL message-board thread is unavailable")
+    subject = next((item.subject for item in threads if item.id == thread_id), "League message")
+    rows = [{"item": item, "author": item.author or names.get(item.franchise_id, "League member"),
+             "when": _activity_time(item.timestamp)} for item in posts]
+    return templates.TemplateResponse(request=request, name="message_thread.html", context={
+        "session": current, "league": selected, "active_tool": "league",
+        "thread_id": thread_id, "subject": subject, "posts": rows,
+    })
+
+
+@app.post("/league/social/preview")
+def preview_social_post(
+    request: Request,
+    league: str = Form(...),
+    kind: str = Form(...),
+    body: str = Form(...),
+    csrf_token: str = Form(...),
+    subject: str = Form(""),
+    thread_id: str = Form(""),
+    to_franchise_id: str = Form(""),
+):
+    current = _require_session(request)
+    _check_csrf(current, csrf_token)
+    selected = _league(current, league)
+    kind, subject, body = kind.strip(), subject.strip(), body.strip()
+    if kind not in {"board-thread", "board-reply", "chat"}:
+        raise HTTPException(status_code=400, detail="Choose message board or league chat")
+    if not body or len(body) > 2000 or any(ord(char) < 32 and char not in "\r\n\t" for char in body):
+        raise HTTPException(status_code=400, detail="Enter a message of 2,000 characters or fewer")
+    if kind == "board-thread" and (not subject or len(subject) > 120):
+        raise HTTPException(status_code=400, detail="Enter a subject of 120 characters or fewer")
+    if kind == "board-reply" and (not thread_id or len(thread_id) > 80
+            or not all(char.isalnum() or char in "-_" for char in thread_id)):
+        raise HTTPException(status_code=400, detail="Choose a valid message-board thread")
+    to_franchise_id = to_franchise_id.zfill(4) if to_franchise_id else ""
+    if kind == "chat" and to_franchise_id:
+        details = _cached_session_read(current, selected.id, "details", _client(current, selected).league_details, ttl=300)
+        if to_franchise_id not in details.franchises:
+            raise HTTPException(status_code=400, detail="Choose a franchise in this league")
+    pending_id = secrets.token_urlsafe(12)
+    current.social_posts[pending_id] = SocialPostDraft(
+        selected.id, selected.franchise_id.zfill(4), kind, subject, body, thread_id, to_franchise_id,
+    )
+    return RedirectResponse(f"/league/social/review/{pending_id}", status_code=303)
+
+
+@app.get("/league/social/review/{pending_id}", response_class=HTMLResponse)
+def review_social_post(request: Request, pending_id: str):
+    current = _require_session(request)
+    draft = current.social_posts.get(pending_id)
+    if not draft or time.monotonic() - draft.created_at > 1200:
+        current.social_posts.pop(pending_id, None)
+        raise HTTPException(status_code=404, detail="That message draft expired")
+    selected = _league(current, draft.league_id)
+    return templates.TemplateResponse(request=request, name="social_review.html", context={
+        "session": current, "league": selected, "active_tool": "league",
+        "draft": draft, "pending_id": pending_id,
+    })
+
+
+@app.get("/league/social/send/{pending_id}")
+def send_social_post_get(request: Request, pending_id: str):
+    return RedirectResponse(f"/league/social/review/{pending_id}", status_code=303)
+
+
+@app.post("/league/social/send/{pending_id}", response_class=HTMLResponse)
+def send_social_post(request: Request, pending_id: str, csrf_token: str = Form(...)):
+    current = _require_session(request)
+    _check_csrf(current, csrf_token)
+    draft = current.social_posts.get(pending_id)
+    if not draft or draft.status != "draft" or time.monotonic() - draft.created_at > 1200:
+        raise HTTPException(status_code=404, detail="That message draft is unavailable")
+    selected = _league(current, draft.league_id)
+    if selected.franchise_id.zfill(4) != draft.franchise_id:
+        raise HTTPException(status_code=403, detail="This message belongs to another franchise")
+    client = _client(current, selected)
+    with social_send_lock:
+        if draft.status != "draft":
+            raise HTTPException(status_code=409, detail="This message has already been submitted")
+        draft.status = "sending"
+        try:
+            if draft.kind == "chat":
+                client.post_chat(body=draft.body, to_franchise_id=draft.to_franchise_id)
+            else:
+                client.post_message_board(subject=draft.subject, body=draft.body, thread_id=draft.thread_id)
+        except MFLWriteUncertainError as error:
+            draft.status, draft.message = "uncertain", str(error)
+            log_error("league_social_post_uncertain", error)
+        except MFLApiError as error:
+            draft.status, draft.message = "draft", str(error)
+            log_error("league_social_post_failed", error)
+        else:
+            draft.status, draft.message = "sent", "MFL accepted the message."
+            for key in tuple(current.read_cache):
+                if any(token in key for token in ("message-board", "message-thread:", "league-chat", "league-hq")):
+                    current.read_cache.pop(key, None)
+    return templates.TemplateResponse(request=request, name="social_review.html", context={
+        "session": current, "league": selected, "active_tool": "league",
+        "draft": draft, "pending_id": pending_id,
+    })
 
 
 @app.get("/manager/{franchise_id}", response_class=HTMLResponse)
@@ -1759,12 +2163,17 @@ def settle_side_bet(
 def hub_section(request: Request, section: str, league: str, target: str = "", wanted: str = "", package_size: int = 2):
     current = _require_session(request)
     selected = _league(current, league)
-    if section not in {"matchup", "pickups", "standings", "block", "ideas"}:
+    if section not in {"briefing", "matchup", "pickups", "standings", "block", "ideas"}:
         raise HTTPException(status_code=404)
     client = _client(current, selected)
     context = {"session": current, "league": selected, "section": section, "error": None}
     try:
-        if section == "matchup":
+        if section == "briefing":
+            briefing = _load_insights(
+                current, selected, include_external=False, include_accuracy=False,
+            )
+            context.update(week=briefing["week"], actions=briefing["actions"])
+        elif section == "matchup":
             week, _, _, _, matchup = _load_live_scoring_week(client, requested_week=None, current=current)
             own = selected.franchise_id.zfill(4)
             if not matchup or not any(team.franchise_id.zfill(4) == own for team in matchup.teams):
@@ -2029,11 +2438,13 @@ def lineup_page(request: Request, league: str, error: str = "", week: int | None
 
 
 @app.get("/scores", response_class=HTMLResponse)
-def scores_page(request: Request, league: str, week: int | None = None, matchup: str = ""):
+def scores_page(request: Request, league: str, week: int | None = None, matchup: str = "", view: str = "matchup"):
     current = _session(request)
     if not current:
         return RedirectResponse("/", status_code=303)
     selected = _league(current, league)
+    if view not in {"matchup", "all"}:
+        raise HTTPException(status_code=400, detail="Choose matchup or league scoreboard")
     try:
         matchup_index = int(matchup) if matchup else None
     except ValueError:
@@ -2085,6 +2496,7 @@ def scores_page(request: Request, league: str, week: int | None = None, matchup:
             "refresh_seconds": 60 if refresh_state["active"] else 0,
             "next_kickoff": refresh_state["next_kickoff"],
             "viewed_matchup": matchup_index,
+            "score_view": view,
             "error": api_error,
         },
     )

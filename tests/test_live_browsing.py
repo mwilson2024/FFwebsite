@@ -40,6 +40,12 @@ def test_other_matchup_selection_loads_its_players_and_keeps_week(monkeypatch):
     assert page.status_code == 200 and 'Player 3' in page.text and 'Player 1' not in page.text
     assert 'data-live-refresh="0"' in page.text
     assert 'matchup=1' in page.text
+    all_scores = client.get('/scores?league=1&week=1&view=all')
+    assert 'ALL LEAGUE SCORES' in all_scores.text
+    assert 'Team 1' in all_scores.text and 'Team 4' in all_scores.text
+    assert 'View box score' in all_scores.text and 'name="view" value="all"' in all_scores.text
+    assert 'class="matchup-arena"' not in all_scores.text
+    assert client.get('/scores?league=1&week=1&view=unknown').status_code == 400
     assert 'Player 1' in client.get('/scores?league=1&week=1&matchup=').text
     assert 'unavailable for this week' in client.get('/scores?league=1&week=1&matchup=9').text
     # Gate reads only NFL status; it never fetches fantasy scoring.

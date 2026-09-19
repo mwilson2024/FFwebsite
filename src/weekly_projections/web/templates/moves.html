@@ -6,7 +6,7 @@
   
   <meta name="csrf-token" content="{{ session.csrf_token }}">
   <title>{{ league.name }} · Player Market</title>
-  <link rel="stylesheet" href="/static/app.css?v=20260917-defense-stream">
+  <link rel="stylesheet" href="/static/app.css?v=20260919-defense-position">
   <link rel="stylesheet" href="/static/workspace.css?v=3">
   <link rel="stylesheet" href="/static/fantasy.css?v=4">
   <link rel="stylesheet" href="/static/lions.css?v=1">
@@ -37,7 +37,7 @@
         <p>ESPN is the primary weekly ranking view. MFL remains authoritative for league scoring, locks, ownership, and moves.</p>
       </section>
 
-      {% include '_defense_streaming.html' %}
+      <a class="defense-stream-link" href="#defense-streaming"><span><strong>Streaming a defense?</strong><small>Compare talent, matchup and waiver price</small></span><span aria-hidden="true">↓</span></a>
 
       <form method="post" action="/preview" id="waiver-form">
         <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
@@ -101,6 +101,7 @@
           <button type="submit" class="review-button" id="review-move" disabled>Review move <span>→</span></button>
         </section>
       </form>
+      {% include '_defense_streaming.html' %}
     </section>
   </main>
   {% include '_player_card.html' %}

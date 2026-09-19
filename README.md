@@ -94,6 +94,46 @@ Missing ranks/schedules and games already started receive no fit
 score; the 2026 snapshot is never reused for another season. Selecting a target
 uses the normal add/drop builder and still requires review and confirmation.
 
+League HQ includes authenticated MFL message-board summaries and league chat.
+Threads load on demand, board/chat summaries use short session caches, and private
+chat rows are shown only to the sender or recipient. New threads, replies, public
+chat, and direct chat messages use a review/confirm step with CSRF validation.
+Writes are sent exactly once and uncertain chat/message results cannot be retried
+from the same draft. Content is escaped in the browser; credentials never enter
+message URLs, markup, logs, or persistent storage.
+
+Live scoring has separate **Matchup** and **All scores** views. The league-wide
+scoreboard reuses the already-loaded MFL live-scoring response and follows the
+same NFL-game-aware refresh gate, so it does not add per-matchup polling.
+
+The signed-in home page now opens with a personalized weekly briefing. The full
+Roster Intelligence page combines the saved MFL lineup and official MFL injury
+designations with current nflverse depth-chart roles and Open-Meteo stadium
+forecasts. External reference feeds have bounded timeouts and caches and fail
+independently; an unavailable depth chart or forecast never hides the MFL lineup.
+MFL player-news links remain the source of full news stories because MFL does not
+publish those articles through its API.
+
+The projection lab evaluates at most the previous three completed weeks. MFL
+league-scored projections and position-scaled StatHead ML projections are measured
+against official MFL player scores by position. The resulting inverse-error weights
+and heuristic 80% ranges are displayed only as a labeled reference and never replace
+MFL totals, recommendations, or submitted lineups. ESPN weekly ranks are evaluated
+separately as a top-half ranking hit rate because ranks are not point projections.
+
+The site is installable as a PWA on supported browsers. Its service worker caches
+only the public offline shell and static icon assets; authenticated league HTML,
+MFL responses, credentials, CSRF state, and transactions are never cached offline.
+The Settings menu includes installation guidance, device-local alert preferences,
+and app-badge support. Device alerts are evaluated after an authenticated refresh;
+there is no background push server and no push service receives MFL credentials.
+
+Depth-chart data is provided by
+[nflverse](https://github.com/nflverse/nflverse-data) and is subject to its source
+attribution and licensing terms. Forecast data is provided by
+[Open-Meteo](https://open-meteo.com/). Both are clearly separated from authoritative
+MFL scoring and roster state in the interface.
+
 Generate the secret once with:
 
 ```powershell

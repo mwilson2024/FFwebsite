@@ -30,7 +30,14 @@ weekly-projections-web = "weekly_projections.web.app:run"
 where = ["src"]
 
 [tool.setuptools.package-data]
-weekly_projections = ["web/templates/*.html", "web/static/*.css", "web/static/*.js"]
+weekly_projections = [
+  "web/templates/*.html",
+  "web/static/*.css",
+  "web/static/*.js",
+  "web/static/*.svg",
+  "web/static/*.png",
+  "web/static/*.webmanifest",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

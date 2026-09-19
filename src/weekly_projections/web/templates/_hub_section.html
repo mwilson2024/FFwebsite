@@ -1,4 +1,6 @@
 {% if error %}<p role="alert">{{ error }}{% include '_error_reference.html' %}</p><button type="button" data-hub-retry>Retry</button>
+{% elif section == 'briefing' %}
+<p class="hub-footnote">Week {{ week }} · personalized from your saved MFL lineup and official injury designations.</p><div class="briefing-list" data-briefing-alerts="{{ actions|length }}">{% for action in actions %}<article class="briefing-action {{ action.tone }}"><span aria-hidden="true">{{ '!' if action.tone in ['danger','warning'] else '✓' }}</span><div><strong>{{ action.title }}</strong><p>{{ action.detail }}</p></div><a href="{{ action.href }}">{{ action.label }} →</a></article>{% endfor %}</div>
 {% elif section == 'matchup' %}
 <div class="hub-scoreboard">
   {% set forecast = matchup.forecast %}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -278,6 +279,68 @@ def test_schedule_and_transactions_parse_singleton_and_list_payloads(monkeypatch
     assert by_id["t5"].adds == ()
     assert by_id["t5"].drops == ()
     assert calls[-1][1]["TRANS_TYPE"] == "*"
+
+
+def test_message_board_and_thread_parse_bounded_mfl_payloads(monkeypatch):
+    client = MFLClient(_config(user_cookie="cookie"))
+    payloads = {
+        "messageBoard": {"messageBoard": {"thread": [
+            {"id":"t1", "subject":"Week 2 talk", "franchise_id":"7", "timestamp":"200", "replies":"3"},
+            {"id":"", "subject":"invalid"},
+        ]}},
+        "messageBoardThread": {"messageBoardThread": {"message": [
+            {"id":"p1", "franchise_id":"7", "posted":"100", "$t":"First post"},
+            {"id":"p2", "author":"Commissioner", "body":"Reply"},
+        ]}},
+    }
+    calls = []
+    monkeypatch.setattr(client, "export", lambda kind, **params: calls.append((kind, params)) or payloads[kind])
+    threads = client.message_board(count=99)
+    posts = client.message_board_thread("t1")
+    assert [(item.id, item.subject, item.franchise_id, item.replies) for item in threads] == [("t1", "Week 2 talk", "0007", 3)]
+    assert [item.body for item in posts] == ["First post", "Reply"]
+    assert calls == [("messageBoard", {"COUNT":25}), ("messageBoardThread", {"THREAD":"t1"})]
+    with pytest.raises(ValueError): client.message_board_thread("bad/thread")
+
+
+def test_chat_xml_read_and_one_shot_post_are_bounded_and_authenticated(monkeypatch):
+    client = MFLClient(_config(user_cookie="cookie", base_url="https://www42.myfantasyleague.com"))
+    calls = []
+    response = SimpleNamespace(
+        status_code=200,
+        text='<chat><entry id="1" franchise_id="7" timestamp="100" message="hello"/><entry id="2"><fid>8</fid><body>reply</body><to_fid>7</to_fid></entry></chat>',
+        headers={}, raise_for_status=lambda: None,
+    )
+    monkeypatch.setattr(client.session, "get", lambda url, **kwargs: calls.append(("get", url, kwargs)) or response)
+    monkeypatch.setattr(client.session, "post", lambda url, **kwargs: calls.append(("post", url, kwargs)) or response)
+    rows = client.league_chat(count=30)
+    assert [(item.body, item.franchise_id, item.to_franchise_id) for item in rows] == [("hello", "0007", "0000"), ("reply", "0008", "0007")]
+    client.post_chat(body="safe & encoded", to_franchise_id="0008")
+    assert calls[0][1] == "https://www42.myfantasyleague.com/fflnetdynamic2026/12345_chat.xml"
+    assert calls[1][1] == "https://www42.myfantasyleague.com/2026/chat_save"
+    assert calls[1][2]["data"] == {"L":"12345", "MESSAGE":"safe & encoded", "TO_FID":"0008"}
+    assert calls[1][2]["allow_redirects"] is False
+
+
+def test_chat_post_network_error_is_uncertain_and_not_retried(monkeypatch):
+    client = MFLClient(_config(user_cookie="cookie"))
+    calls = []
+    def fail(*args, **kwargs):
+        calls.append(1)
+        raise requests.Timeout("synthetic")
+    monkeypatch.setattr(client.session, "post", fail)
+    with pytest.raises(MFLWriteUncertainError, match="chat status is uncertain"):
+        client.post_chat(body="one attempt")
+    assert calls == [1]
+
+
+def test_chat_rate_limit_preserves_retry_after(monkeypatch):
+    client = MFLClient(_config(user_cookie="cookie"))
+    response = SimpleNamespace(status_code=429, headers={"Retry-After":"45"}, text="")
+    monkeypatch.setattr(client.session, "post", lambda *args, **kwargs: response)
+    with pytest.raises(MFLRateLimitError) as caught:
+        client.post_chat(body="Wait")
+    assert caught.value.retry_after == 45
 
 
 def test_login_posts_credentials_and_stores_cookie() -> None:

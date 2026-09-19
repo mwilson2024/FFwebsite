@@ -1,0 +1,19 @@
+{
+  "name": "Fantasy HQ for MFL",
+  "short_name": "Fantasy HQ",
+  "description": "Private lineup, waiver, trade and league intelligence for MyFantasyLeague.",
+  "start_url": "/dashboard?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#00274c",
+  "theme_color": "#00274c",
+  "orientation": "any",
+  "icons": [
+    {"src": "/static/app-icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+    {"src": "/static/app-icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
+  ],
+  "shortcuts": [
+    {"name": "Set lineup", "short_name": "Lineup", "url": "/dashboard?source=pwa-lineup"},
+    {"name": "Weekly briefing", "short_name": "Briefing", "url": "/dashboard?source=pwa-briefing"}
+  ]
+}

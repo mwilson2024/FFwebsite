@@ -20,6 +20,8 @@ from weekly_projections.mfl.client import (
     MFLLiveScoring,
     MFLLineupRule,
     MFLLineupSettings,
+    MFLMessageThread,
+    MFLChatMessage,
     MFLPlayer,
     MFLWriteUncertainError,
 )
@@ -50,6 +52,45 @@ def test_health_endpoint_is_available_without_an_mfl_session() -> None:
     response = TestClient(web_app.app).get("/health")
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_pwa_manifest_worker_and_offline_shell_do_not_cache_private_pages() -> None:
+    client = TestClient(web_app.app)
+    manifest = client.get("/manifest.webmanifest")
+    assert manifest.status_code == 200
+    assert manifest.json()["display"] == "standalone"
+    assert {item["sizes"] for item in manifest.json()["icons"]} == {"192x192", "512x512"}
+    worker = client.get("/service-worker.js")
+    assert worker.status_code == 200
+    assert worker.headers["service-worker-allowed"] == "/"
+    assert "event.request.mode === 'navigate'" in worker.text
+    assert "cache.put" not in worker.text
+    offline = client.get("/offline")
+    assert offline.status_code == 200
+    assert "private league pages are never saved" in offline.text
+
+
+def test_insights_page_and_home_briefing_render_from_personalized_context(monkeypatch) -> None:
+    web_app.sessions.clear()
+    league = MFLLeague("11111", "0001", "Home League")
+    current = web_app.BrowserSession("cookie", 2026, [league], "csrf")
+    web_app.sessions["insights-session"] = current
+    action = {"tone":"warning", "title":"Questionable starter", "detail":"Check Sunday status.",
+              "href":"/lineup?league=11111", "label":"Review"}
+    report = web_app.ProjectionAccuracyReport((), (), (), ())
+    monkeypatch.setattr(web_app, "_load_insights", lambda *args, **kwargs: {
+        "week":2, "rows":(), "actions":[action], "alert_count":1,
+        "depth_updated":"", "accuracy":report, "reference_rows":(), "errors":{},
+    })
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", "insights-session")
+    page = client.get("/insights?league=11111")
+    assert page.status_code == 200
+    assert "Roster intelligence" in page.text
+    assert "Questionable starter" in page.text
+    briefing = client.get("/hub/briefing?league=11111")
+    assert briefing.status_code == 200
+    assert "personalized from your saved MFL lineup" in briefing.text
 
 
 def test_login_page_is_local_and_not_cached() -> None:
@@ -552,6 +593,8 @@ def test_league_hq_renders_intelligence_and_tracks_session_side_bets(monkeypatch
         "standings": [{"id":"0001","h2hw":"1","h2hl":"0","h2ht":"0","pf":"120","pa":"100"}],
         "groups": [{"id":"","name":"League standings","rows":[{"id":"0001","h2hw":"1","h2hl":"0","h2ht":"0","pf":"120","pa":"100"}]}],
         "schedule": games, "activity": activity,
+        "message_threads": (MFLMessageThread("thread-1", "Trash talk", "0002", timestamp=100, replies=2),),
+        "chat_messages": (MFLChatMessage("chat-1", "Good luck", "0002", 100),),
         "last_results_week": 1,
         "last_week_results": [{"week": 1, "teams": (
             {"id": "0001", "name": "Alpha", "logo_url": "", "score": 120.0, "winner": True},
@@ -585,7 +628,7 @@ def test_league_hq_renders_intelligence_and_tracks_session_side_bets(monkeypatch
     assert 'data-equal-scroll-cards' in response.text
     assert 'data-scroll-height-source' in response.text
     assert 'data-scroll-height-target' in response.text
-    assert "/static/league.css?v=20260915-results" in response.text
+    assert "/static/league.css?v=20260919-social" in response.text
     assert "/static/interface.js?v=4" in response.text
     assert 'class="bracket-round bracket-round-3"' in response.text
     assert "Championship" in response.text
@@ -593,6 +636,10 @@ def test_league_hq_renders_intelligence_and_tracks_session_side_bets(monkeypatch
     assert "Week 1 results" in response.text
     assert "120.00" in response.text
     assert "Side-bet tracker" in response.text
+    assert "Message board &amp; league chat" in response.text
+    assert "Trash talk" in response.text and "Good luck" in response.text
+    assert "/league/message-thread/thread-1?league=11111" in response.text
+    assert 'action="/league/social/preview"' in response.text
     response = client.post("/league/side-bets", data={
         "league":"11111", "csrf_token":"csrf", "title":"QB duel",
         "participants":"A vs B", "stake":"pizza",
@@ -604,6 +651,76 @@ def test_league_hq_renders_intelligence_and_tracks_session_side_bets(monkeypatch
     assert "FRANCHISE PROFILE" in profile.text
     assert "Alpha" in profile.text
     assert "without inventing results" in profile.text
+
+
+def test_social_posts_require_review_csrf_and_only_send_once(monkeypatch) -> None:
+    web_app.sessions.clear()
+    league = MFLLeague("11111", "0001", "Home League")
+    current = web_app.BrowserSession("cookie", 2026, [league], "csrf")
+    current.read_cache["2026:11111:report:message-board"] = (9999999999, "old")
+    web_app.sessions["social"] = current
+    writes = []
+
+    class SocialClient:
+        def post_message_board(self, **kwargs): writes.append(("board", kwargs))
+        def post_chat(self, **kwargs): writes.append(("chat", kwargs))
+        def league_details(self):
+            return MFLLeagueDetails((), {"0001": MFLFranchise("0001", "Alpha"), "0002": MFLFranchise("0002", "Bravo")})
+
+    monkeypatch.setattr(web_app, "_client", lambda *args: SocialClient())
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", "social")
+    preview = client.post("/league/social/preview", data={
+        "league":"11111", "kind":"board-thread", "subject":"Week 3",
+        "body":"<script>alert(1)</script>", "csrf_token":"csrf",
+    }, follow_redirects=False)
+    assert preview.status_code == 303 and not writes
+    review_url = preview.headers["location"]
+    review = client.get(review_url)
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in review.text
+    assert client.get(review_url.replace("review", "send"), follow_redirects=False).status_code == 303
+    assert not writes
+    pending_id = review_url.rsplit("/", 1)[1]
+    assert client.post(f"/league/social/send/{pending_id}", data={"csrf_token":"bad"}).status_code == 403
+    sent = client.post(f"/league/social/send/{pending_id}", data={"csrf_token":"csrf"})
+    assert "MFL accepted the message" in sent.text
+    assert writes == [("board", {"subject":"Week 3", "body":"<script>alert(1)</script>", "thread_id":""})]
+    assert client.post(f"/league/social/send/{pending_id}", data={"csrf_token":"csrf"}).status_code == 404
+    assert len(writes) == 1
+    assert not any("message-board" in key for key in current.read_cache)
+
+    private = client.post("/league/social/preview", data={
+        "league":"11111", "kind":"chat", "body":"private note",
+        "to_franchise_id":"2", "csrf_token":"csrf",
+    }, follow_redirects=False)
+    chat_id = private.headers["location"].rsplit("/", 1)[1]
+    client.post(f"/league/social/send/{chat_id}", data={"csrf_token":"csrf"})
+    assert writes[-1] == ("chat", {"body":"private note", "to_franchise_id":"0002"})
+    assert client.post("/league/social/preview", data={
+        "league":"11111", "kind":"chat", "body":"x", "to_franchise_id":"9999", "csrf_token":"csrf",
+    }).status_code == 400
+
+
+def test_uncertain_chat_post_cannot_be_retried(monkeypatch) -> None:
+    web_app.sessions.clear()
+    league = MFLLeague("11111", "0001", "Home League")
+    current = web_app.BrowserSession("cookie", 2026, [league], "csrf")
+    web_app.sessions["social-uncertain"] = current
+    attempts = []
+    class Client:
+        def post_chat(self, **kwargs):
+            attempts.append(kwargs)
+            raise MFLWriteUncertainError("Synthetic uncertain chat")
+    monkeypatch.setattr(web_app, "_client", lambda *args: Client())
+    client = TestClient(web_app.app); client.cookies.set("wp_session", "social-uncertain")
+    preview = client.post("/league/social/preview", data={
+        "league":"11111", "kind":"chat", "body":"one message", "csrf_token":"csrf",
+    }, follow_redirects=False)
+    pending_id = preview.headers["location"].rsplit("/", 1)[1]
+    first = client.post(f"/league/social/send/{pending_id}", data={"csrf_token":"csrf"})
+    assert "Do not submit again" in first.text
+    assert client.post(f"/league/social/send/{pending_id}", data={"csrf_token":"csrf"}).status_code == 404
+    assert attempts == [{"body":"one message", "to_franchise_id":""}]
 
 
 def test_local_playoff_projection_builds_full_three_round_bracket(monkeypatch) -> None:
@@ -634,6 +751,13 @@ def test_local_playoff_projection_builds_full_three_round_bracket(monkeypatch) -
         def fantasy_schedule(self):
             return (MFLFantasyGame(1, tuple(teams), tuple(120 - index for index in range(8))),)
         def transactions(self, **kwargs): return ()
+        def message_board(self, **kwargs): return ()
+        def league_chat(self, **kwargs):
+            return (
+                MFLChatMessage("public", "League-wide", "0002", 3),
+                MFLChatMessage("private-other", "Not for this owner", "0002", 2, "0003"),
+                MFLChatMessage("private-own", "Sent by this owner", "0001", 1, "0003"),
+            )
         def players(self): return {}
 
     monkeypatch.setattr(web_app, "_client", lambda *args: BracketClient())
@@ -642,6 +766,7 @@ def test_local_playoff_projection_builds_full_three_round_bracket(monkeypatch) -
     assert [round_.name for round_ in hq["playoff_rounds"]] == [
         "Quarterfinals", "Semifinals", "Championship",
     ]
+    assert [item.id for item in hq["chat_messages"]] == ["public", "private-own"]
 
 
 def test_kickoff_locks_are_enforced_server_side() -> None:

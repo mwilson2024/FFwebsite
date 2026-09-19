@@ -6,7 +6,7 @@
   <title>{{ league.name }} · Week {{ week or '—' }} Scores</title>
   <link rel="stylesheet" href="/static/app.css?v=20260910-modern">
   <link rel="stylesheet" href="/static/workspace.css?v=2">
-  <link rel="stylesheet" href="/static/fantasy.css?v=status-5">
+  <link rel="stylesheet" href="/static/fantasy.css?v=scoreboard-7">
   <link rel="stylesheet" href="/static/lions.css?v=1">
   <meta name="csrf-token" content="{{ session.csrf_token }}">
   <script src="/static/diagnostics.js" defer></script><script src="/static/app.js?v=scoring-6" defer></script>
@@ -16,15 +16,17 @@
   {% set active_tool = 'scores' %}{% include '_league_header.html' %}
   <main class="gameday-shell">
     <div class="gameday-toolbar">
-      <div><p class="eyebrow">GAME DAY</p><h1>Matchup</h1></div>
+      <div><p class="eyebrow">GAME DAY</p><h1>{{ 'League scoreboard' if score_view == 'all' else 'Matchup' }}</h1><nav class="score-view-switch" aria-label="Score view"><a class="{{ 'active' if score_view == 'matchup' else '' }}" href="/scores?league={{ league.id }}&week={{ week }}">Matchup</a><a class="{{ 'active' if score_view == 'all' else '' }}" href="/scores?league={{ league.id }}&week={{ week }}&view=all">All scores</a></nav></div>
       <form class="week-picker score-filters" method="get" action="/scores">
         <input type="hidden" name="league" value="{{ league.id }}">
+        <input type="hidden" name="view" value="{{ score_view }}">
         <label>View week<select name="week" id="score-week">{% for item in weeks %}<option value="{{ item }}" {% if item == week %}selected{% endif %}>Week {{ item }}{% if item == current_week %} · Current{% endif %}</option>{% endfor %}</select></label>
-        {% if live %}<label>Matchup<select id="matchup-picker" name="matchup"><option value="">My matchup</option>{% for game in live.matchups %}<option value="{{ loop.index0 }}" {% if viewed_matchup == loop.index0 %}selected{% endif %}>{% for team in game.franchises %}{{ franchise_names.get(team.franchise_id, 'Team ' ~ team.franchise_id) }}{{ ' vs ' if not loop.last }}{% endfor %}</option>{% endfor %}</select></label>{% endif %}<button type="submit">View</button>
+        {% if live and score_view != 'all' %}<label>Matchup<select id="matchup-picker" name="matchup"><option value="">My matchup</option>{% for game in live.matchups %}<option value="{{ loop.index0 }}" {% if viewed_matchup == loop.index0 %}selected{% endif %}>{% for team in game.franchises %}{{ franchise_names.get(team.franchise_id, 'Team ' ~ team.franchise_id) }}{{ ' vs ' if not loop.last }}{% endfor %}</option>{% endfor %}</select></label>{% endif %}<button type="submit">View</button>
       </form>
     </div>
     {% if error %}<div class="error" role="alert">{{ error }}{% include '_error_reference.html' %}</div>{% endif %}
-    {% if head_to_head %}
+    {% if score_view == 'all' and live %}<section class="league-scoreboard" aria-labelledby="league-scoreboard-heading"><div class="arena-strip"><span>WEEK {{ week }}</span><strong id="league-scoreboard-heading">ALL LEAGUE SCORES</strong><span>MFL LIVE SCORING</span></div><div class="league-score-grid">{% for matchup in live.matchups %}<article class="league-score-game">{% for team in matchup.franchises %}<div class="{{ 'winning' if team.score == (matchup.franchises|map(attribute='score')|max) and matchup.franchises|length > 1 else '' }}"><span>{{ franchise_names.get(team.franchise_id, 'Franchise ' ~ team.franchise_id) }}</span><strong>{{ '%.2f'|format(team.score) }}</strong><small>{{ team.players_currently_playing }} playing · {{ team.players_yet_to_play }} left</small></div>{% endfor %}<a href="/scores?league={{ league.id }}&week={{ week }}&matchup={{ loop.index0 }}">View box score →</a></article>{% endfor %}</div><footer class="scoring-attribution">Official MFL league scoring.<span id="refresh-status">{% if refresh_seconds %}Live · updates in <b id="refresh-countdown">{{ refresh_seconds }}</b>s{% else %}Auto-updates paused · no NFL game confirmed live.{% endif %}</span><a href="/scores?league={{ league.id }}&week={{ week }}&view=all">Refresh now</a></footer></section>{% endif %}
+    {% if head_to_head and score_view != 'all' %}
     <section class="matchup-arena" aria-label="Week {{ week }} matchup">
       <div class="arena-strip"><span>WEEK {{ week }}</span><strong>{{ head_to_head.game_state }}</strong><span>MFL LIVE SCORING</span></div>
       {% set forecast = head_to_head.forecast %}
@@ -65,7 +67,7 @@
     </section>
     {% endif %}
     {% if live %}
-    <details class="other-matchups"><summary>All Week {{ week }} league matchups</summary><div class="other-matchup-grid">
+    <details class="other-matchups" {% if score_view == 'all' %}hidden{% endif %}><summary>All Week {{ week }} league matchups</summary><div class="other-matchup-grid">
       {% for matchup in live.matchups %}<article>{% for team in matchup.franchises %}<div><span>{{ franchise_names.get(team.franchise_id, 'Franchise ' ~ team.franchise_id) }}</span><strong>{{ '%.2f'|format(team.score) }}</strong></div>{% endfor %}<a href="/scores?league={{ league.id }}&week={{ week }}&matchup={{ loop.index0 }}">View box score →</a></article>{% endfor %}
     </div></details>
     {% endif %}

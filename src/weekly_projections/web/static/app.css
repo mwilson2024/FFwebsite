@@ -393,7 +393,10 @@ small { font-size: .8125rem; }
   .review-actions { align-items: stretch; flex-direction: column; }
   .review-actions form,.review-actions button { width: 100%; }
 }
-.defense-streaming { margin: 1.25rem 0; border: 1px solid var(--site-line); border-radius: 16px; background: var(--site-panel); color: var(--site-text); }
+.defense-streaming { scroll-margin-top:1rem; margin: 1.25rem 0; border: 1px solid var(--site-line); border-radius: 16px; background: var(--site-panel); color: var(--site-text); }
+.defense-stream-link { display:flex; align-items:center; justify-content:space-between; gap:1rem; margin:1rem 0; padding:1rem 1.15rem; border:1px solid var(--site-line); border-left:5px solid var(--site-accent); border-radius:12px; background:var(--site-raised); color:var(--site-text); text-decoration:none; }
+.defense-stream-link span:first-child { display:grid; gap:.2rem; }.defense-stream-link small { color:var(--site-muted); }.defense-stream-link span:last-child { color:var(--site-accent); font-size:1.5rem; }
+.defense-stream-link:hover { background:var(--site-hover); }
 .defense-streaming > summary { padding: 1rem; cursor: pointer; font-weight: 750; color: var(--site-accent); }
 .defense-streaming > summary span { margin-left: .6rem; font-size: .85rem; font-weight: 400; color: var(--site-muted); }
 .defense-stream-content { padding: 0 1rem 1rem; }
