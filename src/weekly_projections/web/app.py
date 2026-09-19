@@ -57,6 +57,8 @@ from weekly_projections.insights import (
     evaluate_projection_accuracy,
     weather_for_roster,
 )
+from weekly_projections.roster_planner import build_roster_plan, load_nfl_schedule
+from weekly_projections.waiver_optimizer import optimize_waiver_queue
 from weekly_projections.live_stats import weekly_boxscore, scoring_components
 from weekly_projections.recommendations import PlayerRecommendation, build_player_board
 from weekly_projections.defense_streaming import rank_defense_streams, defense_waiver_pricing, TALENT_SOURCE_URL, TALENT_SOURCE_DATE
@@ -405,7 +407,7 @@ async def secure_local_responses(request: Request, call_next):
         response.delete_cookie("wp_remember", path="/", httponly=True, samesite="strict", secure=_secure_cookies(request))
     league_id = request.query_params.get("league")
     if (current and request.method == "GET" and response.status_code == 200
-            and request.url.path in {"/home", "/lineup", "/moves", "/scores", "/trades", "/standings", "/league", "/insights"}
+            and request.url.path in {"/home", "/lineup", "/moves", "/scores", "/trades", "/standings", "/league", "/insights", "/planner"}
             and any(item.id == league_id for item in current.leagues)):
         response.set_cookie("wp_last_league", f"{current.year}:{league_id}", max_age=365*86400,
                             httponly=True, samesite="strict", secure=_secure_cookies(request))
@@ -1877,13 +1879,13 @@ def dashboard(request: Request, source: str = ""):
     current = _session(request)
     if not current:
         return RedirectResponse("/", status_code=303)
-    if source in {"pwa-lineup", "pwa-briefing"}:
+    if source in {"pwa-lineup", "pwa-briefing", "pwa-score"}:
         remembered = request.cookies.get("wp_last_league", "")
         selected = next(
             (item for item in current.leagues if remembered == f"{current.year}:{item.id}"),
             current.leagues[0],
         )
-        route = "/lineup" if source == "pwa-lineup" else "/insights"
+        route = {"pwa-lineup": "/lineup", "pwa-briefing": "/insights", "pwa-score": "/scores"}[source]
         return RedirectResponse(route + "?" + urlencode({"league": selected.id}), status_code=303)
     return RedirectResponse(_league_home_url(request, current), status_code=303)
 
@@ -1929,6 +1931,62 @@ def insights_page(request: Request, league: str):
             "depth_updated": "", "reference_rows": (), "alert_count": 0,
         }
     return templates.TemplateResponse(request=request, name="insights.html", context=context)
+
+
+@app.get("/planner", response_class=HTMLResponse)
+def roster_planner_page(request: Request, league: str):
+    current = _require_session(request)
+    selected = _league(current, league)
+    schedule_error = ""
+    depth_error = ""
+    try:
+        client = _client(current, selected)
+        week, roster, recommendations, blend, _ = _load_player_board(client, current)
+        if week is None:
+            raise MFLApiError("MFL did not return the current scoring week")
+        settings = _cached_session_read(
+            current, selected.id, "lineup-settings", client.lineup_settings,
+            ttl=300, stale_ttl=86400,
+        )
+        try:
+            schedule = load_nfl_schedule(current.year)
+        except RuntimeError as error:
+            schedule = {}
+            schedule_error = str(error)
+            _log_provider_error_once(current, selected.id, "planner_schedule_unavailable", error, window=1800)
+        claimable = [item.player for item in recommendations if not item.is_rostered and item.is_claimable]
+        depth_ranks: dict[str, int] = {}
+        try:
+            roles, _, snapshot = depth_chart_roles(
+                [*roster, *claimable], year=current.year,
+                previous=current.depth_snapshots.get(selected.id),
+            )
+            current.depth_snapshots[selected.id] = snapshot
+            depth_ranks = {player_id: role.rank for player_id, role in roles.items() if role.rank is not None}
+        except RuntimeError as error:
+            depth_error = str(error)
+            _log_provider_error_once(current, selected.id, "planner_depth_unavailable", error, window=1800)
+        plan = build_roster_plan(
+            roster=roster, settings=settings, projections=blend.scores,
+            schedule=schedule, current_week=week, recommendations=recommendations,
+            depth_ranks=depth_ranks,
+        )
+        context = {
+            "session": current, "league": selected, "active_tool": "planner",
+            "week": week, "plan": plan, "schedule_error": schedule_error,
+            "depth_error": depth_error, "error": None,
+        }
+    except (MFLApiError, ValueError, requests.RequestException) as error:
+        if isinstance(error, MFLApiError):
+            _log_provider_error_once(current, selected.id, "planner_unavailable", error)
+        else:
+            log_error("planner_unavailable", error)
+        context = {
+            "session": current, "league": selected, "active_tool": "planner",
+            "week": None, "plan": None, "schedule_error": "", "depth_error": "",
+            "error": "The roster planner is temporarily unavailable. Your existing league data was not changed.",
+        }
+    return templates.TemplateResponse(request=request, name="planner.html", context=context)
 
 
 @app.get("/league", response_class=HTMLResponse)
@@ -2304,10 +2362,14 @@ def moves(request: Request, league: str, q: str = "", error: str = ""):
     )
     waiver_defenses = [row for row in defense_streams if not row.item.is_rostered
                        and row.item.market_status in {"waiver", "locked"}]
+    waiver_candidates = [item for item in recommendations if not item.is_rostered
+                         and item.market_status in {"waiver", "locked"}
+                         and item.suggested_drop is not None
+                         and item.roster_delta is not None and item.roster_delta > 0]
     balance = None
     activity = ()
     pricing_error = None
-    if waiver_defenses:
+    if waiver_candidates or waiver_defenses:
         try:
             details = _cached_session_read(current, selected.id, "details", client.league_details, ttl=300)
             franchise = details.franchises.get(selected.franchise_id.zfill(4))
@@ -2321,6 +2383,13 @@ def moves(request: Request, league: str, q: str = "", error: str = ""):
     defense_pricing = defense_waiver_pricing(
         waiver_defenses, balance=balance, transactions=activity,
         catalog=current.player_catalog or {}, now=time.time(),
+    )
+    waiver_queue = optimize_waiver_queue(
+        recommendations,
+        balance=balance,
+        transactions=activity,
+        catalog=current.player_catalog or {},
+        locked_drop_ids=roster_locked,
     )
     fantasy_teams = sorted(
         {
@@ -2346,6 +2415,7 @@ def moves(request: Request, league: str, q: str = "", error: str = ""):
             "talent_source_date": TALENT_SOURCE_DATE,
             "defense_pricing": defense_pricing,
             "defense_pricing_error": pricing_error,
+            "waiver_queue": waiver_queue,
             "nfl_teams": nfl_teams,
             "fantasy_teams": fantasy_teams,
             "week": week,

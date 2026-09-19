@@ -6,12 +6,12 @@
   
   <meta name="csrf-token" content="{{ session.csrf_token }}">
   <title>{{ league.name }} · Player Market</title>
-  <link rel="stylesheet" href="/static/app.css?v=20260919-defense-position">
+  <link rel="stylesheet" href="/static/app.css?v=20260919-waiver-optimizer">
   <link rel="stylesheet" href="/static/workspace.css?v=3">
   <link rel="stylesheet" href="/static/fantasy.css?v=4">
   <link rel="stylesheet" href="/static/lions.css?v=1">
   <script src="/static/diagnostics.js" defer></script>
-  <script src="/static/app.js?v=20260917-defense-stream" defer></script>
+  <script src="/static/app.js?v=20260919-waiver-optimizer" defer></script>
   {% include '_theme_assets.html' %}
 </head>
 <body>
@@ -37,7 +37,7 @@
         <p>ESPN is the primary weekly ranking view. MFL remains authoritative for league scoring, locks, ownership, and moves.</p>
       </section>
 
-      <a class="defense-stream-link" href="#defense-streaming"><span><strong>Streaming a defense?</strong><small>Compare talent, matchup and waiver price</small></span><span aria-hidden="true">↓</span></a>
+      <div class="market-jump-grid"><a class="defense-stream-link" href="#waiver-optimizer"><span><strong>Build my waiver queue</strong><small>Order claims and budget FAAB</small></span><span aria-hidden="true">↓</span></a><a class="defense-stream-link" href="#defense-streaming"><span><strong>Streaming a defense?</strong><small>Compare talent, matchup and waiver price</small></span><span aria-hidden="true">↓</span></a></div>
 
       <form method="post" action="/preview" id="waiver-form">
         <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
@@ -89,6 +89,8 @@
             <p class="empty filtered-empty" id="filtered-empty" hidden>No players match these filters.</p>
           </div>
         </section>
+
+        {% include '_waiver_optimizer.html' %}
 
         <a class="mobile-move-shortcut" id="jump-to-move" href="#move-builder" hidden>Build selected move <span aria-hidden="true">→</span></a>
         <section class="move-builder" id="move-builder" aria-labelledby="move-builder-heading">

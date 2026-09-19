@@ -288,6 +288,21 @@
     moveBuilder?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
     dropSelect?.focus({ preventScroll: true });
   }));
+  document.querySelectorAll("[data-queue-add]").forEach((button) => button.addEventListener("click", () => {
+    const radio = [...document.querySelectorAll('input[name="add_id"]')].find((input) => input.value === button.dataset.queueAdd);
+    const dropOption = dropSelect?.querySelector(`option[value="${CSS.escape(button.dataset.queueDrop || "")}"]:not(:disabled)`);
+    if (!radio || radio.disabled || !dropOption) return;
+    radio.click();
+    dropSelect.value = button.dataset.queueDrop;
+    const bidInput = document.querySelector('#waiver-form input[name="bid"]');
+    const roundInput = document.querySelector('#waiver-form input[name="round_number"]');
+    if (bidInput && button.dataset.queueBid !== "") bidInput.value = button.dataset.queueBid;
+    if (roundInput) roundInput.value = button.dataset.queueRound || "";
+    updateModeFields();
+    updateReviewState();
+    moveBuilder?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+    modeSelect?.focus({ preventScroll: true });
+  }));
   if (moveBuilder && moveShortcut && "IntersectionObserver" in window) {
     new IntersectionObserver(([entry]) => {
       moveBuilderVisible = entry.isIntersecting;

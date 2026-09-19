@@ -60,6 +60,7 @@ def test_pwa_manifest_worker_and_offline_shell_do_not_cache_private_pages() -> N
     assert manifest.status_code == 200
     assert manifest.json()["display"] == "standalone"
     assert {item["sizes"] for item in manifest.json()["icons"]} == {"192x192", "512x512"}
+    assert any(item["short_name"] == "Score" for item in manifest.json()["shortcuts"])
     worker = client.get("/service-worker.js")
     assert worker.status_code == 200
     assert worker.headers["service-worker-allowed"] == "/"
@@ -68,6 +69,91 @@ def test_pwa_manifest_worker_and_offline_shell_do_not_cache_private_pages() -> N
     offline = client.get("/offline")
     assert offline.status_code == 200
     assert "private league pages are never saved" in offline.text
+
+
+def test_pwa_score_shortcut_uses_remembered_league(monkeypatch) -> None:
+    web_app.sessions.clear()
+    league = MFLLeague("11111", "0001", "Home League")
+    web_app.sessions["pwa-score-session"] = web_app.BrowserSession("cookie", 2026, [league], "csrf")
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", "pwa-score-session")
+    response = client.get("/dashboard?source=pwa-score", follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/scores?league=11111"
+
+
+def test_roster_planner_page_renders_schedule_gaps_and_stashes(monkeypatch) -> None:
+    web_app.sessions.clear()
+    league = MFLLeague("11111", "0001", "Home League")
+    web_app.sessions["planner-session"] = web_app.BrowserSession("cookie", 2026, [league], "csrf")
+    quarterback = MFLPlayer("qb", "Starting QB", "QB", "DET")
+    runner = MFLPlayer("rb", "Starting RB", "RB", "BUF")
+    candidate = MFLPlayer("qb2", "Bye Cover", "QB", "KC")
+    board = [PlayerRecommendation(
+        candidate, MFLAvailability("qb2", status="waiver", locked=True), 18, 2,
+        quarterback, "Waiver target", "good", "Upgrade",
+    )]
+    blend = ProjectionBlend(scores={"qb":20, "rb":12, "qb2":18}, mfl_scores={}, ml_scores={}, ml_matched=0)
+
+    class PlannerClient:
+        config = MFLConfig(2026, "11111", "0001")
+        def lineup_settings(self):
+            return MFLLineupSettings(2, (MFLLineupRule("QB", 1, 1), MFLLineupRule("RB", 1, 1)))
+
+    schedule = {}
+    for week in (2, 3, 4, 5, 6, 7, 15, 16, 17):
+        games = {f"T{index}": "vs X" for index in range(24)}
+        games.update({"BUF":"vs MIA", "KC":"@ LV"})
+        if week != 2:
+            games["DET"] = "@ GB"
+        schedule[week] = games
+    monkeypatch.setattr(web_app, "_client", lambda *args: PlannerClient())
+    monkeypatch.setattr(web_app, "_load_player_board", lambda *args: (2, [quarterback, runner], board, blend, set()))
+    monkeypatch.setattr(web_app, "load_nfl_schedule", lambda year: schedule)
+    monkeypatch.setattr(web_app, "depth_chart_roles", lambda *args, **kwargs: ({}, "", {}))
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", "planner-session")
+    response = client.get("/planner?league=11111")
+    assert response.status_code == 200
+    assert "Multi-week roster planner" in response.text
+    assert "Possible open slots: QB" in response.text
+    assert "Bye Cover" in response.text
+    assert "Week 15" in response.text
+
+
+def test_move_page_renders_budget_safe_waiver_queue(monkeypatch) -> None:
+    web_app.sessions.clear()
+    league = MFLLeague("11111", "0001", "Home League")
+    current = web_app.BrowserSession("cookie", 2026, [league], "csrf")
+    web_app.sessions["queue-session"] = current
+    drop = MFLPlayer("drop", "Bench Receiver", "WR", "BUF")
+    add = MFLPlayer("add", "Waiver Receiver", "WR", "DET")
+    board = [PlayerRecommendation(
+        add, MFLAvailability("add", status="waiver", locked=True), 15, 4,
+        drop, "Waiver target", "good", "Projected upgrade",
+    )]
+    current.player_catalog = {"drop": drop, "add": add}
+
+    class QueueClient:
+        config = MFLConfig(2026, "11111", "0001")
+        week_games = {}
+        opponent_strength = {}
+        def league_details(self):
+            return MFLLeagueDetails((), {"0001": MFLFranchise("0001", "My Team", faab_balance=25)})
+        def transactions(self, **kwargs): return ()
+
+    monkeypatch.setattr(web_app, "_client", lambda *args: QueueClient())
+    monkeypatch.setattr(web_app, "_remember_catalog", lambda *args: None)
+    monkeypatch.setattr(web_app, "_load_player_board", lambda *args: (
+        2, [drop], board, ProjectionBlend(scores={"add":15}, mfl_scores={}, ml_scores={}, ml_matched=0), set(),
+    ))
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", "queue-session")
+    response = client.get("/moves?league=11111")
+    assert response.status_code == 200
+    assert "Waiver queue optimizer" in response.text
+    assert 'data-queue-add="add"' in response.text
+    assert "suggested across queue" in response.text
 
 
 def test_insights_page_and_home_briefing_render_from_personalized_context(monkeypatch) -> None:
@@ -271,7 +357,7 @@ def test_defense_streaming_cards_use_loaded_data_and_existing_move_builder(monke
         assert client.get("/moves?league=11111").status_code == 200
         assert reads == {"details": 1, "activity": 1}
         assert f"2026:11111:report:activity" in web_app.sessions[session_id].read_cache
-    assert "20260917-defense-stream" in response.text
+    assert "20260919-waiver-optimizer" in response.text
     assert "themes.css" in response.text and "viewport-fit=cover" in response.text
 
 
@@ -628,7 +714,7 @@ def test_league_hq_renders_intelligence_and_tracks_session_side_bets(monkeypatch
     assert 'data-equal-scroll-cards' in response.text
     assert 'data-scroll-height-source' in response.text
     assert 'data-scroll-height-target' in response.text
-    assert "/static/league.css?v=20260919-social" in response.text
+    assert "/static/league.css?v=20260919-chat-bottom" in response.text
     assert "/static/interface.js?v=4" in response.text
     assert 'class="bracket-round bracket-round-3"' in response.text
     assert "Championship" in response.text
@@ -636,7 +722,8 @@ def test_league_hq_renders_intelligence_and_tracks_session_side_bets(monkeypatch
     assert "Week 1 results" in response.text
     assert "120.00" in response.text
     assert "Side-bet tracker" in response.text
-    assert "Message board &amp; league chat" in response.text
+    assert "Message board" in response.text and "League chat" in response.text
+    assert response.text.index('id="league-chat"') > response.text.index('id="side-bets"')
     assert "Trash talk" in response.text and "Good luck" in response.text
     assert "/league/message-thread/thread-1?league=11111" in response.text
     assert 'action="/league/social/preview"' in response.text

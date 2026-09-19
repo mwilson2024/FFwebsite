@@ -14,6 +14,7 @@
   ],
   "shortcuts": [
     {"name": "Set lineup", "short_name": "Lineup", "url": "/dashboard?source=pwa-lineup"},
-    {"name": "Weekly briefing", "short_name": "Briefing", "url": "/dashboard?source=pwa-briefing"}
+    {"name": "Weekly briefing", "short_name": "Briefing", "url": "/dashboard?source=pwa-briefing"},
+    {"name": "Team score", "short_name": "Score", "url": "/dashboard?source=pwa-score"}
   ]
 }

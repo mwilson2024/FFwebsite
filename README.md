@@ -127,6 +127,24 @@ MFL responses, credentials, CSRF state, and transactions are never cached offlin
 The Settings menu includes installation guidance, device-local alert preferences,
 and app-badge support. Device alerts are evaluated after an authenticated refresh;
 there is no background push server and no push service receives MFL credentials.
+The installed app exposes a direct Team Score shortcut where the host platform
+supports manifest shortcuts. A true iPhone Home Screen widget is not a web/PWA
+feature; that would require a separately shipped native iOS app and WidgetKit
+extension. The signed-in Home screen remains the private, one-tap score surface.
+
+The multi-week roster planner reads the current MFL roster and lineup rules, then
+uses one cached nflverse schedule download to show upcoming byes, likely open
+starter slots, Weeks 15–17 opponents, available-player upgrades, and depth-chart
+RB handcuffs. Missing or partial schedules never create a fake bye. Future-week
+point projections are not fabricated; the displayed projection remains the current
+MFL league-scored value and every suggestion is advisory.
+
+The Players page also builds a conditional waiver queue from positive projected
+roster upgrades. It orders up to six claims, excludes locked drop players, compares
+recent same-position winning bids, and caps the combined suggested FAAB at the
+franchise's displayed remaining balance. Each row only fills the existing add/drop
+builder: the user still chooses the league's current waiver mode and reviews and
+confirms every MFL request separately. Existing claims are never silently replaced.
 
 Depth-chart data is provided by
 [nflverse](https://github.com/nflverse/nflverse-data) and is subject to its source

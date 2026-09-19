@@ -7,7 +7,7 @@
   <title>{{ league.name }} · League HQ</title>
   <link rel="stylesheet" href="/static/app.css?v=league-1">
   <link rel="stylesheet" href="/static/hub.css?v=league-1">
-  <link rel="stylesheet" href="/static/league.css?v=20260919-social">
+  <link rel="stylesheet" href="/static/league.css?v=20260919-chat-bottom">
   <link rel="stylesheet" href="/static/lions.css?v=1">
   <script src="/static/diagnostics.js" defer></script>
   {% include '_theme_assets.html' %}
@@ -20,24 +20,19 @@
     {% else %}
     <section class="league-hq-hero">
       <div><p class="eyebrow">LEAGUE INTELLIGENCE</p><h1>{{ details.name or league.name }}</h1><p>Week {{ current_week }} · MFL data, one clear league view</p></div>
-      <nav class="league-jump" aria-label="League page sections"><a href="#results">Results</a><a href="#league-social">Board &amp; chat</a><a href="#power">Power</a><a href="#waivers">Waivers</a><a href="#activity">Feed</a><a href="#playoffs">Playoffs</a></nav>
+      <nav class="league-jump" aria-label="League page sections"><a href="#results">Results</a><a href="#league-social">Board</a><a href="#power">Power</a><a href="#waivers">Waivers</a><a href="#activity">Feed</a><a href="#playoffs">Playoffs</a><a href="#league-chat">Chat</a></nav>
     </section>
 
     <section class="league-card" id="league-social">
-      <div class="league-section-heading"><div><span class="card-kicker">MFL COMMUNICATIONS</span><h2>Message board &amp; league chat</h2></div><p>Posts are reviewed before they are sent</p></div>
+      <div class="league-section-heading"><div><span class="card-kicker">MFL COMMUNICATIONS</span><h2>Message board</h2></div><p>Posts are reviewed before they are sent</p></div>
       <div class="league-social-grid">
         <section class="message-board-panel">
           <div class="social-panel-heading"><h3>Message board</h3><span>{{ message_threads|length }} recent threads</span></div>
           {% if message_threads %}<ol class="message-thread-list">{% for row in message_threads %}<li><a href="/league/message-thread/{{ row.item.id }}?league={{ league.id }}"><strong>{{ row.item.subject }}</strong><span>{{ row.author }} · {{ row.when }}{% if row.item.replies is not none %} · {{ row.item.replies }} replies{% endif %}</span></a></li>{% endfor %}</ol>{% else %}<p class="empty-state">No recent message-board threads were returned by MFL.</p>{% endif %}
           <details class="social-composer"><summary>Start a message-board thread</summary><form method="post" action="/league/social/preview"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="league" value="{{ league.id }}"><input type="hidden" name="kind" value="board-thread"><label>Subject<input name="subject" maxlength="120" required></label><label>Message<textarea name="body" maxlength="2000" rows="4" required></textarea></label><button>Review thread</button></form></details>
         </section>
-        <section class="league-chat-panel">
-          <div class="social-panel-heading"><h3>League chat</h3><span>MFL chat</span></div>
-          {% if chat_rows %}<ol class="league-chat-list">{% for row in chat_rows %}<li><div><strong>{{ row.author }}</strong>{% if row.recipient %}<span>Private to {{ row.recipient }}</span>{% endif %}<time>{{ row.when }}</time></div><p>{{ row.item.body }}</p></li>{% endfor %}</ol>{% else %}<p class="empty-state">No chat messages yet, or MFL has not created this league's chat feed.</p>{% endif %}
-          <details class="social-composer" open><summary>Post to league chat</summary><form method="post" action="/league/social/preview"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="league" value="{{ league.id }}"><input type="hidden" name="kind" value="chat"><label>Audience<select name="to_franchise_id"><option value="">Everyone</option>{% for team_id,team in teams.items() %}{% if team_id != league.franchise_id.zfill(4) %}<option value="{{ team_id }}">Private · {{ team.name }}</option>{% endif %}{% endfor %}</select></label><label>Message<textarea name="body" maxlength="2000" rows="3" required></textarea></label><button>Review chat message</button></form></details>
-        </section>
       </div>
-      <p class="data-note">Board and chat content comes from MyFantasyLeague. Private chat recipients are enforced by MFL. Messages are escaped before display.</p>
+      <p class="data-note">Message-board content comes from MyFantasyLeague. Posts are escaped before display.</p>
     </section>
 
     {% if errors %}<details class="hq-notice"><summary>Some MFL reports are temporarily unavailable</summary><ul>{% for section,message in errors.items() %}<li>{{ section|title }}: {{ message }}</li>{% endfor %}</ul></details>{% endif %}
@@ -168,6 +163,16 @@
     <section class="league-card" id="side-bets"><div class="league-section-heading"><div><span class="card-kicker">LEAGUE PROPS</span><h2>Side-bet tracker</h2></div><p>Private to this browser session</p></div>
       <form class="side-bet-form" method="post" action="/league/side-bets"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="league" value="{{ league.id }}"><label>Prop<input name="title" maxlength="120" placeholder="Who scores more this week?" required></label><label>Managers / sides<input name="participants" maxlength="120" placeholder="Alex vs. Jordan"></label><label>Stake<input name="stake" maxlength="80" placeholder="$10 or loser buys pizza"></label><button type="submit">Add prop</button></form>
       {% if side_bets %}<div class="bet-list">{% for bet in side_bets %}<article class="{{ bet.status }}"><div><strong>{{ bet.title }}</strong><p>{{ bet.participants or 'Open participants' }}{% if bet.stake %} · {{ bet.stake }}{% endif %}</p></div><span>{{ bet.status|title }}</span>{% if bet.status == 'open' %}<form method="post" action="/league/side-bets/{{ bet.id }}/settle"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="league" value="{{ league.id }}"><button>Mark settled</button></form>{% endif %}</article>{% endfor %}</div>{% else %}<p class="empty-state">No props tracked in this session yet.</p>{% endif %}<p class="data-note">Side bets clear when you disconnect, the server restarts, or the session expires. No payment handling is included.</p>
+    </section>
+
+    <section class="league-card" id="league-chat">
+      <div class="league-section-heading"><div><span class="card-kicker">BOTTOM OF LEAGUE HQ</span><h2>League chat</h2></div><p>MFL chat · public and direct messages</p></div>
+      <section class="league-chat-panel">
+        <div class="social-panel-heading"><h3>Recent conversation</h3><span>{{ chat_rows|length }} messages</span></div>
+        {% if chat_rows %}<ol class="league-chat-list">{% for row in chat_rows %}<li><div><strong>{{ row.author }}</strong>{% if row.recipient %}<span>Private to {{ row.recipient }}</span>{% endif %}<time>{{ row.when }}</time></div><p>{{ row.item.body }}</p></li>{% endfor %}</ol>{% else %}<p class="empty-state">No chat messages yet, or MFL has not created this league's chat feed.</p>{% endif %}
+        <details class="social-composer" open><summary>Post to league chat</summary><form method="post" action="/league/social/preview"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="league" value="{{ league.id }}"><input type="hidden" name="kind" value="chat"><label>Audience<select name="to_franchise_id"><option value="">Everyone</option>{% for team_id,team in teams.items() %}{% if team_id != league.franchise_id.zfill(4) %}<option value="{{ team_id }}">Private · {{ team.name }}</option>{% endif %}{% endfor %}</select></label><label>Message<textarea name="body" maxlength="2000" rows="3" required></textarea></label><button>Review chat message</button></form></details>
+      </section>
+      <p class="data-note">Chat comes from MyFantasyLeague. Private recipients are enforced by MFL, and messages are escaped before display.</p>
     </section>
     {% endif %}
   </main>

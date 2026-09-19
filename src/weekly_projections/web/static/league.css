@@ -97,6 +97,7 @@
 .data-note { color:var(--site-muted); font-size:.74rem; line-height:1.55; margin-top:16px; }
 .empty-state,.hq-notice { color:var(--site-muted); border:1px dashed var(--site-line); border-radius:12px; padding:18px; }
 .league-social-grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+.league-social-grid>.message-board-panel:only-child { grid-column:1/-1; }
 .message-board-panel,.league-chat-panel { min-width:0; border:1px solid var(--site-line); border-radius:14px; padding:15px; background:var(--site-raised); }
 .social-panel-heading { display:flex; justify-content:space-between; align-items:center; gap:10px; }.social-panel-heading h3 { margin:0; }.social-panel-heading span { color:var(--site-muted); font-size:.74rem; }
 .message-thread-list,.league-chat-list,.message-post-list { list-style:none; margin:14px 0; padding:0; }
