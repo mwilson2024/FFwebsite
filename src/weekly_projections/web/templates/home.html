@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/static/app.css?v=20260910-modern"><link rel="stylesheet" href="/static/workspace.css?v=2">
   <link rel="stylesheet" href="/static/fantasy.css?v=status-5"><link rel="stylesheet" href="/static/hub.css?v=2">
   <link rel="stylesheet" href="/static/lions.css?v=1"><link rel="stylesheet" href="/static/michigan.css?v=1">
-  <script src="/static/app.js?v=scoring-7" defer></script><script src="/static/hub.js?v=1" defer></script>
+  <script src="/static/app.js?v=scoring-7" defer></script><script src="/static/hub.js?v=20260920-lazy" defer></script>
   {% include '_theme_assets.html' %}
 </head>
 <body class="gameday-page hub-page">
@@ -16,13 +16,13 @@
     <section class="hub-hero"><div><p class="eyebrow">{{ session.year }} SEASON</p><h1>{{ 'League standings' if active_tool == 'standings' else league.name }}</h1>{% if active_tool == 'standings' %}<p>Official records and points from MFL.</p>{% endif %}</div>{% if active_tool != 'standings' %}<div class="hub-hero-actions"><a href="/insights?league={{ league.id }}">News &amp; briefing</a><a href="/planner?league={{ league.id }}">Roster planner</a><a class="primary-link" href="/lineup?league={{ league.id }}">Manage lineup</a></div>{% endif %}</section>
     {% if connection == 'api-key-added' %}<p class="connection-notice" role="status">MFL API key added for this session.</p>{% elif connection == 'invalid-key' %}<p class="error" role="alert">MFL could not validate that API key. Nothing was saved.</p>{% endif %}
     {% if active_tool != 'standings' %}
-    <section class="hub-panel briefing-panel"><div class="hub-panel-heading"><h2>Your weekly briefing</h2><a href="/insights?league={{ league.id }}">Full intelligence center →</a></div><div data-hub-url="/hub/briefing?league={{ league.id }}" aria-live="polite"><p>Checking lineup risks and next actions…</p></div></section>
+    <section class="hub-panel briefing-panel"><div class="hub-panel-heading"><h2>Your weekly briefing</h2><a href="/insights?league={{ league.id }}">Full intelligence center →</a></div><div data-hub-url="/hub/briefing?league={{ league.id }}" data-hub-priority aria-live="polite"><p>Checking lineup risks and next actions…</p></div></section>
     <div class="hub-grid">
-      <section class="hub-panel hub-matchup"><div class="hub-panel-heading"><h2>Game day &amp; saved lineup</h2><a href="/scores?league={{ league.id }}">Live scores →</a></div><div data-hub-url="/hub/matchup?league={{ league.id }}" aria-live="polite"><p>Loading your current MFL matchup…</p></div></section>
+      <section class="hub-panel hub-matchup"><div class="hub-panel-heading"><h2>Game day &amp; saved lineup</h2><a href="/scores?league={{ league.id }}">Live scores →</a></div><div data-hub-url="/hub/matchup?league={{ league.id }}" data-hub-priority aria-live="polite"><p>Loading your current MFL matchup…</p></div></section>
       <section class="hub-panel"><div class="hub-panel-heading"><h2>Players to watch</h2><a href="/moves?league={{ league.id }}">All players →</a></div><div data-hub-url="/hub/pickups?league={{ league.id }}" aria-live="polite"><p>Checking available players…</p></div></section>
     </div>
     {% endif %}
-    <section class="hub-panel" id="standings"><div class="hub-panel-heading"><h2>Standings</h2><span>MFL · {{ league.name }}</span></div><div data-hub-url="/hub/standings?league={{ league.id }}" aria-live="polite"><p>Loading league standings…</p></div></section>
+    <section class="hub-panel" id="standings"><div class="hub-panel-heading"><h2>Standings</h2><span>MFL · {{ league.name }}</span></div><div data-hub-url="/hub/standings?league={{ league.id }}"{% if active_tool == 'standings' %} data-hub-priority{% endif %} aria-live="polite"><p>Loading league standings…</p></div></section>
     <p class="hub-footnote">Your last league is remembered on this device. Each section uses the selected league’s data and scoring. Your password is not saved.</p>
   </main>
 </body>

@@ -53,6 +53,8 @@ def test_home_remembers_only_authorized_league_and_not_widget_navigation(hub, mo
     soup = BeautifulSoup(home.text, 'html.parser')
     assert len(soup.select('select[name="league"]')) == 1
     assert len(soup.select('[data-hub-url]')) == 4
+    assert len(soup.select('[data-hub-priority]')) == 2
+    assert '/static/hub.js?v=20260920-lazy' in home.text
     assert '/home?league=22222' == client.get('/dashboard', follow_redirects=False).headers['location']
     assert client.get('/home?league=99999').status_code == 404
     assert client.get('/hub/block?league=12345').status_code == 200
@@ -167,6 +169,7 @@ def test_hub_sections_escape_feed_text_and_fail_independently(hub, monkeypatch):
     def fail(): raise MFLApiError('private upstream error')
     monkeypatch.setattr(mfl, 'league_standings', fail)
     session.read_cache.clear()
+    web.shared_read_cache.clear()
     result = client.get('/hub/standings?league=12345')
     assert 'data-hub-retry' in result.text and 'private upstream error' not in result.text
     assert client.get('/home?league=12345').status_code == 200

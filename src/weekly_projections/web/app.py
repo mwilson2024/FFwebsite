@@ -6,13 +6,14 @@ import math
 import statistics
 import time
 import hashlib
-from datetime import datetime
+from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from itertools import zip_longest
 from pathlib import Path
 from threading import BoundedSemaphore, Lock, RLock
 from typing import Literal
 from urllib.parse import urlencode, urlsplit
+from zoneinfo import ZoneInfo
 
 import uvicorn
 import requests
@@ -83,6 +84,9 @@ _INDIVIDUAL_DEFENSE_POSITIONS = {
 }
 _SCORING_RULES_TTL = 7 * 86400
 _SCORING_RULES_STALE_TTL = 14 * 86400
+_APP_TIME_ZONE = ZoneInfo(os.getenv("WP_TIME_ZONE", "America/New_York"))
+_LEAGUE_STATIC_STALE_TTL = 7 * 86400
+_SHARED_READ_CACHE_LIMIT = 512
 
 
 def _board_position(player: MFLPlayer) -> str:
@@ -344,6 +348,8 @@ login_attempts_lock = Lock()
 login_slots = BoundedSemaphore(4)
 trade_send_lock = Lock()
 social_send_lock = Lock()
+shared_read_cache: dict[str, tuple[float, object]] = {}
+shared_read_lock = RLock()
 initialize_log()
 app = FastAPI(title="Weekly Projections · MFL Moves", docs_url=None, redoc_url=None)
 
@@ -621,14 +627,32 @@ def _cached_session_read(
     *,
     ttl: int = 60,
     stale_ttl: int = 900,
+    shared: bool = False,
 ):
-    """Coalesce display reads, serve bounded stale data, and stop 429 cascades."""
+    """Coalesce display reads, serve bounded stale data, and stop 429 cascades.
+
+    Selected read-only reports can also use a process cache. Its namespace is
+    scoped to the authenticated MFL session/account and never stores the MFL
+    cookie itself. This lets a remembered browser session reuse stable data
+    after its eight-hour active session rotates on a one-worker Azure host.
+    """
     cache_key = f"{current.year}:{league_id}:report:{label}"
     with current.read_lock:
         now = time.monotonic()
         cached = current.read_cache.get(cache_key)
         if cached and cached[0] > now:
             return cached[1]
+        shared_key = ""
+        if shared:
+            owner_scope = hashlib.sha256(current.mfl_cookie.encode("utf-8")).hexdigest()
+            shared_key = f"{owner_scope}:{cache_key}"
+            with shared_read_lock:
+                shared_cached = shared_read_cache.get(shared_key)
+            if shared_cached:
+                current.read_cache[cache_key] = shared_cached
+                cached = shared_cached
+                if shared_cached[0] > now:
+                    return shared_cached[1]
         stale = cached if cached and cached[0] + max(0, stale_ttl) > now else None
         cooldown_until = current.provider_cooldowns.get(league_id, 0)
         if cooldown_until > now:
@@ -652,8 +676,75 @@ def _cached_session_read(
                 return stale[1]
             raise
         current.provider_cooldowns.pop(league_id, None)
-        current.read_cache[cache_key] = (time.monotonic() + max(1, ttl), value)
+        entry = (time.monotonic() + max(1, ttl), value)
+        current.read_cache[cache_key] = entry
+        if shared and shared_key:
+            with shared_read_lock:
+                expired = [key for key, item in shared_read_cache.items() if item[0] <= now]
+                for key in expired:
+                    shared_read_cache.pop(key, None)
+                if len(shared_read_cache) >= _SHARED_READ_CACHE_LIMIT:
+                    oldest = min(shared_read_cache, key=lambda key: shared_read_cache[key][0])
+                    shared_read_cache.pop(oldest, None)
+                shared_read_cache[shared_key] = entry
         return value
+
+
+def _seconds_until_daily_refresh(now: datetime | None = None) -> int:
+    """Expire daily league reports at the next Eastern midnight."""
+    current = now.astimezone(_APP_TIME_ZONE) if now else datetime.now(_APP_TIME_ZONE)
+    tomorrow = current.date() + timedelta(days=1)
+    midnight = datetime(tomorrow.year, tomorrow.month, tomorrow.day, tzinfo=_APP_TIME_ZONE)
+    return max(60, int((midnight - current).total_seconds()))
+
+
+def _score_cache_ttl(
+    *,
+    selected_week: int,
+    current_week: int,
+    refresh_state: dict[str, object],
+    now: float | None = None,
+) -> int:
+    """Keep final/between-game scoring while remaining live during NFL games."""
+    if selected_week != current_week:
+        return 30 * 86400
+    if refresh_state.get("active"):
+        return 30
+    current_time = time.time() if now is None else now
+    next_kickoff = refresh_state.get("next_kickoff")
+    if isinstance(next_kickoff, (int, float)) and next_kickoff > current_time:
+        return max(30, int(next_kickoff - current_time))
+    return _seconds_until_daily_refresh()
+
+
+def _refresh_state_for_week(
+    current: BrowserSession | None,
+    client: MFLClient,
+    *,
+    selected_week: int,
+    current_week: int,
+) -> dict[str, object] | None:
+    if selected_week != current_week:
+        return {"active": False, "next_kickoff": None}
+    try:
+        if current is None:
+            return client.nfl_refresh_state(week=selected_week, now=time.time())
+        return _cached_session_read(
+            current, "mfl-global", f"refresh-state:{selected_week}",
+            lambda: client.nfl_refresh_state(week=selected_week, now=time.time()),
+            ttl=30, stale_ttl=120, shared=True,
+        )
+    except (MFLApiError, AttributeError):
+        return None
+
+
+def _cached_current_week(current: BrowserSession | None, client: MFLClient) -> int | None:
+    if current is None:
+        return client.current_week()
+    return _cached_session_read(
+        current, "mfl-global", "week", client.current_week,
+        ttl=900, stale_ttl=86400, shared=True,
+    )
 
 
 def _log_provider_error_once(
@@ -683,7 +774,17 @@ def _remember_catalog(current: BrowserSession, client: MFLClient) -> None:
 
 
 def _invalidate_player_board(current: BrowserSession, league_id: str) -> None:
-    current.read_cache.pop(f"{current.year}:{league_id}:player-board", None)
+    prefixes = (
+        f"{current.year}:{league_id}:player-board",
+        f"{current.year}:{league_id}:home-player-board",
+    )
+    report_tokens = (":report:free-agents", ":report:league-rosters", ":report:roster:")
+    for key in tuple(current.read_cache):
+        if key.startswith(prefixes) or (
+            key.startswith(f"{current.year}:{league_id}:")
+            and any(token in key for token in report_tokens)
+        ):
+            current.read_cache.pop(key, None)
 
 
 def _standings_groups(rows: list[dict], details) -> list[dict]:
@@ -725,7 +826,10 @@ def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
         return cached[1]
     client = _client(current, selected)
     errors: dict[str, str] = {}
-    details = _cached_session_read(current, selected.id, "details", client.league_details, ttl=300)
+    details = _cached_session_read(
+        current, selected.id, "details", client.league_details,
+        ttl=900, stale_ttl=_LEAGUE_STATIC_STALE_TTL,
+    )
     names = {team_id: team.name for team_id, team in details.franchises.items()}
 
     def read(label, loader, fallback):
@@ -740,13 +844,20 @@ def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
             return fallback
 
     current_week = read(
-        "week", lambda: _cached_session_read(current, selected.id, "week", client.current_week), None,
+        "week", lambda: _cached_current_week(current, client), None,
     ) or details.start_week
+    daily_ttl = _seconds_until_daily_refresh()
     standings = read(
-        "standings", lambda: _cached_session_read(current, selected.id, "standings", client.league_standings), [],
+        "standings", lambda: _cached_session_read(
+            current, selected.id, "standings", client.league_standings,
+            ttl=daily_ttl, stale_ttl=_LEAGUE_STATIC_STALE_TTL, shared=True,
+        ), [],
     )
     schedule = read(
-        "schedule", lambda: _cached_session_read(current, selected.id, "schedule", client.fantasy_schedule), (),
+        "schedule", lambda: _cached_session_read(
+            current, selected.id, "schedule", client.fantasy_schedule,
+            ttl=daily_ttl, stale_ttl=_LEAGUE_STATIC_STALE_TTL, shared=True,
+        ), (),
     )
     activity = read(
         "activity",
@@ -759,14 +870,14 @@ def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
     message_threads = read(
         "message_board",
         lambda: _cached_session_read(
-            current, selected.id, "message-board", lambda: client.message_board(count=12), ttl=90,
+            current, selected.id, "message-board", lambda: client.message_board(count=12), ttl=300,
         ),
         (),
     ) if hasattr(client, "message_board") else ()
     chat_messages = read(
         "league_chat",
         lambda: _cached_session_read(
-            current, selected.id, "league-chat", lambda: client.league_chat(count=30), ttl=60,
+            current, selected.id, "league-chat", lambda: client.league_chat(count=30), ttl=300,
         ),
         (),
     ) if hasattr(client, "league_chat") else ()
@@ -774,7 +885,10 @@ def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
     chat_messages = tuple(item for item in chat_messages if not item.to_franchise_id.strip("0")
                           or item.to_franchise_id == own_id or item.franchise_id == own_id)
     catalog = read(
-        "players", lambda: _cached_session_read(current, selected.id, "players", client.players, ttl=900), {},
+        "players", lambda: _cached_session_read(
+            current, "mfl-global", "players", client.players,
+            ttl=86400, stale_ttl=7 * 86400, shared=True,
+        ), {},
     )
     _remember_catalog(current, client)
     regular_schedule = tuple(game for game in schedule if game.week <= details.last_regular_season_week)
@@ -841,7 +955,7 @@ def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
         "playoff_seeds": seeds,
         "errors": errors,
     }
-    current.read_cache[cache_key] = (time.monotonic() + 90, result)
+    current.read_cache[cache_key] = (time.monotonic() + min(90, daily_ttl), result)
     return result
 
 
@@ -1045,6 +1159,9 @@ def _attach_opponent_strength(
 def _load_player_board(
     client: MFLClient,
     current: BrowserSession | None = None,
+    *,
+    include_reference: bool = True,
+    include_score_context: bool = True,
 ) -> tuple[
     int | None,
     list[MFLPlayer],
@@ -1053,13 +1170,15 @@ def _load_player_board(
     set[str],
 ]:
     cache = getattr(client, "_browser_read_cache", None)
-    cache_key = f"{client.config.year}:{client.config.league_id}:player-board"
+    board_label = "player-board" if include_reference and include_score_context else "home-player-board"
+    cache_key = f"{client.config.year}:{client.config.league_id}:{board_label}"
     now = time.monotonic()
     if cache is not None:
         cached = cache.get(cache_key)
         if cached and cached[0] > now:
             cached_week, _, cached_board, _, _ = cached[1]
-            _load_player_score_summaries(client, current, cached_week)
+            if include_score_context:
+                _load_player_score_summaries(client, current, cached_week)
             if len(cached) >= 4:
                 client.week_games = cached[2]
                 client.opponent_strength = cached[3]
@@ -1091,7 +1210,14 @@ def _load_player_board(
         franchise_id.zfill(4): franchise.name
         for franchise_id, franchise in details.franchises.items()
     }
-    catalog = read("players", client.players, ttl=3600, stale_ttl=86400)
+    catalog = (
+        read("players", client.players, ttl=86400, stale_ttl=7 * 86400)
+        if current is None
+        else _cached_session_read(
+            current, "mfl-global", "players", client.players,
+            ttl=86400, stale_ttl=7 * 86400, shared=True,
+        )
+    )
     roster = [catalog.get(player_id, MFLPlayer(id=player_id, name=player_id)) for player_id in roster_ids]
     available_players = [
         catalog.get(player_id, MFLPlayer(id=player_id, name=player_id))
@@ -1109,7 +1235,7 @@ def _load_player_board(
     availability = {
         player_id: state for player_id, state in availability.items() if player_id in visible_ids
     }
-    week = read("week", client.current_week, ttl=300, stale_ttl=86400)
+    week = _cached_current_week(current, client)
     roster_locked: set[str] = set()
     bye_teams: set[str] = set()
     if week is not None:
@@ -1118,10 +1244,16 @@ def _load_player_board(
                 loaded_kickoffs = client.nfl_team_kickoffs(week=week)
                 return loaded_kickoffs, dict(getattr(client, "week_games", {}))
 
-            kickoffs, week_games = read(
-                f"nfl-schedule:{week}", load_week_schedule,
-                ttl=300, stale_ttl=3600,
-            )
+            if current is None:
+                kickoffs, week_games = read(
+                    f"nfl-schedule:{week}", load_week_schedule,
+                    ttl=300, stale_ttl=3600,
+                )
+            else:
+                kickoffs, week_games = _cached_session_read(
+                    current, "mfl-global", f"nfl-schedule:{week}", load_week_schedule,
+                    ttl=300, stale_ttl=3600, shared=True,
+                )
             client.week_games = week_games
             schedule_locked = _locked_player_ids(available_players, kickoffs)
             roster_locked = _locked_player_ids(roster, kickoffs)
@@ -1164,7 +1296,7 @@ def _load_player_board(
             include_espn=True,
             espn_rank_type=os.getenv("WP_ESPN_RANKING_FORMAT", "PPR"),
         )
-        if week is not None
+        if week is not None and include_reference
         else ProjectionBlend(
             scores=projections,
             mfl_scores=projections,
@@ -1183,15 +1315,22 @@ def _load_player_board(
         projections=blend.scores,
         bye_teams=bye_teams,
     )
-    _load_player_score_summaries(client, current, week)
-    _attach_opponent_strength(client, current, all_players)
+    if include_score_context:
+        _load_player_score_summaries(client, current, week)
+        _attach_opponent_strength(client, current, all_players)
+    else:
+        client.player_ytd_scores = {}
+        client.player_avg_scores = {}
+        client.player_median_scores = {}
+        client.player_median_window = 0
+        client.opponent_strength = {}
     result = (week, roster, recommendations, blend, roster_locked)
     if cache is not None:
         # This board combines several large MFL exports. A brief cache keeps
         # home widgets and the player page from immediately repeating them,
         # while submission-time ownership and lock checks remain live.
         cache[cache_key] = (
-            time.monotonic() + 30,
+            time.monotonic() + 300,
             result,
             dict(getattr(client, "week_games", {})),
             dict(getattr(client, "opponent_strength", {})),
@@ -1203,6 +1342,9 @@ def _load_lineup(
     client: MFLClient,
     requested_week: int | None = None,
     current: BrowserSession | None = None,
+    *,
+    include_reference: bool = True,
+    include_score_context: bool = True,
 ) -> tuple[int, LineupRecommendation, MFLLineupSettings, ProjectionBlend]:
     def read(label, loader, *, ttl=60, stale_ttl=900, global_feed=False):
         if current is None:
@@ -1216,9 +1358,8 @@ def _load_lineup(
             stale_ttl=stale_ttl,
         )
 
-    week = requested_week if requested_week is not None else read(
-        "week", client.current_week, ttl=300, stale_ttl=86400, global_feed=True,
-    )
+    current_week = _cached_current_week(current, client)
+    week = requested_week if requested_week is not None else current_week
     if week is None:
         raise MFLApiError("MFL did not return the current lineup week")
     if not 1 <= week <= 18:
@@ -1226,9 +1367,15 @@ def _load_lineup(
     live = None
     live_statuses: dict[str, str] = {}
     try:
+        refresh_state = _refresh_state_for_week(
+            current, client, selected_week=week, current_week=current_week,
+        )
+        live_ttl = _score_cache_ttl(
+            selected_week=week, current_week=current_week, refresh_state=refresh_state,
+        ) if refresh_state is not None else 30
         live = read(
             f"live-scoring:{week}", lambda: client.live_scoring(week=week),
-            ttl=30, stale_ttl=300,
+            ttl=live_ttl, stale_ttl=7 * 86400,
         )
         for matchup in live.matchups:
             own = next(
@@ -1313,17 +1460,28 @@ def _load_lineup(
         )
     except MFLApiError:
         injuries = {}
-    blend = projection_blend(
-        roster,
-        year=client.config.year,
-        week=week,
-        mfl_scores=projections,
-        session=client.session,
-        include_espn=True,
-        espn_rank_type=os.getenv("WP_ESPN_RANKING_FORMAT", "PPR"),
+    blend = (
+        projection_blend(
+            roster,
+            year=client.config.year,
+            week=week,
+            mfl_scores=projections,
+            session=client.session,
+            include_espn=True,
+            espn_rank_type=os.getenv("WP_ESPN_RANKING_FORMAT", "PPR"),
+        )
+        if include_reference
+        else ProjectionBlend(scores=projections, mfl_scores=projections, ml_scores={}, ml_matched=0)
     )
-    _load_player_score_summaries(client, current, week)
-    _attach_opponent_strength(client, current, roster)
+    if include_score_context:
+        _load_player_score_summaries(client, current, week)
+        _attach_opponent_strength(client, current, roster)
+    else:
+        client.player_ytd_scores = {}
+        client.player_avg_scores = {}
+        client.player_median_scores = {}
+        client.player_median_window = 0
+        client.opponent_strength = {}
     recommendation = recommend_lineup(
         roster=roster,
         settings=settings,
@@ -1400,7 +1558,12 @@ def _load_insights(
     include_accuracy: bool,
 ) -> dict:
     client = _client(current, selected)
-    week, lineup, settings, blend = _load_lineup(client, current=current)
+    week, lineup, settings, blend = _load_lineup(
+        client,
+        current=current,
+        include_reference=include_external or include_accuracy,
+        include_score_context=include_external,
+    )
     roster = [item.player for item in lineup.players]
     errors: dict[str, str] = {}
     depth_roles, depth_updated = {}, ""
@@ -1552,6 +1715,7 @@ def _load_live_scoring_week(
     requested_week: int | None,
     matchup_index: int | None = None,
     current: BrowserSession | None = None,
+    include_reference: bool = True,
 ) -> tuple[int, int, MFLLiveScoring, dict[str, str], HeadToHeadView | None]:
     def read(label, loader, *, ttl=60, stale_ttl=900):
         if current is None:
@@ -1560,19 +1724,35 @@ def _load_live_scoring_week(
             current, client.config.league_id, label, loader, ttl=ttl, stale_ttl=stale_ttl,
         )
 
-    current_week = read("week", client.current_week, ttl=300, stale_ttl=86400)
+    current_week = _cached_current_week(current, client)
     if current_week is None:
         raise MFLApiError("MFL did not return the current scoring week")
     week = requested_week if requested_week is not None else current_week
     if week < 1 or week > 18:
         raise ValueError("Choose an NFL week from 1 through 18")
+    refresh_state = _refresh_state_for_week(
+        current, client, selected_week=week, current_week=current_week,
+    )
+    client.live_refresh_state = refresh_state or {"active": False, "next_kickoff": None}
+    score_ttl = _score_cache_ttl(
+        selected_week=week,
+        current_week=current_week,
+        refresh_state=refresh_state,
+    ) if refresh_state is not None else 30
     live = read(
         f"live-scoring:{week}", lambda: client.live_scoring(week=week),
-        ttl=30 if week == current_week else 3600,
-        stale_ttl=300 if week == current_week else 86400,
+        ttl=score_ttl,
+        stale_ttl=7 * 86400 if week == current_week else 60 * 86400,
     )
     names = read("franchise-names", client.franchise_names, ttl=300, stale_ttl=86400)
-    catalog = read("players", client.players, ttl=3600, stale_ttl=86400)
+    catalog = (
+        read("players", client.players, ttl=86400, stale_ttl=7 * 86400)
+        if current is None
+        else _cached_session_read(
+            current, "mfl-global", "players", client.players,
+            ttl=86400, stale_ttl=7 * 86400, shared=True,
+        )
+    )
     focused_matchup = next(
         (
             matchup
@@ -1604,13 +1784,17 @@ def _load_live_scoring_week(
         mfl_projections = {player_id: all_projections[player_id] for player_id in player_ids if player_id in all_projections}
     except MFLApiError:
         mfl_projections = {}
-    projections = projection_blend(
-        focused_players,
-        year=client.config.year,
-        week=week,
-        mfl_scores=mfl_projections,
-        session=client.session,
-    ).scores
+    projections = (
+        projection_blend(
+            focused_players,
+            year=client.config.year,
+            week=week,
+            mfl_scores=mfl_projections,
+            session=client.session,
+        ).scores
+        if include_reference
+        else mfl_projections
+    )
     teams: list[LiveTeamView] = []
     for franchise in (focused_matchup.franchises if focused_matchup else ()):
         players = [
@@ -1648,7 +1832,10 @@ def _load_live_scoring_week(
         )
     teams.sort(key=lambda team: team.franchise_id != client.config.franchise_id)
     try:
-        settings = client.lineup_settings()
+        settings = read(
+            "lineup-settings", client.lineup_settings,
+            ttl=7 * 86400, stale_ttl=30 * 86400,
+        )
     except MFLApiError as error:
         log_error("matchup_slots_unavailable", error)
         settings = None
@@ -2227,24 +2414,39 @@ def hub_section(request: Request, section: str, league: str, target: str = "", w
     context = {"session": current, "league": selected, "section": section, "error": None}
     try:
         if section == "briefing":
-            briefing = _load_insights(
-                current, selected, include_external=False, include_accuracy=False,
+            briefing = _cached_session_read(
+                current, selected.id, "home-briefing",
+                lambda: _load_insights(
+                    current, selected, include_external=False, include_accuracy=False,
+                ),
+                ttl=300, stale_ttl=3600,
             )
             context.update(week=briefing["week"], actions=briefing["actions"])
         elif section == "matchup":
-            week, _, _, _, matchup = _load_live_scoring_week(client, requested_week=None, current=current)
+            week, _, _, _, matchup = _load_live_scoring_week(
+                client, requested_week=None, current=current, include_reference=False,
+            )
             own = selected.franchise_id.zfill(4)
             if not matchup or not any(team.franchise_id.zfill(4) == own for team in matchup.teams):
                 raise ValueError("MFL has no current matchup for your team.")
             context.update(week=week, matchup=matchup, own=own)
         elif section == "pickups":
-            week, _, recommendations, _, _ = _load_player_board(client, current)
+            week, _, recommendations, _, _ = _load_player_board(
+                client, current, include_reference=False, include_score_context=False,
+            )
             picks = [item for item in recommendations if item.availability.claimable
                      and item.projection is not None and item.roster_delta is not None and item.roster_delta > 0][:5]
             context.update(week=week, picks=picks)
         elif section == "standings":
-            rows = _cached_session_read(current, selected.id, "standings", client.league_standings)
-            details = _cached_session_read(current, selected.id, "details", client.league_details, ttl=300)
+            rows = _cached_session_read(
+                current, selected.id, "standings", client.league_standings,
+                ttl=_seconds_until_daily_refresh(), stale_ttl=_LEAGUE_STATIC_STALE_TTL,
+                shared=True,
+            )
+            details = _cached_session_read(
+                current, selected.id, "details", client.league_details,
+                ttl=900, stale_ttl=_LEAGUE_STATIC_STALE_TTL,
+            )
             context.update(
                 rows=rows,
                 groups=_standings_groups(rows, details),
@@ -2269,9 +2471,7 @@ def hub_section(request: Request, section: str, league: str, target: str = "", w
             context.update(block=block, catalog=catalog, names=names, own_block=own_block,
                            players=sorted((catalog[p] for p in roster if p in catalog), key=lambda p:(p.position, p.name)))
         else:
-            week = _cached_session_read(
-                current, selected.id, "week", client.current_week, ttl=300, stale_ttl=86400,
-            )
+            week = _cached_current_week(current, client)
             if week is None:
                 raise ValueError("The current projection week is unavailable.")
             own = selected.franchise_id.zfill(4)
@@ -2543,14 +2743,15 @@ def scores_page(request: Request, league: str, week: int | None = None, matchup:
         current.selected_week = selected_week
     refresh_state = {"active": False, "next_kickoff": None}
     if selected_week is not None and selected_week == current_week:
-        try:
-            refresh_state = _cached_session_read(
-                current, selected.id, f"refresh-state:{selected_week}",
-                lambda: client.nfl_refresh_state(week=selected_week, now=time.time()),
-                ttl=30, stale_ttl=120,
+        loaded_refresh_state = getattr(client, "live_refresh_state", None)
+        if isinstance(loaded_refresh_state, dict):
+            refresh_state = loaded_refresh_state
+        else:
+            loaded_refresh_state = _refresh_state_for_week(
+                current, client, selected_week=selected_week, current_week=current_week,
             )
-        except (MFLApiError, AttributeError) as exc:
-            log_error("nfl_refresh_state_unavailable", exc)
+            if loaded_refresh_state is not None:
+                refresh_state = loaded_refresh_state
     return templates.TemplateResponse(
         request=request,
         name="scores.html",
@@ -2580,16 +2781,12 @@ def live_window(request: Request, league: str, week: int):
         raise HTTPException(status_code=400, detail="Choose a valid week")
     client = _client(current, selected)
     try:
-        current_week = _cached_session_read(
-            current, selected.id, "week", client.current_week, ttl=300, stale_ttl=86400,
-        )
+        current_week = _cached_current_week(current, client)
         if current_week != week:
             return {"active": False, "next_kickoff": None}
-        return _cached_session_read(
-            current, selected.id, f"refresh-state:{week}",
-            lambda: client.nfl_refresh_state(week=week, now=time.time()),
-            ttl=30, stale_ttl=120,
-        )
+        return _refresh_state_for_week(
+            current, client, selected_week=week, current_week=current_week,
+        ) or {"active": False, "next_kickoff": None}
     except MFLApiError:
         # Uncertain game state must not turn into round-the-clock score polling.
         return {"active": False, "next_kickoff": None}
@@ -2783,6 +2980,9 @@ def submit_lineup(request: Request, pending_id: str, csrf_token: str = Form(...)
             f"{current.year}:{league.id}:report:roster-status:"
             f"{league.franchise_id}:{preview.week}",
             None,
+        )
+        current.read_cache.pop(
+            f"{current.year}:{league.id}:report:home-briefing", None,
         )
         error = None
     except (MFLApiError, ValueError) as caught:
@@ -3267,9 +3467,7 @@ def api_player_card(request: Request, player_id: str, league: str, week: int | N
     selected_week = week if week is not None else current.selected_week
     if selected_week is None:
         try:
-            selected_week = _cached_session_read(
-                current, selected.id, "week", client.current_week, ttl=300, stale_ttl=86400,
-            )
+            selected_week = _cached_current_week(current, client)
         except MFLApiError as error:
             _log_provider_error_once(current, selected.id, "player_card_week_unavailable", error)
             raise HTTPException(status_code=503, detail="The current MFL week is temporarily unavailable.") from error

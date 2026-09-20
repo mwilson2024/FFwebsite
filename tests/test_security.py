@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
@@ -189,3 +191,44 @@ def test_rate_limit_circuit_serves_stale_data_without_repeating_provider_call():
     assert web._cached_session_read(current, "12345", "standings", throttled, stale_ttl=900) == ["saved"]
     assert web._cached_session_read(current, "12345", "standings", throttled, stale_ttl=900) == ["saved"]
     assert calls == ["ok", "429"]
+
+
+def test_daily_and_game_aware_cache_windows():
+    eastern = ZoneInfo("America/New_York")
+    assert web._seconds_until_daily_refresh(
+        datetime(2026, 9, 19, 23, 30, tzinfo=eastern)
+    ) == 1800
+    assert web._score_cache_ttl(
+        selected_week=2, current_week=2,
+        refresh_state={"active": True, "next_kickoff": None}, now=1_000,
+    ) == 30
+    assert web._score_cache_ttl(
+        selected_week=2, current_week=2,
+        refresh_state={"active": False, "next_kickoff": 4_600}, now=1_000,
+    ) == 3600
+    assert web._score_cache_ttl(
+        selected_week=1, current_week=2,
+        refresh_state={"active": False, "next_kickoff": None}, now=1_000,
+    ) == 30 * 86400
+
+
+def test_shared_stable_cache_is_account_scoped():
+    web.shared_read_cache.clear()
+    league = MFLLeague("12345", "0001", "One")
+    first = web.BrowserSession("same-cookie", 2026, [league], "one")
+    restored = web.BrowserSession("same-cookie", 2026, [league], "two")
+    another = web.BrowserSession("other-cookie", 2026, [league], "three")
+    calls = []
+    assert web._cached_session_read(
+        first, league.id, "daily-test", lambda: calls.append("first") or ["saved"],
+        ttl=86400, shared=True,
+    ) == ["saved"]
+    assert web._cached_session_read(
+        restored, league.id, "daily-test", lambda: calls.append("restored"),
+        ttl=86400, shared=True,
+    ) == ["saved"]
+    assert web._cached_session_read(
+        another, league.id, "daily-test", lambda: calls.append("other") or ["other"],
+        ttl=86400, shared=True,
+    ) == ["other"]
+    assert calls == ["first", "other"]

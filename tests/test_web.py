@@ -714,7 +714,7 @@ def test_league_hq_renders_intelligence_and_tracks_session_side_bets(monkeypatch
     assert 'data-equal-scroll-cards' in response.text
     assert 'data-scroll-height-source' in response.text
     assert 'data-scroll-height-target' in response.text
-    assert "/static/league.css?v=20260919-chat-bottom" in response.text
+    assert "/static/league.css?v=20260920-social-bottom" in response.text
     assert "/static/interface.js?v=4" in response.text
     assert 'class="bracket-round bracket-round-3"' in response.text
     assert "Championship" in response.text
@@ -723,6 +723,7 @@ def test_league_hq_renders_intelligence_and_tracks_session_side_bets(monkeypatch
     assert "120.00" in response.text
     assert "Side-bet tracker" in response.text
     assert "Message board" in response.text and "League chat" in response.text
+    assert response.text.index('id="league-social"') > response.text.index('id="side-bets"')
     assert response.text.index('id="league-chat"') > response.text.index('id="side-bets"')
     assert "Trash talk" in response.text and "Good luck" in response.text
     assert "/league/message-thread/thread-1?league=11111" in response.text

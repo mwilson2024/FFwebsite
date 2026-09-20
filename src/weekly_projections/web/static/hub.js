@@ -14,8 +14,30 @@
       panel.replaceChildren(message, button);
     } finally { panel.dataset.loading = 'false'; panel.removeAttribute('aria-busy'); }
   };
-  const worker = async () => { while (panels.length) await load(panels.shift()); };
-  worker(); worker();
+  const queue = [];
+  let workers = 0;
+  const pump = () => {
+    while (workers < 2 && queue.length) {
+      workers += 1;
+      load(queue.shift()).finally(() => { workers -= 1; pump(); });
+    }
+  };
+  const enqueue = panel => {
+    if (!panel || panel.dataset.queued === 'true') return;
+    panel.dataset.queued = 'true'; queue.push(panel); pump();
+  };
+  panels.filter(panel => panel.hasAttribute('data-hub-priority')).forEach(enqueue);
+  const deferred = panels.filter(panel => !panel.hasAttribute('data-hub-priority'));
+  if ('IntersectionObserver' in window) {
+    const observer = new IntersectionObserver(entries => {
+      entries.filter(entry => entry.isIntersecting).forEach(entry => {
+        observer.unobserve(entry.target); enqueue(entry.target);
+      });
+    }, {rootMargin: '180px 0px'});
+    deferred.forEach(panel => observer.observe(panel));
+  } else {
+    deferred.forEach(enqueue);
+  }
   document.addEventListener('click', event => {
     const button = event.target.closest('[data-hub-retry]');
     if (button) load(button.closest('[data-hub-url]'));

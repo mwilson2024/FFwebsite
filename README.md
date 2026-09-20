@@ -177,6 +177,10 @@ commit `.env`, the key, or MFL login details.
 - Ownership, free-agent availability, administrative locks, and kickoff locks are
   checked again before player-move submissions.
 - Live scoring automatically polls only while an NFL game is in progress.
+- Current-week scores refresh every 30 seconds only while an NFL game clock is
+  active. Between games, the last score is retained until the next kickoff; after
+  the final game, it is retained until the next daily refresh. Historical weeks
+  are treated as final and cached for 30 days.
 - MFL scores remain authoritative when detailed stat feeds differ.
 - ESPN weekly consensus ranks and StatHead ML projections are separately labeled
   references; neither silently replaces or changes MFL's league-scored projection.
@@ -185,6 +189,11 @@ commit `.env`, the key, or MFL login details.
 - Incomplete rosters keep visible open rows for every unfilled legal starter slot.
 - MFL display reads are shared within a signed-in session, temporarily fall back to
   recent data during provider trouble, and stop retrying during an MFL 429 cooldown.
+- Standings and completed fantasy-schedule results refresh on the first view after
+  midnight Eastern, then use an account-scoped in-process cache for the day. Set
+  `WP_TIME_ZONE` to another IANA time-zone name only if midnight should mean a
+  different league time zone. Home loads its two visible cards first and defers
+  lower widgets until they approach the viewport.
 - League scoring rules are refreshed at most once every seven days because they are
   season configuration, while live scores use a separate short-lived snapshot.
 - The playoff bracket is projected locally: three division leaders receive seeds
