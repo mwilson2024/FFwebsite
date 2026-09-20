@@ -633,7 +633,14 @@ class MFLClient:
                 continue
             if kickoff > now:
                 future.append(kickoff)
-            elif kickoff > 0 and 0 < remaining < 3600:
+            elif kickoff > 0 and (
+                0 < remaining < 3600
+                # MFL can leave the clock at 3600 for several minutes after
+                # the scheduled kickoff. Treat only that short transition as
+                # live so the page wakes up and can see the first score; this
+                # remains bounded and cannot create all-day polling.
+                or (remaining == 3600 and 0 <= now - kickoff <= 30 * 60)
+            ):
                 active = True
         return {"active": active, "next_kickoff": min(future) if future else None}
 

@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="/static/workspace.css?v=3">
   <link rel="stylesheet" href="/static/fantasy.css?v=4">
   <link rel="stylesheet" href="/static/lions.css?v=1">
+  <link rel="stylesheet" href="/static/rosters.css?v=1">
   <script src="/static/diagnostics.js" defer></script>
   <script src="/static/app.js?v=20260919-waiver-optimizer" defer></script>
   {% include '_theme_assets.html' %}
@@ -18,6 +19,7 @@
   {% set active_tool = 'moves' %}{% include '_league_header.html' %}
   <main class="move-shell">
     <section class="move-workspace waiver-workspace">
+      {% include '_roster_tabs.html' %}
       <div class="page-heading waiver-heading">
         <div><p class="eyebrow">WEEK {{ week or '—' }} · PLAYERS</p><h1>League player market</h1></div>
         <div class="board-summary" aria-label="Player board summary">

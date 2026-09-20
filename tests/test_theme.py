@@ -5,13 +5,13 @@ from bs4 import BeautifulSoup
 def test_all_pages_load_their_requested_theme_last():
     templates = Path(__file__).resolve().parents[1] / 'src/weekly_projections/web/templates'
     pages = [p for p in templates.glob('*.html') if '<!doctype html>' in p.read_text(encoding='utf-8').lower()]
-    assert len(pages) == 18
+    assert len(pages) == 19
     for page in pages:
         source = page.read_text(encoding='utf-8')
         assert "{% include '_theme_assets.html' %}" in source, page.name
         source = source.replace("{% include '_theme_assets.html' %}", (templates / '_theme_assets.html').read_text(encoding='utf-8'))
         soup = BeautifulSoup(source, 'html.parser')
-        assert soup.select('link[rel="stylesheet"]')[-1]['href'] == '/static/themes.css?v=1', page.name
+        assert soup.select('link[rel="stylesheet"]')[-1]['href'] == '/static/themes.css?v=2', page.name
         assert len(soup.select('meta[name="theme-color"]')) == 1
         assert soup.select_one('script[src="/static/theme.js?v=1"]')
 
@@ -42,8 +42,16 @@ def test_league_switcher_uses_one_control_height_on_every_page():
     assert '.header-league-picker .league-switch-button' in css
     assert 'height:44px; min-height:44px;' in css
     assert '.league-topbar .brand-mark { display:grid; width:44px; height:44px; }' in css
-    assert '/static/interface.css?v=20260919-pwa' in assets
+    assert '/static/interface.css?v=20260920-rosters' in assets
     assert '<span class="sr-only">Switch league</span>' in header
+
+
+def test_mobile_navigation_fits_the_five_primary_tabs_on_one_row():
+    css = (Path(__file__).resolve().parents[1] / 'src/weekly_projections/web/static/themes.css').read_text(
+        encoding='utf-8'
+    )
+    mobile = css.split('@media(max-width:480px)', 1)[1]
+    assert 'grid-template-columns:repeat(5,minmax(0,1fr));' in mobile
 
 
 def test_activity_wall_only_scrolls_after_reaching_waiver_height():

@@ -413,7 +413,7 @@ async def secure_local_responses(request: Request, call_next):
         response.delete_cookie("wp_remember", path="/", httponly=True, samesite="strict", secure=_secure_cookies(request))
     league_id = request.query_params.get("league")
     if (current and request.method == "GET" and response.status_code == 200
-            and request.url.path in {"/home", "/lineup", "/moves", "/scores", "/trades", "/standings", "/league", "/insights", "/planner"}
+            and request.url.path in {"/home", "/lineup", "/rosters", "/moves", "/scores", "/trades", "/standings", "/league", "/insights", "/planner"}
             and any(item.id == league_id for item in current.leagues)):
         response.set_cookie("wp_last_league", f"{current.year}:{league_id}", max_age=365*86400,
                             httponly=True, samesite="strict", secure=_secure_cookies(request))
@@ -2526,6 +2526,90 @@ def hub_section(request: Request, section: str, league: str, target: str = "", w
             log_error("hub_section_unavailable", exc)
         context["error"] = str(exc) if isinstance(exc, ValueError) else "MFL could not load this section. Try again shortly."
     return templates.TemplateResponse(request=request, name="_hub_section.html", context=context)
+
+
+@app.get("/rosters", response_class=HTMLResponse)
+def rosters_page(request: Request, league: str):
+    current = _session(request)
+    if not current:
+        return RedirectResponse("/", status_code=303)
+    selected = _league(current, league)
+    client = _client(current, selected)
+    teams: list[dict] = []
+    error: str | None = None
+    try:
+        details = _cached_session_read(
+            current, selected.id, "details", client.league_details,
+            ttl=900, stale_ttl=_LEAGUE_STATIC_STALE_TTL, shared=True,
+        )
+        league_rosters = _cached_session_read(
+            current, selected.id, "league-rosters", client.trade_rosters,
+            ttl=60, stale_ttl=600,
+        )
+        catalog = _cached_session_read(
+            current, "mfl-global", "players", client.players,
+            ttl=86400, stale_ttl=_LEAGUE_STATIC_STALE_TTL, shared=True,
+        )
+        current.player_catalog = catalog
+        own_id = selected.franchise_id.zfill(4)
+        normalized_rosters = {
+            team_id.zfill(4): set(player_ids)
+            for team_id, player_ids in league_rosters.items()
+        }
+        team_ids = list(details.franchises)
+        team_ids.extend(team_id for team_id in normalized_rosters if team_id not in details.franchises)
+        team_ids = sorted(
+            dict.fromkeys(team_ids),
+            key=lambda team_id: (team_id != own_id, team_ids.index(team_id)),
+        )
+        position_order = {
+            position: index for index, position in enumerate(
+                ("QB", "RB", "WR", "TE", "PK", "DEF", "DL", "DE", "DT", "LB", "DB", "CB", "S")
+            )
+        }
+        for team_id in team_ids:
+            franchise = details.franchises.get(team_id)
+            players = [
+                catalog.get(player_id, MFLPlayer(player_id, f"Player {player_id}"))
+                for player_id in normalized_rosters.get(team_id, set())
+            ]
+            players.sort(
+                key=lambda player: (
+                    position_order.get(_board_position(player), 99),
+                    _board_position(player),
+                    player.name.casefold(),
+                    player.id,
+                )
+            )
+            groups: list[dict] = []
+            for player in players:
+                position = _board_position(player) or "Other"
+                if not groups or groups[-1]["position"] != position:
+                    groups.append({"position": position, "players": []})
+                groups[-1]["players"].append(player)
+            teams.append({
+                "id": team_id,
+                "name": franchise.name if franchise else f"Team {team_id}",
+                "logo_url": franchise.logo_url if franchise else "",
+                "is_own": team_id == own_id,
+                "players": players,
+                "groups": groups,
+            })
+    except MFLApiError as exc:
+        _log_provider_error_once(current, selected.id, "league_rosters_unavailable", exc)
+        error = "MFL could not load the league rosters right now. Cached roster data will appear automatically when available."
+    return templates.TemplateResponse(
+        request=request,
+        name="rosters.html",
+        context={
+            "session": current,
+            "league": selected,
+            "teams": teams,
+            "roster_player_count": sum(len(team["players"]) for team in teams),
+            "error": error,
+            "week": current.selected_week,
+        },
+    )
 
 
 @app.get("/moves", response_class=HTMLResponse)

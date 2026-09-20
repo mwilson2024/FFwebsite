@@ -5,17 +5,13 @@
     <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 4v16M9 10h11M9 15h11"/></svg>
     <span>Lineup</span>
   </a>
-  <a {% if active_tool == 'moves' %}class="active" aria-current="page"{% endif %} href="/moves?league={{ league.id }}">
-    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h15m-4-4 4 4-4 4M20 16H5m4-4-4 4 4 4"/></svg>
-    <span>Players</span>
+  <a {% if active_tool in ['rosters','moves','trades'] %}class="active" aria-current="page"{% endif %} href="/rosters?league={{ league.id }}">
+    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20v-2a5 5 0 0 1 10 0v2M14 20v-1.5a4 4 0 0 1 7-2.6"/></svg>
+    <span>Rosters</span>
   </a>
   <a {% if active_tool == 'scores' %}class="active" aria-current="page"{% endif %} href="/scores?league={{ league.id }}{% if nav_week %}&week={{ nav_week }}{% endif %}">
     <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17h3l3-9 4 12 3-8h5M4 4h16"/></svg>
     <span>Scores</span>
-  </a>
-  <a {% if active_tool == 'trades' %}class="active" aria-current="page"{% endif %} href="/trades?league={{ league.id }}">
-    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h17m-4-4 4 4-4 4M21 17H4m4-4-4 4 4 4"/></svg>
-    <span>Trades</span>
   </a>
   <a aria-label="League intelligence" {% if active_tool in ['league','standings'] %}class="active" aria-current="page"{% endif %} href="/league?league={{ league.id }}"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V10h4v10M10 20V4h4v16M15 20v-7h4v7M3 20h18"/></svg><span class="nav-label-desktop">League</span><span class="nav-label-mobile" aria-hidden="true">League</span></a>
 </nav>

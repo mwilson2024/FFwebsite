@@ -369,6 +369,54 @@ def test_player_market_keeps_team_defense_and_removes_idp() -> None:
     assert web_app._include_on_player_board(MFLPlayer("wr", "Receiver", "WR", "DET"))
 
 
+def test_rosters_tab_shows_every_member_and_groups_roster_tools(monkeypatch) -> None:
+    web_app.sessions.clear()
+    session_id = "league-rosters-session"
+    league = MFLLeague("77777", "0001", "Roster League")
+    current = web_app.BrowserSession("unique-roster-cookie", 2026, [league], "csrf")
+    web_app.sessions[session_id] = current
+    reads = {"details": 0, "rosters": 0, "players": 0}
+
+    class RosterClient:
+        def league_details(self):
+            reads["details"] += 1
+            return MFLLeagueDetails((), {
+                "0001": MFLFranchise("0001", "My Franchise"),
+                "0002": MFLFranchise("0002", "Division Rival"),
+            }, name="Roster League")
+
+        def trade_rosters(self):
+            reads["rosters"] += 1
+            return {"0001": {"mine"}, "0002": {"qb", "def"}}
+
+        def players(self):
+            reads["players"] += 1
+            return {
+                "mine": MFLPlayer("mine", "My Runner", "RB", "DET"),
+                "qb": MFLPlayer("qb", "Rival Quarterback", "QB", "BUF"),
+                "def": MFLPlayer("def", "Lions Defense", "Def", "DET"),
+            }
+
+    monkeypatch.setattr(web_app, "_client", lambda *args: RosterClient())
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", session_id)
+
+    response = client.get("/rosters?league=77777")
+
+    assert response.status_code == 200
+    assert "League rosters" in response.text
+    assert "My Franchise" in response.text and "Division Rival" in response.text
+    assert "Rival Quarterback" in response.text and "Lions Defense" in response.text
+    assert 'href="/trades?league=77777&target=0002"' in response.text
+    assert response.text.index("My Franchise") < response.text.index("Division Rival")
+    assert "Free agents" in response.text and "Add, drop &amp; waivers" in response.text
+    top_nav = response.text.split('<nav class="section-nav"', 1)[1].split("</nav>", 1)[0]
+    assert "Rosters" in top_nav and ">Players<" not in top_nav and ">Trades<" not in top_nav
+
+    assert client.get("/rosters?league=77777").status_code == 200
+    assert reads == {"details": 1, "rosters": 1, "players": 1}
+
+
 def test_player_market_loader_merges_all_rosters_and_free_agents(monkeypatch) -> None:
     players = {
         "mine": MFLPlayer("mine", "My Player", "WR", "DET"),

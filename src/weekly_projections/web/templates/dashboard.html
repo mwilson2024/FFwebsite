@@ -24,7 +24,7 @@
           <div class="league-card-top"><span class="league-number">{{ loop.index }}</span><span class="eyebrow muted">MFL · {{ session.year }}</span></div>
           <h2>{{ league.name }}</h2>
           <p>League {{ league.id }} · Franchise {{ league.franchise_id }}</p>
-          <div class="league-actions"><a href="/lineup?league={{ league.id }}">Set lineup <span aria-hidden="true">→</span></a><a class="secondary-card-action" href="/moves?league={{ league.id }}">Add / Drop</a><a class="secondary-card-action score-card-action" href="/scores?league={{ league.id }}">Live Scores</a><a class="secondary-card-action" href="/trades?league={{ league.id }}">Trades</a></div>
+          <div class="league-actions"><a href="/lineup?league={{ league.id }}">Set lineup <span aria-hidden="true">→</span></a><a class="secondary-card-action" href="/rosters?league={{ league.id }}">Rosters</a><a class="secondary-card-action score-card-action" href="/scores?league={{ league.id }}">Live Scores</a></div>
         </article>
         {% endfor %}
       </div>

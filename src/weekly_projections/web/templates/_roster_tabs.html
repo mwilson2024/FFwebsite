@@ -1,0 +1,11 @@
+<nav class="roster-tools" aria-label="Roster tools">
+  <a {% if active_tool == 'rosters' %}class="active" aria-current="page"{% endif %} href="/rosters?league={{ league.id }}">
+    <strong>League rosters</strong><small>View every team</small>
+  </a>
+  <a {% if active_tool == 'moves' %}class="active" aria-current="page"{% endif %} href="/moves?league={{ league.id }}">
+    <strong>Free agents</strong><small>Add, drop &amp; waivers</small>
+  </a>
+  <a {% if active_tool == 'trades' %}class="active" aria-current="page"{% endif %} href="/trades?league={{ league.id }}">
+    <strong>Trades</strong><small>Offers &amp; trade block</small>
+  </a>
+</nav>

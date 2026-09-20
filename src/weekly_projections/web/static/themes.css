@@ -77,7 +77,7 @@ html[data-theme="lions"] :is(.player-stat-line h3,.player-stat-line>strong,.stat
   .topbar.league-topbar .section-nav a { flex:1 0 auto; }
 }
 @media(max-width:480px) {
-  .topbar.league-topbar .section-nav { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); overflow:visible; gap:.2rem; }
+  .topbar.league-topbar .section-nav { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); overflow:visible; gap:.2rem; }
   .topbar.league-topbar .section-nav a { min-width:0; padding:.5rem .25rem; font-size:.875rem; }
   .theme-picker > span { display:none; }
   .theme-picker select { max-width:135px; }

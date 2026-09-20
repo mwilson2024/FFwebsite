@@ -9,7 +9,9 @@ recaps, current-season manager profiles, and a private session-only prop tracker
 League HQ also shows the most recent completed MFL matchups. Player views include
 MFL YTD, average, a bounded recent-game median, and league-scored opponent strength.
 
-The player market combines MFL free agents, waiver players, and every league
+The Rosters tab shows every member's official MFL roster in expandable team cards,
+with Free Agents and Trades grouped beside it as roster tools. The player market
+combines MFL free agents, waiver players, and every league
 roster. It can filter by name, position, NFL team, availability, fantasy team,
 and projection coverage, with multiple sort choices. Team defenses remain in
 the market while individual defensive players are intentionally hidden. Only

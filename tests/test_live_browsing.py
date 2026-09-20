@@ -10,13 +10,24 @@ from weekly_projections.web import app as web
 
 
 @pytest.mark.parametrize('clock,kickoff,active,next_time', [
-    ('3600',2000,False,2000), ('3600',900,False,None), ('3500',900,True,None),
-    ('1800',900,True,None), ('0',900,False,None), ('bad',900,False,None),
+    ('3600',2000,False,2000), ('3600',900,True,None),
+    ('3500',900,True,None), ('1800',900,True,None), ('0',900,False,None),
+    ('bad',900,False,None),
 ])
 def test_refresh_requires_live_nfl_clock(monkeypatch, clock, kickoff, active, next_time):
     client = MFLClient(MFLConfig(2026,'1','0001'))
     monkeypatch.setattr(client,'export',lambda *a,**k:{'nflSchedule':{'matchup':{'kickoff':kickoff,'gameSecondsRemaining':clock}}})
     assert client.nfl_refresh_state(week=1,now=1000) == {'active':active,'next_kickoff':next_time}
+
+
+def test_refresh_kickoff_grace_is_bounded(monkeypatch):
+    client = MFLClient(MFLConfig(2026, '1', '0001'))
+    monkeypatch.setattr(client, 'export', lambda *a, **k: {
+        'nflSchedule': {'matchup': {'kickoff': 1000, 'gameSecondsRemaining': '3600'}},
+    })
+    assert client.nfl_refresh_state(week=1, now=4000) == {
+        'active': False, 'next_kickoff': None,
+    }
 
 
 def test_other_matchup_selection_loads_its_players_and_keeps_week(monkeypatch):

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="csrf-token" content="{{ session.csrf_token }}">
+  <title>Rosters · {{ league.name }}</title>
+  <link rel="stylesheet" href="/static/app.css?v=20260920-rosters">
+  <link rel="stylesheet" href="/static/workspace.css?v=3">
+  <link rel="stylesheet" href="/static/fantasy.css?v=4">
+  <link rel="stylesheet" href="/static/lions.css?v=1">
+  <link rel="stylesheet" href="/static/rosters.css?v=1">
+  <script src="/static/diagnostics.js" defer></script>
+  <script src="/static/app.js?v=20260920-rosters" defer></script>
+  {% include '_theme_assets.html' %}
+</head>
+<body class="rosters-page">
+  {% set active_tool = 'rosters' %}{% include '_league_header.html' %}
+  <main class="workspace roster-workspace" id="main-content">
+    <section class="roster-hero">
+      <div><p class="eyebrow">{{ session.year }} LEAGUE OWNERSHIP</p><h1>League rosters</h1><p>Official roster ownership from MyFantasyLeague. Open any manager to see every player on the team.</p></div>
+      <div class="roster-summary" aria-label="Roster summary"><span><strong>{{ teams|length }}</strong> teams</span><span><strong>{{ roster_player_count }}</strong> rostered players</span></div>
+    </section>
+    {% include '_roster_tabs.html' %}
+    {% if error %}<div class="error" role="alert">{{ error }}{% include '_error_reference.html' %}</div>{% endif %}
+    {% if teams %}
+    <nav class="manager-jump-list" aria-label="Jump to a manager">
+      {% for team in teams %}<a href="#roster-{{ team.id }}">{% if team.logo_url %}<img src="{{ team.logo_url }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% endif %}<span>{{ team.name }}</span>{% if team.is_own %}<small>You</small>{% endif %}</a>{% endfor %}
+    </nav>
+    <div class="league-roster-grid">
+      {% for team in teams %}
+      <details class="team-roster-card{% if team.is_own %} own-roster{% endif %}" id="roster-{{ team.id }}"{% if team.is_own %} open{% endif %}>
+        <summary>
+          <span class="roster-team-logo">{% if team.logo_url %}<img src="{{ team.logo_url }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% else %}{{ team.name[:2]|upper }}{% endif %}</span>
+          <span class="roster-team-title"><small>{{ 'YOUR TEAM' if team.is_own else 'LEAGUE MEMBER' }}</small><strong>{{ team.name }}</strong><span>{{ team.players|length }} players</span></span>
+          <span class="roster-open-label"><span>View roster</span><b aria-hidden="true">⌄</b></span>
+        </summary>
+        <div class="team-roster-body">
+          {% for group in team.groups %}
+          <section class="roster-position-group" aria-labelledby="roster-{{ team.id }}-{{ loop.index }}">
+            <h2 id="roster-{{ team.id }}-{{ loop.index }}"><span>{{ group.position }}</span><small>{{ group.players|length }}</small></h2>
+            <div class="roster-player-list">
+              {% for player in group.players %}<article class="roster-player-row">{% include '_player_identity.html' %}</article>{% endfor %}
+            </div>
+          </section>
+          {% else %}<p class="empty">MFL returned no players for this franchise.</p>{% endfor %}
+          <footer>{% if team.is_own %}<a class="roster-action" href="/lineup?league={{ league.id }}{% if week %}&week={{ week }}{% endif %}">Manage your lineup</a>{% else %}<a class="roster-action" href="/trades?league={{ league.id }}&target={{ team.id }}">Build a trade with {{ team.name }}</a>{% endif %}</footer>
+        </div>
+      </details>
+      {% endfor %}
+    </div>
+    {% elif not error %}<p class="empty-state">MFL returned no league rosters.</p>{% endif %}
+  </main>
+  {% include '_player_card.html' %}
+</body>
+</html>
