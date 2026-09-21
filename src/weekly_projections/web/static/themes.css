@@ -69,9 +69,14 @@ html[data-theme] :is(.team-points-breakdown summary,.matchup-bench summary,.othe
 html[data-theme] .hub-scoreboard { border-color:var(--site-trim); }
 html[data-theme] .points-card header button { background:var(--site-accent); color:var(--site-on-accent); }
 html[data-theme] .points-card .starter-stat-content { border-color:var(--site-line); }
+html[data-theme] .player-card { color-scheme:dark; }
+html[data-theme] .player-card .card-performance { background:var(--site-raised); border-color:var(--site-line); }
+html[data-theme] .player-card .card-performance dl>div { background:var(--site-panel); }
+html[data-theme] .player-card .card-performance :is(.card-history-empty,dt,small,.trend-steady,.trend-neutral) { color:var(--site-muted); }
+html[data-theme] .player-card .card-performance meter { accent-color:var(--site-accent); }
 html[data-theme] :focus-visible { outline-color:var(--site-link); }
 html[data-theme] ::selection { background:var(--site-accent); color:var(--site-on-accent); }
-html[data-theme="lions"],html[data-theme="lions"] body,html[data-theme="lions"] .gameday-page { color-scheme:light; }
+html[data-theme="lions"],html[data-theme="lions"] body,html[data-theme="lions"] .gameday-page,html[data-theme="lions"] .player-card { color-scheme:light; }
 html[data-theme="lions"] .brand-panel :is(h1,.eyebrow),html[data-theme="lions"] .theme-picker>span { color:#fff !important; }
 html[data-theme="lions"] .standalone-theme-picker>span { color:var(--site-text) !important; }
 html[data-theme="lions"] .hub-hero button { color:var(--site-link); }

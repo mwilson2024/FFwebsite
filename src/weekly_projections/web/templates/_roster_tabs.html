@@ -2,6 +2,9 @@
   <a {% if active_tool == 'rosters' %}class="active" aria-current="page"{% endif %} href="/rosters?league={{ league.id }}">
     <strong>League rosters</strong><small>View every team</small>
   </a>
+  <a {% if active_tool == 'leaders' %}class="active" aria-current="page"{% endif %} href="/leaders?league={{ league.id }}">
+    <strong>Player leaders</strong><small>Ranks &amp; ownership</small>
+  </a>
   <a {% if active_tool == 'moves' %}class="active" aria-current="page"{% endif %} href="/moves?league={{ league.id }}">
     <strong>Free agents</strong><small>Add, drop &amp; waivers</small>
   </a>

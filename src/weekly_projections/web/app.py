@@ -128,6 +128,71 @@ def _include_on_player_board(player: MFLPlayer) -> bool:
     return not bool(tokens & _INDIVIDUAL_DEFENSE_POSITIONS)
 
 
+def _ordinal_ranks(values: dict[str, float], *, descending: bool = True) -> dict[str, int]:
+    """Return competition ranks, so equal point totals share the same rank."""
+    ordered = sorted(values.items(), key=lambda item: ((-item[1]) if descending else item[1], item[0]))
+    ranks: dict[str, int] = {}
+    previous: float | None = None
+    previous_rank = 0
+    for index, (player_id, value) in enumerate(ordered, 1):
+        if previous is None or value != previous:
+            previous_rank = index
+            previous = value
+        ranks[player_id] = previous_rank
+    return ranks
+
+
+def _position_score_ranks(
+    players: dict[str, MFLPlayer], values: dict[str, float], *, descending: bool = True,
+) -> dict[str, int]:
+    ranks: dict[str, int] = {}
+    positions = {_board_position(player) for player in players.values()}
+    for position in positions:
+        group = {
+            player_id: float(value)
+            for player_id, value in values.items()
+            if player_id in players and _board_position(players[player_id]) == position
+        }
+        ranks.update(_ordinal_ranks(group, descending=descending))
+    return ranks
+
+
+def _league_player_leaders(
+    catalog: dict[str, MFLPlayer],
+    ytd_scores: dict[str, float],
+    average_scores: dict[str, float],
+    *,
+    rostered_by: dict[str, str] | None = None,
+    franchise_names: dict[str, str] | None = None,
+) -> list[dict]:
+    """Rank non-IDP players by official MFL league-scored YTD points."""
+    eligible = {
+        player_id: player
+        for player_id, player in catalog.items()
+        if player_id in ytd_scores and _include_on_player_board(player)
+    }
+    official = {player_id: float(ytd_scores[player_id]) for player_id in eligible}
+    overall_ranks = _ordinal_ranks(official)
+    position_ranks = _position_score_ranks(eligible, official)
+    owners = rostered_by or {}
+    names = franchise_names or {}
+    rows = []
+    for player_id, player in eligible.items():
+        owner_id = owners.get(player_id, "")
+        rows.append({
+            "player": player,
+            "position": _board_position(player),
+            "overall_rank": overall_ranks[player_id],
+            "position_rank": position_ranks[player_id],
+            "ytd": official[player_id],
+            "average": average_scores.get(player_id),
+            "owner_id": owner_id,
+            "owner_name": names.get(owner_id, f"Team {owner_id}") if owner_id else "Free agent",
+            "is_free_agent": not bool(owner_id),
+        })
+    return sorted(rows, key=lambda row: (row["overall_rank"], row["player"].name.casefold()))
+
+
 @dataclass
 class LineupPreview:
     league_id: str
@@ -1243,6 +1308,62 @@ def _attach_opponent_strength(
             )
 
 
+def _load_reference_projection_blend(
+    client: MFLClient,
+    current: BrowserSession | None,
+    players: list[MFLPlayer],
+    *,
+    week: int | None,
+    mfl_scores: dict[str, float],
+    include_reference: bool = True,
+) -> ProjectionBlend:
+    if week is None or not include_reference:
+        return ProjectionBlend(
+            scores=mfl_scores, mfl_scores=mfl_scores, ml_scores={}, ml_matched=0,
+        )
+    include_espn, espn_rank_type = _ranking_reference(current) if current else (
+        True, os.getenv("WP_ESPN_RANKING_FORMAT", "PPR")
+    )
+
+    def load() -> ProjectionBlend:
+        return projection_blend(
+            players,
+            year=client.config.year,
+            week=week,
+            mfl_scores=mfl_scores,
+            session=getattr(client, "session", None),
+            include_espn=include_espn,
+            espn_rank_type=espn_rank_type,
+        )
+
+    if current is None:
+        return load()
+    return _cached_session_read(
+        current,
+        client.config.league_id,
+        f"reference-projections:{week}:{_ranking_preference(current.ranking_preference)}",
+        load,
+        ttl=300,
+        stale_ttl=86400,
+    )
+
+
+def _primary_projection_ranks(
+    current: BrowserSession,
+    players: dict[str, MFLPlayer],
+    blend: ProjectionBlend,
+) -> tuple[dict[str, float], str]:
+    preference = _ranking_preference(current.ranking_preference)
+    if preference == "combined":
+        return dict(blend.combined_ranks or {}), "Combined MFL + ESPN + ML position rank"
+    if preference.startswith("espn"):
+        return dict(blend.espn_ranks or {}), _RANKING_PREFERENCES[preference]
+    return {
+        player_id: float(rank)
+        for player_id, rank in _position_score_ranks(players, blend.mfl_scores).items()
+    }, "MFL projected position rank"
+
+
 def _load_player_board(
     client: MFLClient,
     current: BrowserSession | None = None,
@@ -1378,26 +1499,14 @@ def _load_player_board(
         # The player market is still useful before weekly projections publish.
         projections = {}
     all_players = list({player.id: player for player in (*available_players, *rostered_players)}.values())
-    include_espn, espn_rank_type = _ranking_reference(current) if current else (
-        True, os.getenv("WP_ESPN_RANKING_FORMAT", "PPR")
-    )
-    blend = (
-        projection_blend(
-            all_players,
-            year=client.config.year,
-            week=week,
-            mfl_scores=projections,
-            session=client.session,
-            include_espn=include_espn,
-            espn_rank_type=espn_rank_type,
-        )
-        if week is not None and include_reference
-        else ProjectionBlend(
-            scores=projections,
-            mfl_scores=projections,
-            ml_scores={},
-            ml_matched=0,
-        )
+    reference_players = [player for player in catalog.values() if _include_on_player_board(player)]
+    blend = _load_reference_projection_blend(
+        client,
+        current,
+        reference_players,
+        week=week,
+        mfl_scores=projections,
+        include_reference=include_reference,
     )
     recommendations = build_player_board(
         available_players=available_players,
@@ -3095,6 +3204,136 @@ def hub_section(request: Request, section: str, league: str, target: str = "", w
     return templates.TemplateResponse(request=request, name="_hub_section.html", context=context)
 
 
+@app.get("/leaders", response_class=HTMLResponse)
+def league_player_leaders_page(
+    request: Request,
+    league: str,
+    q: str = "",
+    position: str = "ALL",
+    availability: str = "all",
+):
+    current = _session(request)
+    if not current:
+        return RedirectResponse("/", status_code=303)
+    selected = _league(current, league)
+    client = _client(current, selected)
+    rows: list[dict] = []
+    all_rows: list[dict] = []
+    error: str | None = None
+    week: int | None = current.selected_week
+    rank_label = _RANKING_PREFERENCES[current.ranking_preference]
+    query = q.strip()[:80]
+    selected_position = position.strip().upper()
+    selected_availability = availability if availability in {"all", "rostered", "free-agent"} else "all"
+    try:
+        catalog = _cached_session_read(
+            current, "mfl-global", "players", client.players,
+            ttl=86400, stale_ttl=_LEAGUE_STATIC_STALE_TTL, shared=True,
+        )
+        current.player_catalog = catalog
+        league_rosters = _cached_session_read(
+            current, selected.id, "league-rosters", client.trade_rosters,
+            ttl=60, stale_ttl=600,
+        )
+        details = _cached_session_read(
+            current, selected.id, "details", client.league_details,
+            ttl=900, stale_ttl=_LEAGUE_STATIC_STALE_TTL, shared=True,
+        )
+        rostered_by = {
+            player_id: franchise_id.zfill(4)
+            for franchise_id, player_ids in league_rosters.items()
+            for player_id in player_ids
+        }
+        franchise_names = {
+            franchise_id.zfill(4): franchise.name
+            for franchise_id, franchise in details.franchises.items()
+        }
+        ytd_scores, average_scores, _ = _load_player_score_summaries(client, current)
+        all_rows = _league_player_leaders(
+            catalog,
+            ytd_scores,
+            average_scores,
+            rostered_by=rostered_by,
+            franchise_names=franchise_names,
+        )
+        if week is None:
+            try:
+                week = _cached_current_week(current, client)
+            except MFLApiError as exc:
+                _log_provider_error_once(current, selected.id, "league_player_leaders_week_unavailable", exc)
+        projections: dict[str, float] = {}
+        if week is not None:
+            try:
+                projections = _cached_session_read(
+                    current,
+                    selected.id,
+                    f"projections:{week}",
+                    lambda: client.projected_scores(week=week),
+                    ttl=300,
+                    stale_ttl=86400,
+                )
+            except MFLApiError as exc:
+                _log_provider_error_once(
+                    current, selected.id, "league_player_leaders_projections_unavailable", exc,
+                )
+        eligible = {
+            player_id: player for player_id, player in catalog.items()
+            if _include_on_player_board(player)
+        }
+        blend = _load_reference_projection_blend(
+            client,
+            current,
+            list(eligible.values()),
+            week=week,
+            mfl_scores=projections,
+        )
+        primary_ranks, rank_label = _primary_projection_ranks(current, eligible, blend)
+        for row in all_rows:
+            player_id = row["player"].id
+            row["projection"] = projections.get(player_id)
+            row["primary_rank"] = primary_ranks.get(player_id)
+        rows = list(all_rows)
+        if query:
+            needle = query.casefold()
+            rows = [
+                row for row in rows
+                if needle in row["player"].name.casefold()
+                or needle in row["player"].team.casefold()
+                or needle in row["owner_name"].casefold()
+            ]
+        if selected_position != "ALL":
+            rows = [row for row in rows if row["position"] == selected_position]
+        if selected_availability == "rostered":
+            rows = [row for row in rows if not row["is_free_agent"]]
+        elif selected_availability == "free-agent":
+            rows = [row for row in rows if row["is_free_agent"]]
+    except MFLApiError as exc:
+        _log_provider_error_once(current, selected.id, "league_player_leaders_unavailable", exc)
+        error = "MFL could not load the league-scored player leaders right now. Cached results will return automatically when available."
+    positions = sorted(
+        {row["position"] for row in all_rows},
+        key=lambda value: (value not in {"QB", "RB", "WR", "TE", "PK", "DEF"}, value),
+    )
+    return templates.TemplateResponse(
+        request=request,
+        name="leaders.html",
+        context={
+            "session": current,
+            "league": selected,
+            "active_tool": "leaders",
+            "rows": rows,
+            "leader_count": len(all_rows),
+            "positions": positions,
+            "query": query,
+            "selected_position": selected_position,
+            "selected_availability": selected_availability,
+            "week": week,
+            "rank_label": rank_label,
+            "error": error,
+        },
+    )
+
+
 @app.get("/rosters", response_class=HTMLResponse)
 def rosters_page(request: Request, league: str):
     current = _session(request)
@@ -4140,9 +4379,10 @@ def api_player_card(request: Request, player_id: str, league: str, week: int | N
     selected = _league(current, league)
     client = _client(current, selected)
     try:
-        player = _cached_session_read(
+        catalog = _cached_session_read(
             current, selected.id, "players", client.players, ttl=3600, stale_ttl=86400,
-        ).get(player_id)
+        )
+        player = catalog.get(player_id)
     except MFLApiError as error:
         _log_provider_error_once(current, selected.id, "player_card_catalog_unavailable", error)
         raise HTTPException(status_code=503, detail="Player details are temporarily unavailable.") from error
@@ -4162,6 +4402,8 @@ def api_player_card(request: Request, player_id: str, league: str, week: int | N
     weekly_points: list[dict] = []
     season_summary = {"ytd": None, "average": None, "recent_average": None, "high": None, "games": 0}
     trend = {"direction": "neutral", "label": "Trend needs at least two scored weeks", "delta": None}
+    league_rank: dict | None = None
+    primary_rank: dict | None = None
     scoring = []
     try:
         projections = _cached_session_read(
@@ -4169,6 +4411,24 @@ def api_player_card(request: Request, player_id: str, league: str, week: int | N
             lambda: client.projected_scores(week=selected_week), ttl=300, stale_ttl=86400,
         )
         projection = projections.get(player_id)
+        eligible = {
+            item_id: item for item_id, item in catalog.items()
+            if _include_on_player_board(item)
+        }
+        blend = _load_reference_projection_blend(
+            client,
+            current,
+            list(eligible.values()),
+            week=selected_week,
+            mfl_scores=projections,
+        )
+        primary_ranks, primary_label = _primary_projection_ranks(current, eligible, blend)
+        if player_id in primary_ranks:
+            primary_rank = {
+                "rank": primary_ranks[player_id],
+                "position": _board_position(player),
+                "label": primary_label,
+            }
         live = _cached_session_read(
             current, selected.id, f"live-scoring:{selected_week}",
             lambda: client.live_scoring(week=selected_week), ttl=30, stale_ttl=300,
@@ -4198,6 +4458,20 @@ def api_player_card(request: Request, player_id: str, league: str, week: int | N
             "high": round(max(scored), 2) if scored else None,
             "games": len(scored),
         }
+        leader_row = next((
+            row for row in _league_player_leaders(
+                catalog,
+                getattr(client, "player_ytd_scores", {}),
+                getattr(client, "player_avg_scores", {}),
+            )
+            if row["player"].id == player_id
+        ), None)
+        if leader_row:
+            league_rank = {
+                "overall": leader_row["overall_rank"],
+                "position_rank": leader_row["position_rank"],
+                "position": leader_row["position"],
+            }
         if len(scored) >= 2:
             split = min(3, max(1, len(scored) // 2))
             recent_average = statistics.mean(scored[-split:])
@@ -4248,6 +4522,7 @@ def api_player_card(request: Request, player_id: str, league: str, week: int | N
         "projection_source": "FantasySharks raw projections scored by MFL with this league's rules",
         "weekly_points": weekly_points, "season_summary": season_summary, "trend": trend,
         "ranking_preference": _RANKING_PREFERENCES[current.ranking_preference],
+        "primary_rank": primary_rank, "league_rank": league_rank,
         "watched": player_id in current.watchlists.get(selected.id, set()),
     }
 
@@ -4255,7 +4530,7 @@ def api_player_card(request: Request, player_id: str, league: str, week: int | N
 class BrowserErrorRequest(BaseModel):
     kind: Literal["script", "promise"]
     page: Literal[
-        "/dashboard", "/home", "/lineup", "/rosters", "/moves", "/scores", "/trades",
+        "/dashboard", "/home", "/lineup", "/rosters", "/leaders", "/moves", "/scores", "/trades",
         "/transactions", "/watchlist", "/compare", "/notifications", "/schedule", "/rules",
         "/data-status", "/guide",
     ]

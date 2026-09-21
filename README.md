@@ -26,15 +26,18 @@ preference is remembered on that device and remains editable from Settings.
 
 Player detail cards include the selected week's MFL projection and actual score,
 up to six weekly MFL point totals, YTD and season averages, a recent average and
-high, and a labeled recent-versus-prior trend. History reads reuse the same bounded
-weekly caches as the player market; missing weeks stay visibly unavailable.
+high, official overall and position ranks, the actual saved-list projection rank,
+and a labeled recent-versus-prior trend. History reads reuse the same bounded weekly
+caches as the player market; missing weeks stay visibly unavailable.
 
 Appearance includes four device-local themes: Maize & Blue, the light Detroit
 Lions palette, Midnight Aurora, and a Detroit Tigers-inspired navy-and-orange
 theme. Every theme uses the same responsive layout and accessible state labels.
 
-The Rosters tab shows every member's official MFL roster in expandable team cards,
-with Free Agents and Trades grouped beside it as roster tools. The player market
+The Rosters tab shows every member's official MFL roster in expandable team cards.
+Its Player Leaders board ranks all non-IDP scorers by official MFL YTD and position
+rank, identifies their fantasy team or free-agent status, and keeps the selected
+weekly projection rank separate. Free Agents and Trades remain grouped beside it as roster tools. The player market
 combines MFL free agents, waiver players, and every league
 roster. It can filter by name, position, NFL team, availability, fantasy team,
 and projection coverage, with multiple sort choices. Team defenses remain in

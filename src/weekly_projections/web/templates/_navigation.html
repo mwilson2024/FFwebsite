@@ -5,7 +5,7 @@
     <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 4v16M9 10h11M9 15h11"/></svg>
     <span>Lineup</span>
   </a>
-  <a {% if active_tool in ['rosters','moves','trades','watchlist','compare'] %}class="active" aria-current="page"{% endif %} href="/rosters?league={{ league.id }}">
+  <a {% if active_tool in ['rosters','leaders','moves','trades','watchlist','compare'] %}class="active" aria-current="page"{% endif %} href="/rosters?league={{ league.id }}">
     <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="8" r="3"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20v-2a5 5 0 0 1 10 0v2M14 20v-1.5a4 4 0 0 1 7-2.6"/></svg>
     <span>Rosters</span>
   </a>

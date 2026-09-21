@@ -427,6 +427,59 @@ def test_rosters_tab_shows_every_member_and_groups_roster_tools(monkeypatch) -> 
     assert reads == {"details": 1, "rosters": 1, "players": 1}
 
 
+def test_player_leaders_show_official_ranks_ownership_and_primary_rank(monkeypatch) -> None:
+    web_app.sessions.clear()
+    session_id = "league-leaders-session"
+    league = MFLLeague("77778", "0001", "Leader League")
+    current = web_app.BrowserSession("leader-cookie", 2026, [league], "csrf")
+    current.ranking_preference = "combined"
+    web_app.sessions[session_id] = current
+    players = {
+        "qb": MFLPlayer("qb", "Alpha Quarterback", "QB", "DET"),
+        "rb": MFLPlayer("rb", "Beta Runner", "RB", "GB"),
+        "fa": MFLPlayer("fa", "Gamma Receiver", "WR", "BUF"),
+        "idp": MFLPlayer("idp", "Hidden Linebacker", "LB", "MIN"),
+    }
+
+    class LeaderClient:
+        config = MFLConfig(2026, league.id, league.franchise_id, user_cookie="cookie")
+        session = None
+        def players(self): return players
+        def trade_rosters(self): return {"0001": {"qb"}, "0002": {"rb"}}
+        def league_details(self):
+            return MFLLeagueDetails((), {
+                "0001": MFLFranchise("0001", "My Team"),
+                "0002": MFLFranchise("0002", "Rival Team"),
+            })
+        def player_scores(self, period, **kwargs):
+            return {"qb": 70.0, "rb": 55.0, "fa": 40.0, "idp": 100.0} if period == "YTD" else {
+                "qb": 23.3, "rb": 18.3, "fa": 13.3, "idp": 33.3,
+            }
+        def current_week(self): return 4
+        def projected_scores(self, **kwargs): return {"qb": 24.0, "rb": 17.0, "fa": 15.0}
+
+    monkeypatch.setattr(web_app, "_client", lambda *args: LeaderClient())
+    monkeypatch.setattr(
+        web_app,
+        "_load_reference_projection_blend",
+        lambda *args, **kwargs: ProjectionBlend(
+            kwargs["mfl_scores"], kwargs["mfl_scores"], {}, 0,
+            combined_ranks={"qb": 1.0, "rb": 2.0, "fa": 3.0}, combined_matched=3,
+        ),
+    )
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", session_id)
+
+    response = client.get("/leaders?league=77778")
+
+    assert response.status_code == 200
+    assert "Player leaders" in response.text and "YTD player rankings" in response.text
+    assert "Alpha Quarterback" in response.text and "#1" in response.text
+    assert "My Team" in response.text and "Rival Team" in response.text and "Free agent" in response.text
+    assert "Hidden Linebacker" not in response.text
+    assert "Combined MFL + ESPN + ML position rank" in response.text
+
+
 def test_watchlist_toggle_and_player_compare_use_league_scored_board(monkeypatch) -> None:
     web_app.sessions.clear()
     league = MFLLeague("88881", "0001", "Tools League")
@@ -591,6 +644,15 @@ def test_player_card_returns_bounded_weekly_totals_and_trend(monkeypatch) -> Non
         def scoring_rules(self): return {}
 
     monkeypatch.setattr(web_app, "_client", lambda *args: CardClient())
+    monkeypatch.setattr(
+        web_app,
+        "_load_reference_projection_blend",
+        lambda *args, **kwargs: ProjectionBlend(
+            {player.id: 18.5}, {player.id: 18.5}, {}, 0,
+            espn_ranks={player.id: 4.0}, espn_matched=1,
+            combined_ranks={player.id: 2.5}, combined_matched=1,
+        ),
+    )
     client = TestClient(web_app.app)
     client.cookies.set("wp_session", "trend-session")
     response = client.get("/api/players/p1?league=88885&week=4")
@@ -602,6 +664,10 @@ def test_player_card_returns_bounded_weekly_totals_and_trend(monkeypatch) -> Non
     }
     assert data["trend"]["direction"] == "up" and data["trend"]["delta"] == 10.0
     assert data["ranking_preference"] == "ESPN PPR weekly consensus"
+    assert data["league_rank"] == {"overall": 1, "position_rank": 1, "position": "RB"}
+    assert data["primary_rank"] == {
+        "rank": 4.0, "position": "RB", "label": "ESPN PPR weekly consensus",
+    }
 
 
 def test_projection_tracker_summary_identifies_leaders_and_weighted_rank_signal() -> None:

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="csrf-token" content="{{ session.csrf_token }}">
+  <title>Player leaders · {{ league.name }}</title>
+  <link rel="stylesheet" href="/static/app.css?v=20260920-rosters">
+  <link rel="stylesheet" href="/static/workspace.css?v=3">
+  <link rel="stylesheet" href="/static/fantasy.css?v=20260921-leaders">
+  <link rel="stylesheet" href="/static/lions.css?v=1">
+  <link rel="stylesheet" href="/static/rosters.css?v=20260921-leaders">
+  <script src="/static/diagnostics.js" defer></script>
+  <script src="/static/app.js?v=20260921-leaders" defer></script>
+  {% include '_theme_assets.html' %}
+</head>
+<body class="rosters-page leaders-page">
+  {% include '_league_header.html' %}
+  <main class="workspace roster-workspace" id="main-content">
+    <section class="roster-hero">
+      <div><p class="eyebrow">OFFICIAL MFL LEAGUE SCORING</p><h1>Player leaders</h1><p>See where every scoring player ranks, who rosters them, and how your selected projection list views the week.</p></div>
+      <div class="roster-summary" aria-label="Leader summary"><span><strong>{{ leader_count }}</strong> ranked players</span><span><strong>{{ week or '—' }}</strong> current week</span></div>
+    </section>
+    {% include '_roster_tabs.html' %}
+    {% if error %}<div class="error" role="alert">{{ error }}{% include '_error_reference.html' %}</div>{% endif %}
+    <form class="leader-filters" method="get" action="/leaders">
+      <input type="hidden" name="league" value="{{ league.id }}">
+      <label>Search<input name="q" value="{{ query }}" maxlength="80" placeholder="Player, NFL team, or fantasy team"></label>
+      <label>Position<select name="position"><option value="ALL">All positions</option>{% for item in positions %}<option value="{{ item }}" {% if selected_position == item %}selected{% endif %}>{{ item }}</option>{% endfor %}</select></label>
+      <label>Location<select name="availability"><option value="all">Everywhere</option><option value="rostered" {% if selected_availability == 'rostered' %}selected{% endif %}>Rostered</option><option value="free-agent" {% if selected_availability == 'free-agent' %}selected{% endif %}>Free agents</option></select></label>
+      <button>Apply</button>
+    </form>
+    <section class="leader-board" aria-labelledby="leader-board-title">
+      <header><div><p class="eyebrow">SEASON LEADERBOARD</p><h2 id="leader-board-title">YTD player rankings</h2></div><p><strong>Primary rank:</strong> {{ rank_label }}</p></header>
+      <div class="leader-table-wrap" tabindex="0">
+        <table class="leader-table">
+          <thead><tr><th>Overall</th><th>Player</th><th>Position rank</th><th>Fantasy team</th><th>YTD</th><th>Average</th><th>Week {{ week or '—' }} projection</th><th>Primary rank</th></tr></thead>
+          <tbody>{% for row in rows %}<tr>
+            <td data-label="Overall"><strong class="leader-rank">#{{ row.overall_rank }}</strong></td>
+            <th data-label="Player">{% set player=row.player %}{% include '_player_identity.html' %}</th>
+            <td data-label="Position"><strong>#{{ row.position_rank }}</strong> {{ row.position }}</td>
+            <td data-label="Fantasy team"><span class="ownership-pill {{ 'free-agent' if row.is_free_agent else 'rostered' }}">{{ row.owner_name }}</span></td>
+            <td data-label="YTD"><strong>{{ '%.1f'|format(row.ytd) }}</strong></td>
+            <td data-label="Average">{{ '%.1f'|format(row.average) if row.average is not none else '—' }}</td>
+            <td data-label="Projection">{{ '%.1f'|format(row.projection) if row.projection is not none else '—' }}</td>
+            <td data-label="Primary rank">{% if row.primary_rank is not none %}<strong>#{{ '%.1f'|format(row.primary_rank) if row.primary_rank % 1 else row.primary_rank|int }}</strong> {{ row.position }}{% else %}—{% endif %}</td>
+          </tr>{% else %}<tr><td colspan="8" class="empty-state">No players match these filters.</td></tr>{% endfor %}</tbody>
+        </table>
+      </div>
+      <p class="leader-note">Overall and position ranks use official MFL YTD points for this league. Primary rank follows your saved ranking setting and remains a separate projection reference.</p>
+    </section>
+  </main>
+  {% include '_player_card.html' %}
+</body>
+</html>

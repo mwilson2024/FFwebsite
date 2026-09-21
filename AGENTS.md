@@ -13,6 +13,7 @@ for one signed-in owner and provides:
 - a league home dashboard;
 - saved lineups, drag/touch start-sit editing, and an automatic best-lineup suggestion;
 - a complete player market with free agents, waivers, locked players, and every roster;
+- a league player-leaders board with official YTD/position ranks, ownership, and the selected projection rank;
 - reviewed FCFS, priority-waiver, and blind-bid FAAB add/drop requests;
 - live and historical matchup scoring with starter-only summaries and point details;
 - standings grouped by MFL division when division data exists;
@@ -185,6 +186,12 @@ The add/drop builder must retain:
 
 Never enable add controls for rostered or locked players.
 
+The Player Leaders page ranks non-IDP players from official MFL YTD league-scored
+points, shows both overall and position rank, and identifies the owning franchise or
+free-agent state. Player cards repeat those official ranks and separately label the
+user's selected weekly projection rank. Never present a projection rank as an official
+season scoring rank.
+
 ## 8. Lineup contract
 
 - Load the lineup MFL currently saved for the selected week.
@@ -315,7 +322,7 @@ Every behavior change needs focused tests. At minimum, preserve coverage for:
 - live scoring, week selection, refresh gating, and matchup pairing;
 - projections and honest missing-data behavior;
 - trade validation, trade-block preservation, and uncertain writes;
-- standings divisions, logos, both themes, and responsive template output;
+- standings divisions, logos, all themes, player leaders, and responsive template output;
 - complete redacted diagnostic chains.
 
 Use synthetic clients and monkeypatches in tests. Tests must never make real MFL

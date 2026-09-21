@@ -6,12 +6,12 @@
   <title>{{ page_title }} · {{ league.name }}</title>
   <link rel="stylesheet" href="/static/app.css?v=20260921-tools">
   <link rel="stylesheet" href="/static/workspace.css?v=3">
-  <link rel="stylesheet" href="/static/fantasy.css?v=20260921-trends">
+  <link rel="stylesheet" href="/static/fantasy.css?v=20260921-leaders">
   <link rel="stylesheet" href="/static/lions.css?v=1">
   <link rel="stylesheet" href="/static/rosters.css?v=3">
   <link rel="stylesheet" href="/static/tools.css?v=1">
   <script src="/static/diagnostics.js" defer></script>
-  <script src="/static/app.js?v=20260921-combined" defer></script>
+  <script src="/static/app.js?v=20260921-leaders" defer></script>
   {% include '_theme_assets.html' %}
 </head>
 <body class="tools-page {% if page == 'notifications' %}insights-page{% endif %}"{% if page == 'notifications' %} data-insight-alert-count="{{ alerts|selectattr('tone','in',['danger','warning'])|list|length }}"{% endif %}>

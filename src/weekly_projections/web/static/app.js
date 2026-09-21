@@ -109,6 +109,7 @@
     const details = card.querySelector('#card-details');
     name.textContent = 'Player details'; status.textContent = 'Loading…'; details.replaceChildren();
     card.querySelector('#card-points').hidden = true;
+    card.querySelector('#card-ranks').hidden = true;
     card.querySelector('#card-scoring-basis').textContent = '';
     card.querySelector('#card-performance').hidden = true;
     card.querySelector('#card-weekly-points').replaceChildren();
@@ -135,6 +136,14 @@
       card.querySelector('#card-week').textContent = `Week ${player.week}`;
       card.querySelector('#card-projection').textContent = player.projection == null ? '—' : Number(player.projection).toFixed(1);
       card.querySelector('#card-actual').textContent = player.actual_points == null ? '—' : Number(player.actual_points).toFixed(2);
+      const rankValue = value => Number.isInteger(Number(value)) ? String(Number(value)) : Number(value).toFixed(1);
+      if (player.league_rank || player.primary_rank) {
+        card.querySelector('#card-ranks').hidden = false;
+        card.querySelector('#card-overall-rank').textContent = player.league_rank ? `#${player.league_rank.overall} overall` : '—';
+        card.querySelector('#card-position-rank').textContent = player.league_rank ? `#${player.league_rank.position_rank} ${player.league_rank.position} by MFL YTD points` : 'Official YTD rank unavailable';
+        card.querySelector('#card-primary-rank').textContent = player.primary_rank ? `#${rankValue(player.primary_rank.rank)} ${player.primary_rank.position}` : '—';
+        card.querySelector('#card-primary-rank-source').textContent = player.primary_rank?.label || 'Primary projection rank unavailable';
+      }
       card.querySelector('#card-scoring-basis').textContent = player.projection_source;
       const performance = card.querySelector('#card-performance');
       const weeklyList = card.querySelector('#card-weekly-points');
@@ -157,7 +166,7 @@
         dt.textContent = label; dd.textContent = value == null ? '—' : Number(value).toFixed(1); group.append(dt,dd); card.querySelector('#card-season-summary').append(group);
       });
       const trend = card.querySelector('#card-trend'); trend.textContent = player.trend?.label || 'Trend unavailable'; trend.className = `trend-${player.trend?.direction || 'neutral'}`;
-      card.querySelector('#card-ranking-basis').textContent = `Primary list ranking: ${player.ranking_preference}. Weekly totals and averages use MFL league scoring.`;
+      card.querySelector('#card-ranking-basis').textContent = `Primary list: ${player.ranking_preference}. Official season ranks, weekly totals, and averages use MFL league scoring.`;
       performance.hidden = false;
       card.querySelector('#card-scoring-league').textContent = player.scoring_league;
       const events = {'#P':'Passing TDs','PY':'Passing yards','IN':'Interceptions thrown','P2':'Passing two-point conversions','#R':'Rushing TDs','RY':'Rushing yards','R2':'Rushing two-point conversions','#C':'Receiving TDs','CY':'Receiving yards','CC':'Receptions','C2':'Receiving two-point conversions','EP':'Extra points','FL':'Fumbles lost','FG':'Field goal distance','FC':'Fumbles recovered','IC':'Interceptions caught','SK':'Sacks','SF':'Safeties','TPA':'Points allowed','#T':'Defensive TDs','#FR':'Fumble return TDs','#UT':'Punt return TDs','#KT':'Kickoff return TDs'};
