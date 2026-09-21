@@ -11,9 +11,9 @@ def test_all_pages_load_their_requested_theme_last():
         assert "{% include '_theme_assets.html' %}" in source, page.name
         source = source.replace("{% include '_theme_assets.html' %}", (templates / '_theme_assets.html').read_text(encoding='utf-8'))
         soup = BeautifulSoup(source, 'html.parser')
-        assert soup.select('link[rel="stylesheet"]')[-1]['href'] == '/static/themes.css?v=2', page.name
+        assert soup.select('link[rel="stylesheet"]')[-1]['href'] == '/static/themes.css?v=3', page.name
         assert len(soup.select('meta[name="theme-color"]')) == 1
-        assert soup.select_one('script[src="/static/theme.js?v=1"]')
+        assert soup.select_one('script[src="/static/theme.js?v=2"]')
 
 
 def test_theme_primary_text_pairs_have_accessible_contrast():
@@ -21,7 +21,7 @@ def test_theme_primary_text_pairs_have_accessible_contrast():
         channels = [int(color[i:i+2], 16) / 255 for i in (1, 3, 5)]
         channels = [c / 12.92 if c <= .04045 else ((c + .055) / 1.055) ** 2.4 for c in channels]
         return sum(c * weight for c, weight in zip(channels, (.2126, .7152, .0722)))
-    for foreground, background in [('#ffcb05','#00274c'),('#ffffff','#0076b6'),('#005c90','#e5f2fa'),('#152b3b','#ffffff'),('#4b6373','#edf3f7'),('#005c90','#ffffff')]:
+    for foreground, background in [('#ffcb05','#00274c'),('#ffffff','#0076b6'),('#005c90','#e5f2fa'),('#152b3b','#ffffff'),('#4b6373','#edf3f7'),('#005c90','#ffffff'),('#f7f9ff','#07111f'),('#59e1ff','#0d1b2f'),('#ffffff','#7157e8')]:
         values = sorted([luminance(foreground), luminance(background)])
         assert (values[1] + .05) / (values[0] + .05) >= 4.5
 
@@ -31,6 +31,28 @@ def test_lions_uses_white_surfaces_and_light_controls():
     palette = css.split('html[data-theme="lions"] {',1)[1].split('}',1)[0]
     assert '--site-bg:#fff;' in palette and '--site-panel:#fff;' in palette
     assert 'color-scheme:light;' in css
+
+
+def test_midnight_aurora_theme_is_complete_and_selectable():
+    root = Path(__file__).resolve().parents[1] / 'src/weekly_projections/web/static'
+    css = (root / 'themes.css').read_text(encoding='utf-8')
+    script = (root / 'theme.js').read_text(encoding='utf-8')
+    palette = css.split('html[data-theme="aurora"] {', 1)[1].split('}', 1)[0]
+    for token in ('--site-bg:', '--site-panel:', '--site-raised:', '--site-text:', '--site-muted:',
+                  '--site-accent:', '--site-on-accent:', '--site-link:', '--site-header:', '--site-input:'):
+        assert token in palette
+    assert 'radial-gradient' in css and 'Midnight Aurora' in script
+    assert "['michigan','lions','aurora']" in script
+
+
+def test_roster_tool_tabs_keep_five_columns_and_readable_active_text():
+    root = Path(__file__).resolve().parents[1] / 'src/weekly_projections'
+    css = (root / 'web/static/rosters.css').read_text(encoding='utf-8')
+    tabs = (root / 'web/templates/_roster_tabs.html').read_text(encoding='utf-8')
+    assert 'grid-template-columns:repeat(5,minmax(0,1fr));' in css
+    assert '.roster-tools a.active :is(strong,small)' in css
+    assert 'color:var(--site-on-accent) !important;' in css
+    assert tabs.count('<a ') == 5
 
 
 def test_league_switcher_uses_one_control_height_on_every_page():

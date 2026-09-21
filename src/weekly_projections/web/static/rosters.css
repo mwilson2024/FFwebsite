@@ -5,12 +5,15 @@
 .roster-summary { display:flex; flex-shrink:0; gap:.7rem; }
 .roster-summary span { display:grid; min-width:112px; padding:.75rem 1rem; border:1px solid var(--site-line); border-radius:12px; background:var(--site-panel); color:var(--site-muted); font-size:.75rem; }
 .roster-summary strong { color:var(--site-text); font-size:1.4rem; }
-.roster-tools { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:.45rem; margin:0 0 1.25rem; padding:.4rem; border:1px solid var(--site-line); border-radius:16px; background:var(--site-panel); }
-.roster-tools a { display:grid; gap:.1rem; min-height:58px; padding:.65rem 1rem; border-radius:11px; color:var(--site-muted); }
+.roster-tools { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:.45rem; width:100%; margin:0 0 1.25rem; padding:.4rem; border:1px solid var(--site-line); border-radius:16px; background:var(--site-panel); overflow:hidden; }
+.roster-tools a { display:grid; align-content:center; gap:.12rem; min-width:0; min-height:64px; padding:.7rem .85rem; border:1px solid transparent; border-radius:11px; color:var(--site-muted); text-decoration:none; }
 .roster-tools a:hover { background:var(--site-hover); }
-.roster-tools a.active { background:var(--site-accent); color:var(--site-on-accent); }
-.roster-tools strong { font-size:.9rem; }
-.roster-tools small { font-size:.75rem; }
+.roster-tools a.active { background:var(--site-accent); border-color:var(--site-accent); color:var(--site-on-accent); box-shadow:0 8px 20px color-mix(in srgb,var(--site-accent) 24%,transparent); }
+.roster-tools a.active :is(strong,small) { color:var(--site-on-accent) !important; }
+.roster-tools strong,.roster-tools small { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.roster-tools strong { color:var(--site-text); font-size:.9rem; }
+.roster-tools small { color:var(--site-muted); font-size:.75rem; }
+@media(max-width:1050px) and (min-width:601px) { .roster-tools { grid-template-columns:repeat(3,minmax(0,1fr)); } }
 .manager-jump-list { display:flex; gap:.5rem; margin:0 0 1.25rem; padding:.2rem 0 .55rem; overflow-x:auto; scrollbar-width:thin; }
 .manager-jump-list a { display:flex; align-items:center; gap:.5rem; min-width:max-content; min-height:44px; padding:.45rem .7rem; border:1px solid var(--site-line); border-radius:999px; background:var(--site-panel); color:var(--site-text); font-size:.8rem; font-weight:700; }
 .manager-jump-list a:hover { background:var(--site-hover); }
@@ -50,7 +53,7 @@
   .roster-workspace { width:calc(100% - 24px); padding:1.25rem 0 2rem; }
   .roster-summary { width:100%; }
   .roster-summary span { min-width:0; flex:1; }
-  .roster-tools { display:flex; gap:.3rem; padding:.3rem; overflow-x:auto; }
+  .roster-tools { display:flex; gap:.3rem; padding:.3rem; overflow-x:auto; scrollbar-width:thin; }
   .roster-tools a { flex:1 0 105px; min-height:54px; padding:.55rem .35rem; text-align:center; }
   .roster-tools small { display:none; }
   .roster-player-list { grid-template-columns:1fr; }

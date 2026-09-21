@@ -27,7 +27,7 @@ for one signed-in owner and provides:
 - a full MFL league schedule, readable rules/scoring pages, cache status, and
   first-use guidance;
 - MFL league-scored projections and clearly separated third-party reference projections;
-- Maize & Blue and Detroit Lions themes across desktop and iPhone layouts.
+- Maize & Blue, Detroit Lions, and Midnight Aurora themes across desktop and iPhone layouts.
 
 Provider scope is **MFL only**. Do not add ESPN, Sleeper, Yahoo, or another fantasy
 provider unless a future user request explicitly reopens that work.
@@ -259,9 +259,11 @@ Never enable add controls for rostered or locked players.
 
 ## 12. UI and accessibility expectations
 
-- Both Maize & Blue and Detroit Lions themes must cover every route and reusable card.
+- Maize & Blue, Detroit Lions, and Midnight Aurora themes must cover every route and reusable card.
 - The Lions theme uses a white/light page background with official-inspired blue,
   silver, black, and white accents.
+- Midnight Aurora uses a dark navy base with violet and electric-cyan accents while
+  preserving readable contrast and the same interaction states as the other themes.
 - Desktop is information-dense; iPhone layouts must remain touch-friendly and readable.
 - Maintain visible keyboard focus, semantic labels, real buttons, and accessible dialogs.
 - Never make color the only indication of playing/locked/final/error state.
