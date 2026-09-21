@@ -49,6 +49,9 @@ class ProjectionBlend:
     espn_ranks: dict[str, float] | None = None
     espn_matched: int = 0
     espn_source: str | None = None
+    combined_ranks: dict[str, float] | None = None
+    combined_matched: int = 0
+    combined_source: str | None = None
 
     @property
     def source_label(self) -> str:
@@ -350,6 +353,53 @@ def blend_projection_scores(
     return blended
 
 
+def combined_position_ranks(
+    players: Iterable[MFLPlayer],
+    *,
+    mfl_scores: Mapping[str, float],
+    ml_scores: Mapping[str, float],
+    espn_ranks: Mapping[str, float],
+) -> dict[str, float]:
+    """Equal-weight available source ranks within each fantasy position.
+
+    Point totals from different scoring systems are never averaged. MFL and ML
+    points are first converted to position ranks, ESPN's rank is re-ranked within
+    the same position, and a player needs at least two covered sources.
+    """
+    player_list = list(players)
+
+    def source_ranks(values: Mapping[str, float], *, lower_is_better: bool) -> dict[str, float]:
+        ranked: dict[str, float] = {}
+        positions = {_position_bucket(player.position) for player in player_list}
+        for position in positions:
+            rows = [
+                (player.id, float(values[player.id]))
+                for player in player_list
+                if _position_bucket(player.position) == position and player.id in values
+            ]
+            rows.sort(key=lambda row: row[1], reverse=not lower_is_better)
+            previous = None
+            display_rank = 0
+            for index, (player_id, value) in enumerate(rows, 1):
+                if previous is None or value != previous:
+                    display_rank = index
+                    previous = value
+                ranked[player_id] = float(display_rank)
+        return ranked
+
+    sources = (
+        source_ranks(mfl_scores, lower_is_better=False),
+        source_ranks(ml_scores, lower_is_better=False),
+        source_ranks(espn_ranks, lower_is_better=True),
+    )
+    combined: dict[str, float] = {}
+    for player in player_list:
+        values = [source[player.id] for source in sources if player.id in source]
+        if len(values) >= 2:
+            combined[player.id] = round(statistics.mean(values), 1)
+    return combined
+
+
 def projection_blend(
     players: Iterable[MFLPlayer],
     *,
@@ -386,6 +436,12 @@ def projection_blend(
                 espn_source = f"ESPN weekly consensus ({espn_rank_type})"
         except ProjectionSourceError:
             espn_ranks = {}
+    combined_ranks = combined_position_ranks(
+        player_list,
+        mfl_scores=mfl_scores,
+        ml_scores=ml_scores,
+        espn_ranks=espn_ranks,
+    )
     # MFL applies each league's exact rules to FantasySharks' raw projected stats.
     # Generic ML point totals cannot reproduce yardage bonuses or scoring tiers.
     # Keep ML as a separate comparison, never fill missing league points with it.
@@ -399,4 +455,11 @@ def projection_blend(
         espn_ranks=espn_ranks,
         espn_matched=len(espn_ranks),
         espn_source=espn_source,
+        combined_ranks=combined_ranks,
+        combined_matched=len(combined_ranks),
+        combined_source=(
+            "Equal-weight available MFL / ESPN / StatHead position ranks"
+            if combined_ranks
+            else None
+        ),
     )

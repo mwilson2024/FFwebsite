@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="/static/fantasy.css?v=20260921-trends">
   <link rel="stylesheet" href="/static/lions.css?v=1">
   <meta name="csrf-token" content="{{ session.csrf_token }}">
-  <script src="/static/diagnostics.js" defer></script><script src="/static/app.js?v=20260921-trends" defer></script>
+  <script src="/static/diagnostics.js" defer></script><script src="/static/app.js?v=20260921-combined" defer></script>
   {% include '_theme_assets.html' %}
 </head>
 <body class="gameday-page" data-live-refresh="{{ refresh_seconds }}" data-next-kickoff="{{ next_kickoff or '' }}" data-live-window="/api/live-window?league={{ league.id }}&week={{ week or 1 }}">

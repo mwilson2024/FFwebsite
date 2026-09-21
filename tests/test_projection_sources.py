@@ -5,9 +5,26 @@ import pytest
 from weekly_projections.mfl.client import MFLPlayer
 from weekly_projections.projection_sources import (
     blend_projection_scores,
+    combined_position_ranks,
     espn_weekly_ranks,
     stathead_weekly_scores,
 )
+
+
+def test_combined_rank_averages_source_order_within_position_only() -> None:
+    players = [
+        MFLPlayer("a", "Alpha", "WR", "DET"),
+        MFLPlayer("b", "Bravo", "WR", "GB"),
+        MFLPlayer("c", "Charlie", "WR", "MIN"),
+        MFLPlayer("rb", "Runner", "RB", "BUF"),
+    ]
+    ranks = combined_position_ranks(
+        players,
+        mfl_scores={"a": 20, "b": 15, "c": 10, "rb": 30},
+        ml_scores={"b": 21, "a": 18, "c": 9},
+        espn_ranks={"a": 4, "c": 9, "b": 12, "rb": 1},
+    )
+    assert ranks == {"a": 1.3, "b": 2.0, "c": 2.7, "rb": 1.0}
 
 
 class FakeResponse:

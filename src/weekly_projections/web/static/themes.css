@@ -19,6 +19,13 @@ html[data-theme="aurora"] {
   --site-accent:#7157e8; --site-on-accent:#fff; --site-link:#59e1ff;
   --site-header:#091426; --site-trim:#59e1ff; --site-input:#0b192c;
 }
+html[data-theme="tigers"] {
+  color-scheme:dark;
+  --site-bg:#061525; --site-panel:#0c2340; --site-raised:#173a5e; --site-hover:#234a70;
+  --site-line:#58738f; --site-text:#f8f7f2; --site-muted:#bccbd8;
+  --site-accent:#fa4616; --site-on-accent:#061525; --site-link:#ff9b73;
+  --site-header:#0c2340; --site-trim:#fa4616; --site-input:#102e4c;
+}
 html[data-theme],html[data-theme] body {
   background:var(--site-bg); color:var(--site-text); color-scheme:dark;
   --ink:var(--site-text); --muted:var(--site-muted); --panel:var(--site-panel); --panel-2:var(--site-raised);
@@ -79,6 +86,16 @@ html[data-theme="aurora"] :is(button,.login-card button,.move-workspace button,.
 html[data-theme="aurora"] :is(.brand-mark,.topbar .brand-mark) { background:linear-gradient(145deg,#59e1ff,#7157e8); color:#061323; box-shadow:0 0 24px #59e1ff40; }
 html[data-theme="aurora"] .arena-scoreboard { background:linear-gradient(120deg,#111f3a,#132b48 55%,#1d2250); }
 html[data-theme="aurora"] :is(.roster-tools,.home-tool-grid a,.rules-summary article,.watch-grid>article,.source-list>div) { box-shadow:inset 0 1px #ffffff0a,0 10px 30px #02071340; }
+html[data-theme="tigers"] body { background:
+  linear-gradient(135deg,#fa46160a 0 1px,transparent 1px 22px),
+  radial-gradient(circle at 100% 0,#fa461618 0,transparent 32rem),var(--site-bg); background-attachment:fixed; }
+html[data-theme="tigers"] :is(.topbar,.gameday-page .topbar) { background:linear-gradient(105deg,#07192e,#0c2340 58%,#123453); box-shadow:0 10px 30px #02091488; }
+html[data-theme="tigers"] .topbar .section-nav a:is(.active,:hover) { color:#061525; }
+html[data-theme="tigers"] :is(.brand-mark,.topbar .brand-mark) { background:#fa4616; color:#061525; border-color:#ff9b73; box-shadow:inset 0 0 0 1px #ffb291,0 0 20px #fa461638; }
+html[data-theme="tigers"] :is(.hub-panel,.tool-card,.team-roster-card,.waiver-board,.roster-editor,.lineup-control-panel,.trade-roster,.trade-compose,.matchup-arena,.points-card,.player-card,.league-card) { box-shadow:0 14px 36px #02091452,inset 0 1px #ffffff0a; }
+html[data-theme="tigers"] :is(.login-shell,.player-card,.trade-roster,.points-card,.league-card) { border-top-color:#fa4616; }
+html[data-theme="tigers"] .arena-scoreboard { background:linear-gradient(120deg,#0c2340,#123453 56%,#081a2e); }
+html[data-theme="tigers"] :is(.matchup-position,.arena-team .team-monogram) { box-shadow:inset 0 0 0 1px #ff9b73; }
 .theme-picker { display:flex; align-items:center; gap:.5rem; margin-left:auto; flex-shrink:0; font-size:.875rem; }
 .theme-picker > span { color:#fff; }
 .theme-picker select { width:auto; min-height:44px; padding:.5rem 1.7rem .5rem .6rem; font-size:.875rem; }

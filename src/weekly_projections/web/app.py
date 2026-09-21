@@ -93,6 +93,7 @@ _RANKING_PREFERENCES = {
     "espn-ppr": "ESPN PPR weekly consensus",
     "espn-standard": "ESPN Standard weekly consensus",
     "mfl": "MFL league-scored projections",
+    "combined": "Combined MFL + ESPN + ML position ranks",
 }
 
 
@@ -108,6 +109,8 @@ def _ranking_reference(current: "BrowserSession") -> tuple[bool, str]:
     preference = _ranking_preference(current.ranking_preference)
     if preference == "mfl":
         return False, "PPR"
+    if preference == "combined":
+        return True, "PPR"
     return True, "STANDARD" if preference == "espn-standard" else "PPR"
 
 
@@ -1597,6 +1600,8 @@ def _projection_accuracy(
     roster_ids: set[str],
     current_blend: ProjectionBlend,
 ) -> ProjectionAccuracyReport:
+    _, espn_rank_type = _ranking_reference(current)
+
     def load_report() -> ProjectionAccuracyReport:
         catalog = _cached_session_read(
             current, "mfl-global", "players", client.players, ttl=3600, stale_ttl=86400,
@@ -1623,16 +1628,12 @@ def _projection_accuracy(
                 ml, _ = stathead_weekly_scores(catalog.values(), year=current.year, week=history_week)
             except ProjectionSourceError:
                 ml = {}
-            include_espn, espn_rank_type = _ranking_reference(current)
-            if include_espn:
-                try:
-                    espn = espn_weekly_ranks(
-                        catalog.values(), year=current.year, week=history_week,
-                        rank_type=espn_rank_type,
-                    )
-                except ProjectionSourceError:
-                    espn = {}
-            else:
+            try:
+                espn = espn_weekly_ranks(
+                    catalog.values(), year=current.year, week=history_week,
+                    rank_type=espn_rank_type,
+                )
+            except ProjectionSourceError:
                 espn = {}
             history.append((history_week, mfl, ml, espn, actual))
         return evaluate_projection_accuracy(
@@ -1644,9 +1645,56 @@ def _projection_accuracy(
         )
 
     return _cached_session_read(
-        current, selected.id, f"projection-accuracy:{week}", load_report,
+        current,
+        selected.id,
+        f"projection-accuracy:{week}:{espn_rank_type.lower()}",
+        load_report,
         ttl=12 * 3600, stale_ttl=7 * 86400,
     )
+
+
+def _projection_tracker_summary(report: ProjectionAccuracyReport) -> dict:
+    by_source: dict[str, list] = {}
+    by_position: dict[str, dict] = {}
+    for metric in report.metrics:
+        by_source.setdefault(metric.source, []).append(metric)
+        by_position.setdefault(metric.position, {})[metric.source] = metric
+    source_rows = []
+    for source, metrics in sorted(by_source.items()):
+        samples = sum(item.samples for item in metrics)
+        if not samples:
+            continue
+        source_rows.append({
+            "source": source,
+            "samples": samples,
+            "mae": round(sum(item.mae * item.samples for item in metrics) / samples, 2),
+            "bias": round(sum(item.bias * item.samples for item in metrics) / samples, 2),
+        })
+    source_rows.sort(key=lambda row: row["mae"])
+    espn_by_position = {item.position: item for item in report.espn_metrics}
+    position_rows = []
+    for position, sources in sorted(by_position.items()):
+        points_sources = sorted(sources.values(), key=lambda item: item.mae)
+        position_rows.append({
+            "position": position,
+            "leader": points_sources[0].source if points_sources else "Waiting for data",
+            "leader_mae": points_sources[0].mae if points_sources else None,
+            "mfl": sources.get("MFL"),
+            "ml": sources.get("StatHead ML · scaled"),
+            "espn": espn_by_position.get(position),
+        })
+    espn_samples = sum(item.samples for item in report.espn_metrics)
+    espn_hit_rate = (
+        round(sum(item.top_half_accuracy * item.samples for item in report.espn_metrics) / espn_samples, 1)
+        if espn_samples else None
+    )
+    return {
+        "sources": source_rows,
+        "leader": source_rows[0] if source_rows else None,
+        "positions": position_rows,
+        "espn_hit_rate": espn_hit_rate,
+        "espn_samples": espn_samples,
+    }
 
 
 def _load_insights(
@@ -1755,7 +1803,14 @@ def _load_insights(
         })
     reference_by_player = {item.player_id: item for item in accuracy.references}
     reference_rows = [
-        {"player": item.player, "reference": reference_by_player[item.player.id]}
+        {
+            "player": item.player,
+            "reference": reference_by_player[item.player.id],
+            "mfl": blend.mfl_scores.get(item.player.id),
+            "ml": blend.ml_scores.get(item.player.id),
+            "espn": (blend.espn_ranks or {}).get(item.player.id),
+            "combined": (blend.combined_ranks or {}).get(item.player.id),
+        }
         for item in lineup.players if item.player.id in reference_by_player
     ]
     return {
@@ -1763,7 +1818,9 @@ def _load_insights(
         "rows": rows, "actions": actions[:8],
         "alert_count": sum(action["tone"] in {"danger", "warning"} for action in actions[:8]),
         "depth_updated": depth_updated,
-        "accuracy": accuracy, "reference_rows": reference_rows, "errors": errors,
+        "accuracy": accuracy, "projection_tracker": _projection_tracker_summary(accuracy),
+        "reference_rows": reference_rows, "errors": errors,
+        "ranking_label": _RANKING_PREFERENCES[current.ranking_preference],
     }
 
 
@@ -2256,6 +2313,8 @@ def insights_page(request: Request, league: str):
             "error": "Roster intelligence is temporarily unavailable. Existing league pages are still available.",
             "errors": {}, "rows": (), "actions": (),
             "accuracy": ProjectionAccuracyReport((), (), (), ()), "week": None,
+            "projection_tracker": _projection_tracker_summary(ProjectionAccuracyReport((), (), (), ())),
+            "ranking_label": _RANKING_PREFERENCES[current.ranking_preference],
             "depth_updated": "", "reference_rows": (), "alert_count": 0,
         }
     return templates.TemplateResponse(request=request, name="insights.html", context=context)
@@ -3223,9 +3282,16 @@ def moves(request: Request, league: str, q: str = "", error: str = ""):
             "mfl_projections": blend.mfl_scores,
             "ml_projections": blend.ml_scores,
             "espn_ranks": blend.espn_ranks or {},
+            "combined_ranks": blend.combined_ranks or {},
+            "combined_matched": blend.combined_matched,
+            "combined_source": blend.combined_source,
             "ranking_preference": current.ranking_preference,
             "ranking_label": _RANKING_PREFERENCES[current.ranking_preference],
-            "ranking_default_sort": "projection" if current.ranking_preference == "mfl" else "espn-rank",
+            "ranking_default_sort": (
+                "projection" if current.ranking_preference == "mfl"
+                else "combined-rank" if current.ranking_preference == "combined"
+                else "espn-rank"
+            ),
             "ytd_scores": getattr(client, "player_ytd_scores", {}),
             "avg_scores": getattr(client, "player_avg_scores", {}),
             "median_scores": getattr(client, "player_median_scores", {}),

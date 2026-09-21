@@ -18,16 +18,19 @@ which reports are cached and permits a CSRF-protected refresh of read-only leagu
 data without replaying any transaction. New browsers receive a dismissible quick
 start tour, with the same guide always available from Settings. On first sign-in,
 the browser asks whether player lists should lead with ESPN PPR consensus, ESPN
-Standard consensus, or MFL league-scored projections. The non-secret preference
-is remembered on that device and remains editable from Settings.
+Standard consensus, MFL league-scored projections, or a Combined positional rank.
+Combined converts MFL points, ESPN PPR order, and StatHead ML points into separate
+position ranks and averages the available ranks equally; it requires at least two
+covered sources and never averages incompatible point totals. The non-secret
+preference is remembered on that device and remains editable from Settings.
 
 Player detail cards include the selected week's MFL projection and actual score,
 up to six weekly MFL point totals, YTD and season averages, a recent average and
 high, and a labeled recent-versus-prior trend. History reads reuse the same bounded
 weekly caches as the player market; missing weeks stay visibly unavailable.
 
-Appearance includes three device-local themes: Maize & Blue, the light Detroit
-Lions palette, and Midnight Aurora—a premium dark navy, violet, and electric-cyan
+Appearance includes four device-local themes: Maize & Blue, the light Detroit
+Lions palette, Midnight Aurora, and a Detroit Tigers-inspired navy-and-orange
 theme. Every theme uses the same responsive layout and accessible state labels.
 
 The Rosters tab shows every member's official MFL roster in expandable team cards,
@@ -138,12 +141,14 @@ independently; an unavailable depth chart or forecast never hides the MFL lineup
 MFL player-news links remain the source of full news stories because MFL does not
 publish those articles through its API.
 
-The projection lab evaluates at most the previous three completed weeks. MFL
+The plain-language projection tracker evaluates at most the previous three completed weeks. MFL
 league-scored projections and position-scaled StatHead ML projections are measured
 against official MFL player scores by position. The resulting inverse-error weights
 and heuristic 80% ranges are displayed only as a labeled reference and never replace
-MFL totals, recommendations, or submitted lineups. ESPN weekly ranks are evaluated
-separately as a top-half ranking hit rate because ranks are not point projections.
+MFL totals, recommendations, or submitted lineups. Its scoreboard names the current
+points leader, explains average miss in plain language, and keeps RMSE/bias in an
+expandable advanced section. ESPN weekly ranks are evaluated separately as a top-half
+ranking hit rate because ranks are not point projections.
 
 The site is installable as a PWA on supported browsers. Its service worker caches
 only the public offline shell and static icon assets; authenticated league HTML,

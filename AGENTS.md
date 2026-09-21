@@ -23,11 +23,11 @@ for one signed-in owner and provides:
   and combined local/MFL transaction receipts;
 - player cards with bounded weekly MFL point history and honest scoring trends;
 - a device-local, user-editable primary ranking preference for ESPN PPR, ESPN
-  Standard, or MFL league-scored projections;
+  Standard, MFL league-scored projections, or a combined positional consensus;
 - a full MFL league schedule, readable rules/scoring pages, cache status, and
   first-use guidance;
 - MFL league-scored projections and clearly separated third-party reference projections;
-- Maize & Blue, Detroit Lions, and Midnight Aurora themes across desktop and iPhone layouts.
+- Maize & Blue, Detroit Lions, Midnight Aurora, and Detroit Tigers themes across desktop and iPhone layouts.
 
 Provider scope is **MFL only**. Do not add ESPN, Sleeper, Yahoo, or another fantasy
 provider unless a future user request explicitly reopens that work.
@@ -203,6 +203,9 @@ Never enable add controls for rostered or locked players.
 - Weekly MFL projections are scored using the selected league's rules.
 - Third-party/ML projections are a separately labeled reference. Do not silently
   blend generic scoring into MFL league totals or use it as an unlabeled fallback.
+- Combined rankings may average only position ranks from covered MFL, ESPN, and ML
+  sources, require at least two sources, and must never average incompatible raw
+  point totals. Label the result as a positional consensus, not an official rank.
 - Player cards show weekly projected points, actual points when available, and the
   selected league's scoring basis.
 - Live point-breakdown cards may explain supported components but must disclose when
@@ -259,10 +262,12 @@ Never enable add controls for rostered or locked players.
 
 ## 12. UI and accessibility expectations
 
-- Maize & Blue, Detroit Lions, and Midnight Aurora themes must cover every route and reusable card.
+- Maize & Blue, Detroit Lions, Midnight Aurora, and Detroit Tigers themes must cover every route and reusable card.
 - The Lions theme uses a white/light page background with official-inspired blue,
   silver, black, and white accents.
 - Midnight Aurora uses a dark navy base with violet and electric-cyan accents while
+  preserving readable contrast and the same interaction states as the other themes.
+- Detroit Tigers uses a dark navy base with orange accents and warm white text while
   preserving readable contrast and the same interaction states as the other themes.
 - Desktop is information-dense; iPhone layouts must remain touch-friendly and readable.
 - Maintain visible keyboard focus, semantic labels, real buttons, and accessible dialogs.

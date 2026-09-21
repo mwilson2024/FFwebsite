@@ -269,6 +269,7 @@
     const text = (row, key) => row.dataset[key] || "";
     const sorted = rows.slice().sort((left, right) => {
       if (selected === "espn-rank") return number(left, "espnRank") - number(right, "espnRank") || number(right, "projection") - number(left, "projection");
+      if (selected === "combined-rank") return number(left, "combinedRank") - number(right, "combinedRank") || number(right, "projection") - number(left, "projection");
       if (selected === "projection") return number(right, "projection") - number(left, "projection") || text(left, "name").localeCompare(text(right, "name"));
       if (selected === "ytd") return number(right, "ytd") - number(left, "ytd") || number(right, "avg") - number(left, "avg");
       if (selected === "avg") return number(right, "avg") - number(left, "avg") || number(right, "ytd") - number(left, "ytd");

@@ -29,6 +29,7 @@ from weekly_projections.recommendations import PlayerRecommendation
 from weekly_projections.projection_sources import ProjectionBlend
 from weekly_projections.web import app as web_app
 from weekly_projections.league_intelligence import build_power_rankings, build_recap, waiver_trends
+from weekly_projections.insights import AccuracyMetric, RankMetric, ProjectionAccuracyReport
 
 
 class FakeMFLClient:
@@ -167,6 +168,9 @@ def test_insights_page_and_home_briefing_render_from_personalized_context(monkey
     monkeypatch.setattr(web_app, "_load_insights", lambda *args, **kwargs: {
         "week":2, "rows":(), "actions":[action], "alert_count":1,
         "depth_updated":"", "accuracy":report, "reference_rows":(), "errors":{},
+        "ranking_label":"Combined MFL + ESPN + ML position ranks",
+        "projection_tracker":{"leader":{"source":"MFL", "mae":2.5}, "positions":(),
+                              "espn_hit_rate":60.0, "espn_samples":10, "sources":()},
     })
     client = TestClient(web_app.app)
     client.cookies.set("wp_session", "insights-session")
@@ -174,6 +178,7 @@ def test_insights_page_and_home_briefing_render_from_personalized_context(monkey
     assert page.status_code == 200
     assert "Roster intelligence" in page.text
     assert "Questionable starter" in page.text
+    assert "Projection tracker" in page.text and "Misses by 2.50 points" in page.text
     briefing = client.get("/hub/briefing?league=11111")
     assert briefing.status_code == 200
     assert "personalized from your saved MFL lineup" in briefing.text
@@ -260,6 +265,9 @@ def test_move_page_shows_full_board_projections_and_locks(monkeypatch) -> None:
         espn_ranks={"a1": 8.5},
         espn_matched=1,
         espn_source="ESPN weekly consensus (PPR)",
+        combined_ranks={"a1": 2.0},
+        combined_matched=1,
+        combined_source="Equal-weight MFL + ESPN + StatHead position ranks",
     )
     monkeypatch.setattr(
         web_app,
@@ -275,6 +283,8 @@ def test_move_page_shows_full_board_projections_and_locks(monkeypatch) -> None:
     assert "Recommended Add" in response.text
     assert "14.5" in response.text
     assert "ESPN #8.5" in response.text
+    assert "Combined 2.0 WR rank" in response.text
+    assert '<option value="combined-rank"' in response.text
     assert '<option value="espn-rank" selected>ESPN weekly rank</option>' in response.text
     assert "Strong target" in response.text
     assert "Locked Prospect" in response.text
@@ -550,6 +560,11 @@ def test_ranking_preference_is_csrf_protected_and_changeable(monkeypatch) -> Non
     }, follow_redirects=False)
     assert saved.status_code == 303 and saved.cookies.get("wp_rankings") == "mfl"
     assert current.ranking_preference == "mfl"
+    combined = client.post("/preferences/rankings", data={
+        "league": league.id, "ranking_preference": "combined", "csrf_token": "csrf",
+    }, follow_redirects=False)
+    assert combined.status_code == 303 and combined.cookies.get("wp_rankings") == "combined"
+    assert current.ranking_preference == "combined"
 
 
 def test_player_card_returns_bounded_weekly_totals_and_trend(monkeypatch) -> None:
@@ -587,6 +602,27 @@ def test_player_card_returns_bounded_weekly_totals_and_trend(monkeypatch) -> Non
     }
     assert data["trend"]["direction"] == "up" and data["trend"]["delta"] == 10.0
     assert data["ranking_preference"] == "ESPN PPR weekly consensus"
+
+
+def test_projection_tracker_summary_identifies_leaders_and_weighted_rank_signal() -> None:
+    report = ProjectionAccuracyReport(
+        (1, 2),
+        (
+            AccuracyMetric("MFL", "QB", 10, 3.0, 4.0, 1.0),
+            AccuracyMetric("StatHead ML · scaled", "QB", 10, 4.0, 5.0, -1.0),
+            AccuracyMetric("MFL", "WR", 20, 5.0, 6.0, 0.5),
+            AccuracyMetric("StatHead ML · scaled", "WR", 20, 4.0, 5.0, -0.5),
+        ),
+        (RankMetric("QB", 10, 60.0), RankMetric("WR", 20, 75.0)),
+        (),
+    )
+    tracker = web_app._projection_tracker_summary(report)
+    assert tracker["leader"]["source"] == "StatHead ML · scaled"
+    assert tracker["leader"]["mae"] == 4.0
+    assert tracker["espn_hit_rate"] == 70.0
+    assert {row["position"]: row["leader"] for row in tracker["positions"]} == {
+        "QB": "MFL", "WR": "StatHead ML · scaled",
+    }
 
 
 def test_player_market_loader_merges_all_rosters_and_free_agents(monkeypatch) -> None:
