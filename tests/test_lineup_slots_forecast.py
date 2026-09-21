@@ -47,6 +47,14 @@ def test_estimate_symmetric_missing_and_final_states():
     right = replace(left,franchise_id='2',name='Two')
     view = HeadToHeadView((left,right),1,1)
     assert view.forecast['percentages'] == (50,50)
+    asymmetric = replace(
+        right,
+        players=(replace(right.players[0], projection=12),),
+    )
+    percentages = replace(view, teams=(left, asymmetric)).forecast['percentages']
+    assert percentages[0] != round(percentages[0])
+    assert all(value == round(value, 2) for value in percentages)
+    assert sum(percentages) == 100
     missing = replace(right,players=(replace(right.players[0],projection=None),))
     assert replace(view,teams=(left,missing)).forecast is None
     final_left = replace(left,score=27,players_yet_to_play=0,players=(replace(left.players[0],game_seconds_remaining=0),))

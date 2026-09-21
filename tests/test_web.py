@@ -1345,7 +1345,9 @@ def test_live_scores_page_renders_mfl_matchup(monkeypatch) -> None:
     assert "Opponent Player" in response.text
     assert "14.0" in response.text
     assert "12.50" in response.text
-    assert ".00% estimated win" in response.text
+    assert "% estimated win" in response.text
+    estimates = [part.rsplit(">", 1)[-1] for part in response.text.split("% estimated win")[:-1]]
+    assert estimates and all("." in value and len(value.rsplit(".", 1)[-1]) == 2 for value in estimates)
     assert 'class="matchup-player-row"' in response.text
     # An explicit choice survives a return without a week query parameter.
     monkeypatch.setattr(web_app, "_load_live_scoring_week", lambda client, requested_week=None, **kwargs: (requested_week, 2, live, {}, head_to_head))

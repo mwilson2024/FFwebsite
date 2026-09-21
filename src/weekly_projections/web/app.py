@@ -333,8 +333,8 @@ class HeadToHeadView:
         if variance <= 0:
             return None
         chance = 0.5 * (1 + math.erf((expected[0] - expected[1]) / math.sqrt(2 * variance)))
-        percent = min(99, max(1, round(chance * 100)))
-        return {"percentages": (percent,100-percent), "final": False}
+        percent = round(chance * 100, 2)
+        return {"percentages": (percent, round(100 - percent, 2)), "final": False}
 
     @property
     def game_state(self) -> str:
