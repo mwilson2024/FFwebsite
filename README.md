@@ -9,6 +9,23 @@ recaps, current-season manager profiles, and a private session-only prop tracker
 League HQ also shows the most recent completed MFL matchups. Player views include
 MFL YTD, average, a bounded recent-game median, and league-scored opponent strength.
 
+Every connected league also has an operations layer: **My Transactions** combines
+local review/submit receipts with authoritative MFL activity; a private session
+watchlist feeds a three-player comparison screen; Notifications gathers lineup,
+injury, transaction, and uncertain-write alerts; and the League area includes the
+full MFL schedule and a readable rules/scoring reference. A Data Status page shows
+which reports are cached and permits a CSRF-protected refresh of read-only league
+data without replaying any transaction. New browsers receive a dismissible quick
+start tour, with the same guide always available from Settings. On first sign-in,
+the browser asks whether player lists should lead with ESPN PPR consensus, ESPN
+Standard consensus, or MFL league-scored projections. The non-secret preference
+is remembered on that device and remains editable from Settings.
+
+Player detail cards include the selected week's MFL projection and actual score,
+up to six weekly MFL point totals, YTD and season averages, a recent average and
+high, and a labeled recent-versus-prior trend. History reads reuse the same bounded
+weekly caches as the player market; missing weeks stay visibly unavailable.
+
 The Rosters tab shows every member's official MFL roster in expandable team cards,
 with Free Agents and Trades grouped beside it as roster tools. The player market
 combines MFL free agents, waiver players, and every league
@@ -68,7 +85,8 @@ format setting can be added in Railway Variables or a private local environment:
 WP_ESPN_RANKING_FORMAT=PPR
 ```
 
-`WP_ESPN_RANKING_FORMAT` accepts `PPR` or `STANDARD` and defaults to `PPR`.
+`WP_ESPN_RANKING_FORMAT` accepts `PPR` or `STANDARD` and supplies the default only
+until the user makes a device-level ranking choice. The normal default is `PPR`.
 Rankings are cached for one hour, are shown as a separate reference, and fail
 softly if ESPN changes or temporarily disables the feed. ESPN access never uses
 your ESPN account, cookies, or credentials. This does not add ESPN league login

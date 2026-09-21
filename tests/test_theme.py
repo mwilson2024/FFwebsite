@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 def test_all_pages_load_their_requested_theme_last():
     templates = Path(__file__).resolve().parents[1] / 'src/weekly_projections/web/templates'
     pages = [p for p in templates.glob('*.html') if '<!doctype html>' in p.read_text(encoding='utf-8').lower()]
-    assert len(pages) == 19
+    assert len(pages) == 20
     for page in pages:
         source = page.read_text(encoding='utf-8')
         assert "{% include '_theme_assets.html' %}" in source, page.name
@@ -42,7 +42,7 @@ def test_league_switcher_uses_one_control_height_on_every_page():
     assert '.header-league-picker .league-switch-button' in css
     assert 'height:44px; min-height:44px;' in css
     assert '.league-topbar .brand-mark { display:grid; width:44px; height:44px; }' in css
-    assert '/static/interface.css?v=20260920-rosters' in assets
+    assert '/static/interface.css?v=20260921-rankings' in assets
     assert '<span class="sr-only">Switch league</span>' in header
 
 

@@ -97,6 +97,8 @@
     if (image.complete && !image.naturalWidth) image.hidden = true;
   });
   const card = document.querySelector('#player-card');
+  const watchButton = card?.querySelector('#card-watch');
+  const compareLink = card?.querySelector('#card-compare');
   let cardRequest = 0;
   document.querySelectorAll('[data-player-card]').forEach((button) => button.addEventListener('click', async () => {
     if (!card) return;
@@ -108,10 +110,18 @@
     name.textContent = 'Player details'; status.textContent = 'Loading…'; details.replaceChildren();
     card.querySelector('#card-points').hidden = true;
     card.querySelector('#card-scoring-basis').textContent = '';
+    card.querySelector('#card-performance').hidden = true;
+    card.querySelector('#card-weekly-points').replaceChildren();
+    card.querySelector('#card-season-summary').replaceChildren();
+    card.querySelector('#card-trend').textContent = '';
+    card.querySelector('#card-trend').className = '';
+    card.querySelector('#card-ranking-basis').textContent = '';
     card.querySelector('#card-scoring-rules').replaceChildren();
     card.querySelector('#card-scoring').open = false;
     card.querySelector('#card-scoring-league').textContent = '';
     card.querySelector('#card-team').textContent = ''; card.querySelector('#card-source').textContent = ''; photo.hidden = true;
+    if (watchButton) { watchButton.hidden = true; watchButton.disabled = false; watchButton.dataset.player = ''; watchButton.dataset.league = ''; }
+    if (compareLink) compareLink.hidden = true;
     card.showModal();
     try {
       const query = new URLSearchParams({league:button.dataset.league});
@@ -126,6 +136,29 @@
       card.querySelector('#card-projection').textContent = player.projection == null ? '—' : Number(player.projection).toFixed(1);
       card.querySelector('#card-actual').textContent = player.actual_points == null ? '—' : Number(player.actual_points).toFixed(2);
       card.querySelector('#card-scoring-basis').textContent = player.projection_source;
+      const performance = card.querySelector('#card-performance');
+      const weeklyList = card.querySelector('#card-weekly-points');
+      const scoredWeeks = (player.weekly_points || []).filter((item) => item.points != null);
+      const chartMaximum = Math.max(1, ...scoredWeeks.map((item) => Number(item.points)));
+      (player.weekly_points || []).forEach((item) => {
+        const row = document.createElement('li');
+        const weekLabel = document.createElement('span'); weekLabel.textContent = `W${item.week}`;
+        const meter = document.createElement('meter'); meter.min = 0; meter.max = chartMaximum; meter.value = item.points == null ? 0 : Number(item.points);
+        meter.setAttribute('aria-label', item.points == null ? `Week ${item.week}: no score` : `Week ${item.week}: ${Number(item.points).toFixed(2)} points`);
+        const points = document.createElement('strong'); points.textContent = item.points == null ? '—' : Number(item.points).toFixed(1);
+        row.append(weekLabel, meter, points); weeklyList.append(row);
+      });
+      if (!player.weekly_points?.length) {
+        const empty = document.createElement('li'); empty.className = 'card-history-empty'; empty.textContent = 'Weekly totals are not available yet.'; weeklyList.append(empty);
+      }
+      const summary = player.season_summary || {};
+      [['YTD',summary.ytd],['Season avg',summary.average],['Last 3 avg',summary.recent_average],['Recent high',summary.high]].forEach(([label,value]) => {
+        const group = document.createElement('div'); const dt = document.createElement('dt'); const dd = document.createElement('dd');
+        dt.textContent = label; dd.textContent = value == null ? '—' : Number(value).toFixed(1); group.append(dt,dd); card.querySelector('#card-season-summary').append(group);
+      });
+      const trend = card.querySelector('#card-trend'); trend.textContent = player.trend?.label || 'Trend unavailable'; trend.className = `trend-${player.trend?.direction || 'neutral'}`;
+      card.querySelector('#card-ranking-basis').textContent = `Primary list ranking: ${player.ranking_preference}. Weekly totals and averages use MFL league scoring.`;
+      performance.hidden = false;
       card.querySelector('#card-scoring-league').textContent = player.scoring_league;
       const events = {'#P':'Passing TDs','PY':'Passing yards','IN':'Interceptions thrown','P2':'Passing two-point conversions','#R':'Rushing TDs','RY':'Rushing yards','R2':'Rushing two-point conversions','#C':'Receiving TDs','CY':'Receiving yards','CC':'Receptions','C2':'Receiving two-point conversions','EP':'Extra points','FL':'Fumbles lost','FG':'Field goal distance','FC':'Fumbles recovered','IC':'Interceptions caught','SK':'Sacks','SF':'Safeties','TPA':'Points allowed','#T':'Defensive TDs','#FR':'Fumble return TDs','#UT':'Punt return TDs','#KT':'Kickoff return TDs'};
       (player.scoring_rules || []).forEach((rule) => {
@@ -142,8 +175,39 @@
         const dt = document.createElement('dt'); const dd = document.createElement('dd'); dt.textContent = label; dd.textContent = value; details.append(dt,dd);
       });
       card.querySelector('#card-source').textContent = player.source;
+      if (watchButton) {
+        watchButton.dataset.player = button.dataset.playerCard;
+        watchButton.dataset.league = button.dataset.league;
+        watchButton.dataset.watched = player.watched ? 'true' : 'false';
+        watchButton.textContent = player.watched ? 'Remove from watchlist' : 'Add to watchlist';
+        watchButton.hidden = false;
+      }
+      if (compareLink) {
+        compareLink.href = `/compare?${new URLSearchParams({league:button.dataset.league,p1:button.dataset.playerCard})}`;
+        compareLink.hidden = false;
+      }
     } catch { if (requestId === cardRequest) status.textContent = 'Player details are unavailable. Close this card and try again.'; }
   }));
+  watchButton?.addEventListener('click', async () => {
+    if (!watchButton.dataset.player || !watchButton.dataset.league) return;
+    watchButton.disabled = true;
+    const previous = watchButton.textContent;
+    watchButton.textContent = 'Saving…';
+    try {
+      const query = new URLSearchParams({league:watchButton.dataset.league});
+      const response = await fetch(`/api/watchlist/${encodeURIComponent(watchButton.dataset.player)}?${query}`, {
+        method:'POST', headers:{'X-CSRF-Token':document.querySelector('meta[name="csrf-token"]')?.content || ''},
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || 'Watchlist update failed');
+      watchButton.dataset.watched = data.watched ? 'true' : 'false';
+      watchButton.textContent = data.watched ? 'Remove from watchlist' : 'Add to watchlist';
+    } catch (error) {
+      watchButton.textContent = previous;
+      const status = card?.querySelector('#card-status');
+      if (status) status.textContent = error.message;
+    } finally { watchButton.disabled = false; }
+  });
   const rows = [...document.querySelectorAll("[data-player-row]")];
   const search = document.querySelector("#player-filter");
   const position = document.querySelector("#position-filter");
@@ -200,7 +264,7 @@
 
   const applySort = () => {
     if (!playerTableBody) return;
-    const selected = playerSort?.value || "espn-rank";
+    const selected = playerSort?.value || playerSort?.dataset.defaultSort || "espn-rank";
     const number = (row, key) => Number(row.dataset[key] || -9999);
     const text = (row, key) => row.dataset[key] || "";
     const sorted = rows.slice().sort((left, right) => {
@@ -243,7 +307,7 @@
     [position, status, nflTeam, fantasyTeam, projectionFilter].forEach((control) => {
       if (control) control.value = "all";
     });
-    if (playerSort) playerSort.value = "espn-rank";
+    if (playerSort) playerSort.value = playerSort.dataset.defaultSort || "espn-rank";
     applyFilters();
     applySort();
     search?.focus();

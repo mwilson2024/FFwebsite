@@ -8,11 +8,11 @@
   <title>{{ league.name }} · Player Market</title>
   <link rel="stylesheet" href="/static/app.css?v=20260919-waiver-optimizer">
   <link rel="stylesheet" href="/static/workspace.css?v=3">
-  <link rel="stylesheet" href="/static/fantasy.css?v=4">
+  <link rel="stylesheet" href="/static/fantasy.css?v=20260921-trends">
   <link rel="stylesheet" href="/static/lions.css?v=1">
-  <link rel="stylesheet" href="/static/rosters.css?v=1">
+  <link rel="stylesheet" href="/static/rosters.css?v=2">
   <script src="/static/diagnostics.js" defer></script>
-  <script src="/static/app.js?v=20260919-waiver-optimizer" defer></script>
+  <script src="/static/app.js?v=20260921-trends" defer></script>
   {% include '_theme_assets.html' %}
 </head>
 <body>
@@ -35,8 +35,8 @@
       <section class="lineup-intelligence waiver-intelligence">
         <span><small>Projection source</small><strong>{{ projection_source }}</strong></span>
         <span><small>ML matches</small><strong>{{ ml_matched }} players</strong></span>
-        <span><small>ESPN weekly ranks</small><strong>{% if espn_source %}{{ espn_matched }} players{% else %}Temporarily unavailable{% endif %}</strong></span>
-        <p>ESPN is the primary weekly ranking view. MFL remains authoritative for league scoring, locks, ownership, and moves.</p>
+        <span><small>Primary player ranking</small><strong>{{ ranking_label }}</strong></span>
+        <p>{{ ranking_label }} leads the default sort. MFL remains authoritative for league scoring, locks, ownership, and moves. Change this anytime in Settings.</p>
       </section>
 
       <div class="market-jump-grid"><a class="defense-stream-link" href="#waiver-optimizer"><span><strong>Build my waiver queue</strong><small>Order claims and budget FAAB</small></span><span aria-hidden="true">↓</span></a><a class="defense-stream-link" href="#defense-streaming"><span><strong>Streaming a defense?</strong><small>Compare talent, matchup and waiver price</small></span><span aria-hidden="true">↓</span></a></div>
@@ -60,7 +60,7 @@
                 <label><span>Availability</span><select id="status-filter"><option value="all">All players</option><option value="open">Free agents</option><option value="waiver">On waivers</option><option value="locked">Waiver claim only</option><option value="rostered">Other rosters</option><option value="mine">My roster</option></select></label>
                 <label><span>Fantasy team</span><select id="fantasy-team-filter"><option value="all">All fantasy teams</option>{% for team_id, team_name in fantasy_teams %}<option value="{{ team_id }}">{{ team_name }}</option>{% endfor %}</select></label>
                 <label><span>Projection</span><select id="projection-filter"><option value="all">All</option><option value="projected">Has projection</option><option value="missing">No projection</option></select></label>
-                <label><span>Sort</span><select id="player-sort"><option value="espn-rank" selected>ESPN weekly rank</option><option value="recommended">Recommended</option><option value="projection">Projected points</option><option value="ytd">YTD points</option><option value="avg">Average points</option><option value="median">Recent median</option><option value="matchup">Best matchup</option><option value="edge">Roster edge</option><option value="name">Name A–Z</option><option value="nfl-team">NFL team</option><option value="fantasy-team">Fantasy team</option></select></label>
+                <label><span>Sort</span><select id="player-sort" data-default-sort="{{ ranking_default_sort }}"><option value="espn-rank" {% if ranking_default_sort == 'espn-rank' %}selected{% endif %}>ESPN weekly rank</option><option value="recommended">Recommended</option><option value="projection" {% if ranking_default_sort == 'projection' %}selected{% endif %}>MFL projected points</option><option value="ytd">YTD points</option><option value="avg">Average points</option><option value="median">Recent median</option><option value="matchup">Best matchup</option><option value="edge">Roster edge</option><option value="name">Name A–Z</option><option value="nfl-team">NFL team</option><option value="fantasy-team">Fantasy team</option></select></label>
                 <div class="filter-actions"><button type="button" class="quiet-button" id="clear-player-filters">Clear filters</button></div>
               </div>
             </details>

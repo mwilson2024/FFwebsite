@@ -3,7 +3,10 @@
   <div class="card-identity"><img id="card-photo" alt="" hidden><div><p id="card-team" class="eyebrow"></p><h2 id="card-name">Player details</h2></div></div>
   <p id="card-status" role="status"></p>
   <div class="card-points" id="card-points" hidden><div><span id="card-week"></span><strong id="card-projection">—</strong><small>Projected points</small></div><div><span>League scoring</span><strong id="card-actual">—</strong><small>Actual points</small></div></div>
-  <p id="card-scoring-basis" class="helper"></p><dl id="card-details"></dl>
+  <p id="card-scoring-basis" class="helper"></p>
+  <section class="card-performance" id="card-performance" hidden aria-labelledby="card-performance-title"><div class="card-section-heading"><h3 id="card-performance-title">Weekly performance</h3><span id="card-trend"></span></div><ol id="card-weekly-points"></ol><dl id="card-season-summary"></dl><small id="card-ranking-basis"></small></section>
+  <dl id="card-details"></dl>
   <details id="card-scoring"><summary>League scoring rules</summary><p id="card-scoring-league"></p><ul id="card-scoring-rules"></ul></details>
+  <div class="card-actions"><button type="button" class="secondary-button" id="card-watch" hidden>Add to watchlist</button><a id="card-compare" class="secondary-action" href="#" hidden>Compare player</a></div>
   <p id="card-source" class="helper"></p>
 </dialog>

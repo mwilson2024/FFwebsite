@@ -31,11 +31,13 @@ from weekly_projections.mfl.client import (
     MFLWriteUncertainError,
     MFLClient,
     MFLConfig,
+    MFLFantasyGame,
     MFLLiveScoring,
     MFLLeague,
     MFLLineupSettings,
     MFLPlayer,
     MFLRateLimitError,
+    MFLTransaction,
 )
 from weekly_projections.lineup import (
     LineupRecommendation,
@@ -87,6 +89,26 @@ _SCORING_RULES_STALE_TTL = 14 * 86400
 _APP_TIME_ZONE = ZoneInfo(os.getenv("WP_TIME_ZONE", "America/New_York"))
 _LEAGUE_STATIC_STALE_TTL = 7 * 86400
 _SHARED_READ_CACHE_LIMIT = 512
+_RANKING_PREFERENCES = {
+    "espn-ppr": "ESPN PPR weekly consensus",
+    "espn-standard": "ESPN Standard weekly consensus",
+    "mfl": "MFL league-scored projections",
+}
+
+
+def _default_ranking_preference() -> str:
+    return "espn-standard" if os.getenv("WP_ESPN_RANKING_FORMAT", "PPR").strip().upper() == "STANDARD" else "espn-ppr"
+
+
+def _ranking_preference(value: str | None) -> str:
+    return value if value in _RANKING_PREFERENCES else _default_ranking_preference()
+
+
+def _ranking_reference(current: "BrowserSession") -> tuple[bool, str]:
+    preference = _ranking_preference(current.ranking_preference)
+    if preference == "mfl":
+        return False, "PPR"
+    return True, "STANDARD" if preference == "espn-standard" else "PPR"
 
 
 def _board_position(player: MFLPlayer) -> str:
@@ -315,6 +337,16 @@ class SocialPostDraft:
     message: str = ""
 
 
+@dataclass(frozen=True)
+class OperationRecord:
+    league_id: str
+    kind: str
+    title: str
+    status: str
+    message: str
+    created_at: float = field(default_factory=time.time)
+
+
 @dataclass
 class BrowserSession:
     mfl_cookie: str
@@ -329,12 +361,16 @@ class BrowserSession:
     blocks: dict[str, BlockDraft] = field(default_factory=dict)
     expires_at: float = field(default_factory=lambda: time.monotonic() + 8 * 60 * 60)
     read_cache: dict[str, tuple[float, object]] = field(default_factory=dict)
+    cache_observed_at: dict[str, float] = field(default_factory=dict)
     read_lock: RLock = field(default_factory=RLock)
     provider_cooldowns: dict[str, float] = field(default_factory=dict)
     provider_error_logs: dict[str, float] = field(default_factory=dict)
     side_bets: dict[str, list[SideBet]] = field(default_factory=dict)
     social_posts: dict[str, SocialPostDraft] = field(default_factory=dict)
     depth_snapshots: dict[str, dict[str, int]] = field(default_factory=dict)
+    watchlists: dict[str, set[str]] = field(default_factory=dict)
+    operations: list[OperationRecord] = field(default_factory=list)
+    ranking_preference: str = field(default_factory=_default_ranking_preference)
     remember_token: str = ""
     owner_fingerprint: str = ""
     created_at: float = field(default_factory=time.monotonic)
@@ -413,7 +449,7 @@ async def secure_local_responses(request: Request, call_next):
         response.delete_cookie("wp_remember", path="/", httponly=True, samesite="strict", secure=_secure_cookies(request))
     league_id = request.query_params.get("league")
     if (current and request.method == "GET" and response.status_code == 200
-            and request.url.path in {"/home", "/lineup", "/rosters", "/moves", "/scores", "/trades", "/standings", "/league", "/insights", "/planner"}
+            and request.url.path in {"/home", "/lineup", "/rosters", "/moves", "/scores", "/trades", "/standings", "/league", "/insights", "/planner", "/transactions", "/watchlist", "/compare", "/notifications", "/schedule", "/rules", "/data-status", "/guide"}
             and any(item.id == league_id for item in current.leagues)):
         response.set_cookie("wp_last_league", f"{current.year}:{league_id}", max_age=365*86400,
                             httponly=True, samesite="strict", secure=_secure_cookies(request))
@@ -523,6 +559,8 @@ def _session(request: Request) -> BrowserSession | None:
     with sessions_lock:
         current = sessions.get(session_id or "")
     if current:
+        if request.cookies.get("wp_rankings"):
+            current.ranking_preference = _ranking_preference(request.cookies.get("wp_rankings"))
         request.state.browser_session = current
         return current
     remember_token = request.cookies.get("wp_remember", "")
@@ -533,6 +571,7 @@ def _session(request: Request) -> BrowserSession | None:
             log_error("remembered_session_restore_failed", error)
             restored = None
         if restored:
+            restored.ranking_preference = _ranking_preference(request.cookies.get("wp_rankings"))
             restored.remember_token = remember_token
             restored_id = secrets.token_urlsafe(32)
             with sessions_lock:
@@ -678,6 +717,7 @@ def _cached_session_read(
         current.provider_cooldowns.pop(league_id, None)
         entry = (time.monotonic() + max(1, ttl), value)
         current.read_cache[cache_key] = entry
+        current.cache_observed_at[cache_key] = time.monotonic()
         if shared and shared_key:
             with shared_read_lock:
                 expired = [key for key, item in shared_read_cache.items() if item[0] <= now]
@@ -771,6 +811,50 @@ def _log_provider_error_once(
 def _remember_catalog(current: BrowserSession, client: MFLClient) -> None:
     if client._players is not None:
         current.player_catalog = client._players
+
+
+def _record_operation(
+    current: BrowserSession,
+    *,
+    league_id: str,
+    kind: str,
+    title: str,
+    status: str,
+    message: str,
+) -> None:
+    current.operations.append(OperationRecord(league_id, kind, title, status, message))
+    if len(current.operations) > 100:
+        del current.operations[:-100]
+
+
+def _rule_text(value) -> str:
+    if isinstance(value, dict):
+        value = value.get("$t", "")
+    return str(value or "").strip()
+
+
+def _scoring_rule_groups(rules: dict) -> list[dict]:
+    groups = rules.get("positionRules", []) if isinstance(rules, dict) else []
+    if isinstance(groups, dict):
+        groups = [groups]
+    result = []
+    for group in groups if isinstance(groups, list) else []:
+        if not isinstance(group, dict):
+            continue
+        raw_rules = group.get("rule", [])
+        if isinstance(raw_rules, dict):
+            raw_rules = [raw_rules]
+        rows = [
+            {
+                "event": _rule_text(item.get("event")),
+                "range": _rule_text(item.get("range")),
+                "points": _rule_text(item.get("points")),
+            }
+            for item in raw_rules
+            if isinstance(item, dict)
+        ]
+        result.append({"positions": _rule_text(group.get("positions")) or "All positions", "rules": rows})
+    return result
 
 
 def _invalidate_player_board(current: BrowserSession, league_id: str) -> None:
@@ -1170,7 +1254,12 @@ def _load_player_board(
     set[str],
 ]:
     cache = getattr(client, "_browser_read_cache", None)
-    board_label = "player-board" if include_reference and include_score_context else "home-player-board"
+    ranking_cache = current.ranking_preference if current and include_reference else "no-reference"
+    board_label = (
+        f"player-board:{ranking_cache}"
+        if include_reference and include_score_context
+        else "home-player-board"
+    )
     cache_key = f"{client.config.year}:{client.config.league_id}:{board_label}"
     now = time.monotonic()
     if cache is not None:
@@ -1286,6 +1375,9 @@ def _load_player_board(
         # The player market is still useful before weekly projections publish.
         projections = {}
     all_players = list({player.id: player for player in (*available_players, *rostered_players)}.values())
+    include_espn, espn_rank_type = _ranking_reference(current) if current else (
+        True, os.getenv("WP_ESPN_RANKING_FORMAT", "PPR")
+    )
     blend = (
         projection_blend(
             all_players,
@@ -1293,8 +1385,8 @@ def _load_player_board(
             week=week,
             mfl_scores=projections,
             session=client.session,
-            include_espn=True,
-            espn_rank_type=os.getenv("WP_ESPN_RANKING_FORMAT", "PPR"),
+            include_espn=include_espn,
+            espn_rank_type=espn_rank_type,
         )
         if week is not None and include_reference
         else ProjectionBlend(
@@ -1460,6 +1552,9 @@ def _load_lineup(
         )
     except MFLApiError:
         injuries = {}
+    include_espn, espn_rank_type = _ranking_reference(current) if current else (
+        True, os.getenv("WP_ESPN_RANKING_FORMAT", "PPR")
+    )
     blend = (
         projection_blend(
             roster,
@@ -1467,8 +1562,8 @@ def _load_lineup(
             week=week,
             mfl_scores=projections,
             session=client.session,
-            include_espn=True,
-            espn_rank_type=os.getenv("WP_ESPN_RANKING_FORMAT", "PPR"),
+            include_espn=include_espn,
+            espn_rank_type=espn_rank_type,
         )
         if include_reference
         else ProjectionBlend(scores=projections, mfl_scores=projections, ml_scores={}, ml_matched=0)
@@ -1528,12 +1623,16 @@ def _projection_accuracy(
                 ml, _ = stathead_weekly_scores(catalog.values(), year=current.year, week=history_week)
             except ProjectionSourceError:
                 ml = {}
-            try:
-                espn = espn_weekly_ranks(
-                    catalog.values(), year=current.year, week=history_week,
-                    rank_type=os.getenv("WP_ESPN_RANKING_FORMAT", "PPR"),
-                )
-            except ProjectionSourceError:
+            include_espn, espn_rank_type = _ranking_reference(current)
+            if include_espn:
+                try:
+                    espn = espn_weekly_ranks(
+                        catalog.values(), year=current.year, week=history_week,
+                        rank_type=espn_rank_type,
+                    )
+                except ProjectionSourceError:
+                    espn = {}
+            else:
                 espn = {}
             history.append((history_week, mfl, ml, espn, actual))
         return evaluate_projection_accuracy(
@@ -2082,9 +2181,51 @@ def league_home(request: Request, league: str, connection: str = ""):
     current = _session(request)
     if not current:
         return RedirectResponse("/", status_code=303)
+    selected = _league(current, league)
     return templates.TemplateResponse(request=request, name="home.html", context={
-        "session": current, "league": _league(current, league), "active_tool": "home",
-        "connection": connection if connection in {"api-key-added", "invalid-key"} else ""})
+        "session": current, "league": selected, "active_tool": "home",
+        "connection": connection if connection in {"api-key-added", "invalid-key"} else "",
+        "show_onboarding": request.cookies.get("wp_tour_done") != "1",
+        "show_ranking_setup": request.cookies.get("wp_rankings") not in _RANKING_PREFERENCES,
+        "ranking_preferences": _RANKING_PREFERENCES,
+    })
+
+
+@app.post("/preferences/rankings")
+def save_ranking_preference(
+    request: Request,
+    league: str = Form(...),
+    ranking_preference: str = Form(...),
+    csrf_token: str = Form(...),
+):
+    current = _require_session(request)
+    _check_csrf(current, csrf_token)
+    selected = _league(current, league)
+    if ranking_preference not in _RANKING_PREFERENCES:
+        raise HTTPException(status_code=400, detail="Choose a valid ranking preference")
+    current.ranking_preference = ranking_preference
+    _invalidate_player_board(current, selected.id)
+    response = RedirectResponse(f"/home?league={selected.id}", status_code=303)
+    response.set_cookie(
+        "wp_rankings", ranking_preference, max_age=365 * 86400, path="/", httponly=True,
+        samesite="strict", secure=_secure_cookies(request),
+    )
+    return response
+
+
+@app.post("/onboarding/dismiss")
+def dismiss_onboarding(
+    request: Request, league: str = Form(...), csrf_token: str = Form(...),
+):
+    current = _require_session(request)
+    _check_csrf(current, csrf_token)
+    selected = _league(current, league)
+    response = RedirectResponse(f"/home?league={selected.id}", status_code=303)
+    response.set_cookie(
+        "wp_tour_done", "1", max_age=365 * 86400, path="/", httponly=True,
+        samesite="strict", secure=_secure_cookies(request),
+    )
+    return response
 
 
 @app.get("/standings", response_class=HTMLResponse)
@@ -2174,6 +2315,373 @@ def roster_planner_page(request: Request, league: str):
             "error": "The roster planner is temporarily unavailable. Your existing league data was not changed.",
         }
     return templates.TemplateResponse(request=request, name="planner.html", context=context)
+
+
+@app.get("/transactions", response_class=HTMLResponse)
+def transactions_page(request: Request, league: str):
+    current = _require_session(request)
+    selected = _league(current, league)
+    client = _client(current, selected)
+    activity: tuple[MFLTransaction, ...] = ()
+    catalog: dict[str, MFLPlayer] = {}
+    error = ""
+    try:
+        activity = _cached_session_read(
+            current, selected.id, "activity",
+            lambda: client.transactions(days=30, count=300), ttl=90, stale_ttl=3600,
+        )
+        catalog = _cached_session_read(
+            current, "mfl-global", "players", client.players,
+            ttl=86400, stale_ttl=_LEAGUE_STATIC_STALE_TTL, shared=True,
+        )
+        current.player_catalog = catalog
+    except MFLApiError as exc:
+        _log_provider_error_once(current, selected.id, "transactions_page_unavailable", exc)
+        error = "MFL activity is temporarily unavailable. Your current-session receipts are still shown."
+    own_id = selected.franchise_id.zfill(4)
+    own_activity = [item for item in activity if own_id in item.franchise_ids]
+    operations = sorted(
+        (item for item in current.operations if item.league_id == selected.id),
+        key=lambda item: item.created_at,
+        reverse=True,
+    )
+    trades = sorted(
+        ((draft_id, draft) for draft_id, draft in current.trades.items() if draft.league_id == selected.id),
+        key=lambda item: item[1].created_at,
+        reverse=True,
+    )
+    blocks = sorted(
+        ((draft_id, draft) for draft_id, draft in current.blocks.items() if draft.league_id == selected.id),
+        key=lambda item: item[1].created_at,
+        reverse=True,
+    )
+    pending_moves = [
+        (pending_id, preview) for pending_id, preview in current.pending_moves.items()
+        if preview.league_id == selected.id
+    ]
+    pending_lineups = [
+        (pending_id, preview) for pending_id, preview in current.pending_lineups.items()
+        if preview.league_id == selected.id
+    ]
+    return templates.TemplateResponse(request=request, name="tools.html", context={
+        "session": current, "league": selected, "active_tool": "transactions",
+        "page": "transactions", "page_title": "My transactions", "error": error,
+        "activity": own_activity, "catalog": catalog, "operations": operations,
+        "trades": trades, "blocks": blocks, "pending_moves": pending_moves,
+        "pending_lineups": pending_lineups, "activity_time": _activity_time,
+    })
+
+
+@app.get("/watchlist", response_class=HTMLResponse)
+def watchlist_page(request: Request, league: str):
+    current = _require_session(request)
+    selected = _league(current, league)
+    client = _client(current, selected)
+    rows: list[PlayerRecommendation] = []
+    error = ""
+    week = None
+    watched = current.watchlists.setdefault(selected.id, set())
+    try:
+        week, _, recommendations, _, _ = _load_player_board(
+            client, current, include_reference=False, include_score_context=True,
+        )
+        rows = [item for item in recommendations if item.player.id in watched]
+    except MFLApiError as exc:
+        _log_provider_error_once(current, selected.id, "watchlist_unavailable", exc)
+        error = "MFL could not refresh watched players. Your saved watchlist was not changed."
+    return templates.TemplateResponse(request=request, name="tools.html", context={
+        "session": current, "league": selected, "active_tool": "watchlist",
+        "page": "watchlist", "page_title": "Watchlist", "error": error,
+        "rows": rows, "week": week, "watched_count": len(watched),
+        "ytd_scores": getattr(client, "player_ytd_scores", {}),
+        "avg_scores": getattr(client, "player_avg_scores", {}),
+        "median_scores": getattr(client, "player_median_scores", {}),
+        "opponent_strength": getattr(client, "opponent_strength", {}),
+    })
+
+
+@app.post("/watchlist/remove")
+def remove_watchlist_player(
+    request: Request, league: str = Form(...), player_id: str = Form(...),
+    csrf_token: str = Form(...),
+):
+    current = _require_session(request)
+    _check_csrf(current, csrf_token)
+    selected = _league(current, league)
+    current.watchlists.setdefault(selected.id, set()).discard(player_id)
+    return RedirectResponse(f"/watchlist?league={selected.id}", status_code=303)
+
+
+@app.post("/api/watchlist/{player_id}")
+def toggle_watchlist_player(request: Request, player_id: str, league: str):
+    current = _require_session(request)
+    _check_csrf(current, request.headers.get("X-CSRF-Token", ""))
+    selected = _league(current, league)
+    if not player_id.isdecimal():
+        raise HTTPException(status_code=400, detail="Choose a valid player")
+    client = _client(current, selected)
+    catalog = _cached_session_read(
+        current, "mfl-global", "players", client.players,
+        ttl=86400, stale_ttl=_LEAGUE_STATIC_STALE_TTL, shared=True,
+    )
+    player = catalog.get(player_id)
+    if player is None or not _include_on_player_board(player):
+        raise HTTPException(status_code=404, detail="Player not found")
+    watched = current.watchlists.setdefault(selected.id, set())
+    if player_id in watched:
+        watched.remove(player_id)
+        enabled = False
+    else:
+        if len(watched) >= 100:
+            raise HTTPException(status_code=400, detail="Watchlist limit reached")
+        watched.add(player_id)
+        enabled = True
+    return {"watched": enabled, "count": len(watched)}
+
+
+@app.get("/compare", response_class=HTMLResponse)
+def compare_players_page(
+    request: Request, league: str, p1: str = "", p2: str = "", p3: str = "",
+):
+    current = _require_session(request)
+    selected = _league(current, league)
+    client = _client(current, selected)
+    choices: list[PlayerRecommendation] = []
+    comparison: list[dict] = []
+    error = ""
+    week = None
+    selected_ids = list(dict.fromkeys(player_id for player_id in (p1, p2, p3) if player_id.isdecimal()))[:3]
+    try:
+        week, _, recommendations, _, _ = _load_player_board(
+            client, current, include_reference=False, include_score_context=True,
+        )
+        choices = sorted(recommendations, key=lambda item: item.player.name.casefold())
+        by_id = {item.player.id: item for item in recommendations}
+        if not selected_ids:
+            selected_ids = list(current.watchlists.get(selected.id, set()))[:2]
+        injuries = _cached_session_read(
+            current, "mfl-global", f"injuries:{week}",
+            lambda: client.injuries(week=week), ttl=300, stale_ttl=3600, shared=True,
+        ) if week is not None else {}
+        for player_id in selected_ids:
+            item = by_id.get(player_id)
+            if item:
+                comparison.append({
+                    "item": item,
+                    "injury": injuries.get(player_id),
+                    "ytd": getattr(client, "player_ytd_scores", {}).get(player_id),
+                    "avg": getattr(client, "player_avg_scores", {}).get(player_id),
+                    "median": getattr(client, "player_median_scores", {}).get(player_id),
+                    "strength": getattr(client, "opponent_strength", {}).get(player_id),
+                })
+    except MFLApiError as exc:
+        _log_provider_error_once(current, selected.id, "player_compare_unavailable", exc)
+        error = "MFL could not load the comparison data right now."
+    return templates.TemplateResponse(request=request, name="tools.html", context={
+        "session": current, "league": selected, "active_tool": "compare",
+        "page": "compare", "page_title": "Player comparison", "error": error,
+        "choices": choices, "comparison": comparison, "selected_ids": selected_ids,
+        "week": week,
+    })
+
+
+@app.get("/notifications", response_class=HTMLResponse)
+def notifications_page(request: Request, league: str):
+    current = _require_session(request)
+    selected = _league(current, league)
+    alerts: list[dict] = []
+    error = ""
+    try:
+        insight = _load_insights(
+            current, selected, include_external=False, include_accuracy=False,
+        )
+        alerts.extend(insight["actions"])
+    except (MFLApiError, ValueError, requests.RequestException) as exc:
+        _log_provider_error_once(current, selected.id, "notifications_unavailable", exc)
+        error = "Lineup alerts are temporarily unavailable. Transaction warnings are still shown."
+        insight = {}
+    client = _client(current, selected)
+    week = insight.get("week")
+    watched = current.watchlists.get(selected.id, set())
+    if week is not None and watched:
+        try:
+            injuries = _cached_session_read(
+                current, "mfl-global", f"injuries:{week}",
+                lambda: client.injuries(week=week), ttl=300, stale_ttl=3600, shared=True,
+            )
+            catalog = _cached_session_read(
+                current, "mfl-global", "players", client.players,
+                ttl=86400, stale_ttl=_LEAGUE_STATIC_STALE_TTL, shared=True,
+            )
+            for player_id in watched:
+                injury = injuries.get(player_id)
+                player = catalog.get(player_id)
+                if injury and player:
+                    alerts.append({
+                        "tone": "warning", "title": f"Watchlist: {player.name} · {injury.status}",
+                        "detail": injury.details or "MFL lists an injury designation for this watched player.",
+                        "href": f"/watchlist?league={selected.id}", "label": "Open watchlist",
+                    })
+        except MFLApiError as exc:
+            _log_provider_error_once(current, selected.id, "watchlist_alerts_unavailable", exc)
+    try:
+        activity = _cached_session_read(
+            current, selected.id, "activity",
+            lambda: client.transactions(days=7, count=100), ttl=90, stale_ttl=3600,
+        )
+        own_id = selected.franchise_id.zfill(4)
+        for item in activity:
+            if own_id not in item.franchise_ids:
+                continue
+            alerts.append({
+                "tone": "good", "title": item.kind.replace("_", " ").title(),
+                "detail": "MFL recorded a transaction involving your franchise.",
+                "href": f"/transactions?league={selected.id}", "label": "View MFL activity",
+            })
+            if sum(alert["tone"] == "good" for alert in alerts) >= 4:
+                break
+    except MFLApiError as exc:
+        _log_provider_error_once(current, selected.id, "notification_activity_unavailable", exc)
+    for operation in reversed(current.operations):
+        if operation.league_id == selected.id and operation.status in {"failed", "uncertain"}:
+            alerts.insert(0, {
+                "tone": "danger" if operation.status == "failed" else "warning",
+                "title": operation.title,
+                "detail": operation.message,
+                "href": f"/transactions?league={selected.id}", "label": "View receipt",
+            })
+    for draft in current.trades.values():
+        if draft.league_id == selected.id and draft.status in {"failed", "uncertain"}:
+            alerts.insert(0, {
+                "tone": "danger" if draft.status == "failed" else "warning",
+                "title": f"Trade offer to {draft.target_name}", "detail": draft.message,
+                "href": f"/transactions?league={selected.id}", "label": "View trades",
+            })
+    return templates.TemplateResponse(request=request, name="tools.html", context={
+        "session": current, "league": selected, "active_tool": "notifications",
+        "page": "notifications", "page_title": "Notifications", "error": error,
+        "alerts": alerts[:20],
+    })
+
+
+@app.get("/schedule", response_class=HTMLResponse)
+def schedule_page(request: Request, league: str):
+    current = _require_session(request)
+    selected = _league(current, league)
+    client = _client(current, selected)
+    weeks: list[dict] = []
+    current_week = None
+    error = ""
+    try:
+        details = _cached_session_read(
+            current, selected.id, "details", client.league_details,
+            ttl=900, stale_ttl=_LEAGUE_STATIC_STALE_TTL, shared=True,
+        )
+        schedule = _cached_session_read(
+            current, selected.id, "schedule", client.fantasy_schedule,
+            ttl=_seconds_until_daily_refresh(), stale_ttl=_LEAGUE_STATIC_STALE_TTL, shared=True,
+        )
+        current_week = _cached_current_week(current, client)
+        by_week: dict[int, list[MFLFantasyGame]] = {}
+        for game in schedule:
+            by_week.setdefault(game.week, []).append(game)
+        for number in range(details.start_week, details.end_week + 1):
+            weeks.append({"number": number, "games": by_week.get(number, [])})
+        teams = details.franchises
+    except MFLApiError as exc:
+        _log_provider_error_once(current, selected.id, "full_schedule_unavailable", exc)
+        teams = {}
+        error = "MFL could not load the full league schedule right now."
+    return templates.TemplateResponse(request=request, name="tools.html", context={
+        "session": current, "league": selected, "active_tool": "schedule",
+        "page": "schedule", "page_title": "League schedule", "error": error,
+        "weeks": weeks, "teams": teams, "current_week": current_week,
+    })
+
+
+@app.get("/rules", response_class=HTMLResponse)
+def league_rules_page(request: Request, league: str):
+    current = _require_session(request)
+    selected = _league(current, league)
+    client = _client(current, selected)
+    details = settings = None
+    scoring_groups: list[dict] = []
+    error = ""
+    try:
+        details = _cached_session_read(
+            current, selected.id, "details", client.league_details,
+            ttl=900, stale_ttl=_LEAGUE_STATIC_STALE_TTL, shared=True,
+        )
+        settings = _cached_session_read(
+            current, selected.id, "lineup-settings", client.lineup_settings,
+            ttl=_SCORING_RULES_TTL, stale_ttl=30 * 86400,
+        )
+        scoring = _cached_session_read(
+            current, selected.id, "scoring-rules", client.scoring_rules,
+            ttl=_SCORING_RULES_TTL, stale_ttl=_SCORING_RULES_STALE_TTL,
+        )
+        scoring_groups = _scoring_rule_groups(scoring)
+    except MFLApiError as exc:
+        _log_provider_error_once(current, selected.id, "league_rules_unavailable", exc)
+        error = "MFL could not load all league rules right now."
+    return templates.TemplateResponse(request=request, name="tools.html", context={
+        "session": current, "league": selected, "active_tool": "rules",
+        "page": "rules", "page_title": "League rules", "error": error,
+        "details": details, "settings": settings, "scoring_groups": scoring_groups,
+    })
+
+
+@app.get("/data-status", response_class=HTMLResponse)
+def data_status_page(request: Request, league: str, refreshed: int = 0):
+    current = _require_session(request)
+    selected = _league(current, league)
+    now = time.monotonic()
+    prefix = f"{current.year}:{selected.id}:"
+    global_prefix = f"{current.year}:mfl-global:"
+    cache_rows = []
+    for key, entry in current.read_cache.items():
+        if not (key.startswith(prefix) or key.startswith(global_prefix)):
+            continue
+        label = key.split(":report:", 1)[-1].replace("-", " ")
+        remaining = int(entry[0] - now)
+        observed = current.cache_observed_at.get(key)
+        cache_rows.append({
+            "label": label, "fresh": remaining > 0,
+            "remaining": max(0, remaining),
+            "age": int(max(0, now - observed)) if observed is not None else None,
+        })
+    cache_rows.sort(key=lambda row: row["label"])
+    cooldown = max(0, math.ceil(current.provider_cooldowns.get(selected.id, 0) - now))
+    return templates.TemplateResponse(request=request, name="tools.html", context={
+        "session": current, "league": selected, "active_tool": "data-status",
+        "page": "data-status", "page_title": "Data status", "error": "",
+        "cache_rows": cache_rows, "cooldown": cooldown, "refreshed": bool(refreshed),
+    })
+
+
+@app.post("/data-status/refresh")
+def refresh_data_status(
+    request: Request, league: str = Form(...), csrf_token: str = Form(...),
+):
+    current = _require_session(request)
+    _check_csrf(current, csrf_token)
+    selected = _league(current, league)
+    prefix = f"{current.year}:{selected.id}:"
+    for key in tuple(current.read_cache):
+        if key.startswith(prefix):
+            current.read_cache.pop(key, None)
+            current.cache_observed_at.pop(key, None)
+    return RedirectResponse(f"/data-status?league={selected.id}&refreshed=1", status_code=303)
+
+
+@app.get("/guide", response_class=HTMLResponse)
+def guide_page(request: Request, league: str):
+    current = _require_session(request)
+    selected = _league(current, league)
+    return templates.TemplateResponse(request=request, name="tools.html", context={
+        "session": current, "league": selected, "active_tool": "guide",
+        "page": "guide", "page_title": "Getting started", "error": "",
+    })
 
 
 @app.get("/league", response_class=HTMLResponse)
@@ -2715,6 +3223,9 @@ def moves(request: Request, league: str, q: str = "", error: str = ""):
             "mfl_projections": blend.mfl_scores,
             "ml_projections": blend.ml_scores,
             "espn_ranks": blend.espn_ranks or {},
+            "ranking_preference": current.ranking_preference,
+            "ranking_label": _RANKING_PREFERENCES[current.ranking_preference],
+            "ranking_default_sort": "projection" if current.ranking_preference == "mfl" else "espn-rank",
             "ytd_scores": getattr(client, "player_ytd_scores", {}),
             "avg_scores": getattr(client, "player_avg_scores", {}),
             "median_scores": getattr(client, "player_median_scores", {}),
@@ -3007,6 +3518,7 @@ def submit_lineup(request: Request, pending_id: str, csrf_token: str = Form(...)
         raise HTTPException(status_code=404, detail="This lineup preview expired")
     league = _league(current, preview.league_id)
     client = _client(current, league)
+    operation_status = "failed"
     try:
         roster_ids = client.roster_ids()
         roster = client.named_players(roster_ids)
@@ -3069,11 +3581,22 @@ def submit_lineup(request: Request, pending_id: str, csrf_token: str = Form(...)
             f"{current.year}:{league.id}:report:home-briefing", None,
         )
         error = None
+        operation_status = "completed"
     except (MFLApiError, ValueError) as caught:
         log_error("lineup_submit_failed", caught)
         result = None
         success = None
         error = str(caught)
+        if isinstance(caught, MFLWriteUncertainError):
+            operation_status = "uncertain"
+    _record_operation(
+        current,
+        league_id=league.id,
+        kind="lineup",
+        title=f"Week {preview.week} lineup",
+        status=operation_status,
+        message=success or error or "No receipt was returned.",
+    )
     return templates.TemplateResponse(
         request=request,
         name="lineup_preview.html",
@@ -3167,6 +3690,7 @@ def submit_move(request: Request, pending_id: str, csrf_token: str = Form(...)):
         raise HTTPException(status_code=404, detail="This move preview expired")
     league = _league(current, preview.league_id)
     client = _client(current, league)
+    operation_status = "failed"
     try:
         client.validate_add_drop(preview)
         week = client.current_week()
@@ -3210,11 +3734,22 @@ def submit_move(request: Request, pending_id: str, csrf_token: str = Form(...)):
         _invalidate_player_board(current, league.id)
         success = "MFL accepted the transaction request."
         error = None
+        operation_status = "submitted" if preview.mode != "fcfs" else "completed"
     except (MFLApiError, ValueError) as api_error:
         log_error("move_submit_failed", api_error)
         result = None
         success = None
         error = str(api_error)
+        if isinstance(api_error, MFLWriteUncertainError):
+            operation_status = "uncertain"
+    _record_operation(
+        current,
+        league_id=league.id,
+        kind="waiver" if preview.mode != "fcfs" else "add/drop",
+        title=f"Add {preview.add.name} · drop {preview.drop.name}",
+        status=operation_status,
+        message=success or error or "No receipt was returned.",
+    )
     return templates.TemplateResponse(
         request=request,
         name="preview.html",
@@ -3558,6 +4093,9 @@ def api_player_card(request: Request, player_id: str, league: str, week: int | N
     if selected_week is None or not 1 <= selected_week <= 18:
         raise HTTPException(status_code=400, detail="Choose a valid week")
     projection = actual = None
+    weekly_points: list[dict] = []
+    season_summary = {"ytd": None, "average": None, "recent_average": None, "high": None, "games": 0}
+    trend = {"direction": "neutral", "label": "Trend needs at least two scored weeks", "delta": None}
     scoring = []
     try:
         projections = _cached_session_read(
@@ -3572,6 +4110,47 @@ def api_player_card(request: Request, player_id: str, league: str, week: int | N
         actual = next((item.score for matchup in live.matchups for franchise in matchup.franchises for item in franchise.players if item.player_id == player_id), None)
     except MFLApiError as error:
         _log_provider_error_once(current, selected.id, "player_card_points_unavailable", error)
+    try:
+        _load_player_score_summaries(client, current, selected_week)
+        for history_week in range(max(1, selected_week - 5), selected_week + 1):
+            scores = _cached_session_read(
+                current, selected.id, f"player-scores:week-{history_week}",
+                lambda score_week=history_week: client.player_scores(period=score_week),
+                ttl=300 if history_week == selected_week else 7 * 86400,
+                stale_ttl=30 * 86400,
+            )
+            points = scores.get(player_id)
+            if history_week == selected_week and actual is not None:
+                points = actual
+            weekly_points.append({"week": history_week, "points": points})
+        scored = [float(item["points"]) for item in weekly_points if item["points"] is not None]
+        recent = scored[-3:]
+        season_summary = {
+            "ytd": getattr(client, "player_ytd_scores", {}).get(player_id),
+            "average": getattr(client, "player_avg_scores", {}).get(player_id),
+            "recent_average": round(statistics.mean(recent), 2) if recent else None,
+            "high": round(max(scored), 2) if scored else None,
+            "games": len(scored),
+        }
+        if len(scored) >= 2:
+            split = min(3, max(1, len(scored) // 2))
+            recent_average = statistics.mean(scored[-split:])
+            earlier_values = scored[:-split][-split:]
+            if earlier_values:
+                delta = round(recent_average - statistics.mean(earlier_values), 2)
+                direction = "up" if delta > 0.5 else "down" if delta < -0.5 else "steady"
+                wording = "up" if direction == "up" else "down" if direction == "down" else "steady"
+                trend = {
+                    "direction": direction,
+                    "label": f"Recent scoring is {wording} {abs(delta):.1f} points versus the prior sample"
+                    if direction != "steady" else "Recent scoring is steady versus the prior sample",
+                    "delta": delta,
+                }
+            else:
+                trend = {"direction": "neutral", "label": "Only one comparison sample is available", "delta": None}
+    except (MFLApiError, AttributeError) as error:
+        if isinstance(error, MFLApiError):
+            _log_provider_error_once(current, selected.id, "player_card_history_unavailable", error)
     try:
         rules = _cached_session_read(
             current, selected.id, "scoring-rules", client.scoring_rules,
@@ -3601,12 +4180,19 @@ def api_player_card(request: Request, player_id: str, league: str, week: int | N
         "week": selected_week, "projection": projection, "actual_points": actual,
         "scoring_league": selected.name, "scoring_rules": scoring,
         "projection_source": "FantasySharks raw projections scored by MFL with this league's rules",
+        "weekly_points": weekly_points, "season_summary": season_summary, "trend": trend,
+        "ranking_preference": _RANKING_PREFERENCES[current.ranking_preference],
+        "watched": player_id in current.watchlists.get(selected.id, set()),
     }
 
 
 class BrowserErrorRequest(BaseModel):
     kind: Literal["script", "promise"]
-    page: Literal["/dashboard", "/lineup", "/moves", "/scores"]
+    page: Literal[
+        "/dashboard", "/home", "/lineup", "/rosters", "/moves", "/scores", "/trades",
+        "/transactions", "/watchlist", "/compare", "/notifications", "/schedule", "/rules",
+        "/data-status", "/guide",
+    ]
     line: int = Field(default=0, ge=0, le=1_000_000)
 
 

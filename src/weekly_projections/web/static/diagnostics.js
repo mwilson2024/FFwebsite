@@ -3,7 +3,7 @@
   const report = (kind, line = 0) => {
     const csrf = document.querySelector('meta[name="csrf-token"]')?.content;
     const page = window.location.pathname;
-    if (!csrf || reported >= 5 || !["/dashboard", "/lineup", "/moves", "/scores"].includes(page)) return;
+    if (!csrf || reported >= 5 || !["/dashboard", "/home", "/lineup", "/rosters", "/moves", "/scores", "/trades", "/transactions", "/watchlist", "/compare", "/notifications", "/schedule", "/rules", "/data-status", "/guide"].includes(page)) return;
     reported += 1;
     // Do not send messages, stacks, URLs, form values or any account information.
     fetch("/api/client-error", {

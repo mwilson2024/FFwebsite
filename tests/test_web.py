@@ -417,6 +417,178 @@ def test_rosters_tab_shows_every_member_and_groups_roster_tools(monkeypatch) -> 
     assert reads == {"details": 1, "rosters": 1, "players": 1}
 
 
+def test_watchlist_toggle_and_player_compare_use_league_scored_board(monkeypatch) -> None:
+    web_app.sessions.clear()
+    league = MFLLeague("88881", "0001", "Tools League")
+    current = web_app.BrowserSession("tools-watch-cookie", 2026, [league], "csrf")
+    web_app.sessions["tools-watch"] = current
+    first = PlayerRecommendation(
+        MFLPlayer("101", "Alpha Runner", "RB", "DET"), MFLAvailability("101"),
+        15.5, 2.0, None, "Upgrade", "good", "Projects as a weekly starter.",
+    )
+    second = PlayerRecommendation(
+        MFLPlayer("102", "Beta Runner", "RB", "GB"), MFLAvailability("102"),
+        12.0, 0.5, None, "Small edge", "fair", "Useful depth.",
+    )
+
+    class ToolsClient:
+        def players(self): return {"101": first.player, "102": second.player}
+        def injuries(self, **kwargs): return {}
+
+    fake = ToolsClient()
+
+    def board(client, *args, **kwargs):
+        client.player_ytd_scores = {"101": 31.0, "102": 22.0}
+        client.player_avg_scores = {"101": 15.5, "102": 11.0}
+        client.player_median_scores = {"101": 15.0, "102": 10.0}
+        client.opponent_strength = {"101": {"opponent": "MIN", "position": "RB", "rank": 4, "label": "Favorable"}}
+        return 2, [], [first, second], ProjectionBlend({}, {}, {}, 0), set()
+
+    monkeypatch.setattr(web_app, "_client", lambda *args: fake)
+    monkeypatch.setattr(web_app, "_load_player_board", board)
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", "tools-watch")
+
+    added = client.post("/api/watchlist/101?league=88881", headers={"X-CSRF-Token": "csrf"})
+    assert added.status_code == 200 and added.json() == {"watched": True, "count": 1}
+    watched = client.get("/watchlist?league=88881")
+    assert watched.status_code == 200 and "Alpha Runner" in watched.text and "31.0" in watched.text
+    compared = client.get("/compare?league=88881&p1=101&p2=102")
+    assert compared.status_code == 200
+    assert "Alpha Runner" in compared.text and "Beta Runner" in compared.text
+    assert "No MFL designation" in compared.text and "MIN · #4 Favorable" in compared.text
+
+
+def test_operations_schedule_rules_status_and_guide_pages_render(monkeypatch) -> None:
+    web_app.sessions.clear()
+    league = MFLLeague("88882", "0001", "Operations League")
+    current = web_app.BrowserSession("tools-pages-cookie", 2026, [league], "csrf")
+    current.operations.append(web_app.OperationRecord(
+        "88882", "waiver", "Add Player A · drop Player B", "completed", "MFL accepted the request.",
+    ))
+    web_app.sessions["tools-pages"] = current
+
+    class ToolsClient:
+        def transactions(self, **kwargs):
+            return (MFLTransaction("tx", "FREE_AGENT", 1_700_000_000, ("0001",), ("101",), ("102",)),)
+        def players(self):
+            return {"101": MFLPlayer("101", "Player A", "RB", "DET"), "102": MFLPlayer("102", "Player B", "RB", "GB")}
+        def league_details(self):
+            return MFLLeagueDetails((), {
+                "0001": MFLFranchise("0001", "My Team"), "0002": MFLFranchise("0002", "Opponent"),
+            }, name="Operations League", start_week=1, end_week=18, last_regular_season_week=14, faab_limit=100)
+        def fantasy_schedule(self):
+            return (MFLFantasyGame(2, ("0001", "0002"), (101.5, 99.0)),)
+        def current_week(self): return 2
+        def lineup_settings(self):
+            return MFLLineupSettings(2, (MFLLineupRule("QB", 1, 1), MFLLineupRule("RB|WR", 1, 1)))
+        def scoring_rules(self):
+            return {"positionRules": {"positions": "RB|WR", "rule": {"event": "RY", "range": "0-999", "points": "*.1"}}}
+
+    monkeypatch.setattr(web_app, "_client", lambda *args: ToolsClient())
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", "tools-pages")
+
+    transactions = client.get("/transactions?league=88882")
+    assert transactions.status_code == 200
+    assert "My transactions" in transactions.text and "Player A" in transactions.text
+    schedule = client.get("/schedule?league=88882")
+    assert schedule.status_code == 200 and "101.50" in schedule.text and "Opponent" in schedule.text
+    rules = client.get("/rules?league=88882")
+    assert rules.status_code == 200 and "RB|WR" in rules.text and "*.1" in rules.text
+    assert client.get("/data-status?league=88882").status_code == 200
+    guide = client.get("/guide?league=88882")
+    assert guide.status_code == 200 and "Four moves to get set" in guide.text
+
+
+def test_notification_center_and_first_run_guide(monkeypatch) -> None:
+    web_app.sessions.clear()
+    league = MFLLeague("88883", "0001", "Alert League")
+    current = web_app.BrowserSession("tools-alert-cookie", 2026, [league], "csrf")
+    web_app.sessions["tools-alert"] = current
+    monkeypatch.setattr(web_app, "_load_insights", lambda *args, **kwargs: {
+        "actions": [{"tone": "warning", "title": "Questionable starter", "detail": "Check Sunday status.",
+                     "href": "/lineup?league=88883", "label": "Review"}],
+    })
+    class AlertClient:
+        def transactions(self, **kwargs): return ()
+    monkeypatch.setattr(web_app, "_client", lambda *args: AlertClient())
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", "tools-alert")
+    alerts = client.get("/notifications?league=88883")
+    assert alerts.status_code == 200 and "Questionable starter" in alerts.text
+    home = client.get("/home?league=88883")
+    assert "Which rankings should lead your player lists?" in home.text and "My transactions" in home.text
+    saved = client.post("/preferences/rankings", data={
+        "league": "88883", "ranking_preference": "espn-ppr", "csrf_token": "csrf",
+    }, follow_redirects=False)
+    assert saved.status_code == 303 and saved.cookies.get("wp_rankings") == "espn-ppr"
+    assert current.ranking_preference == "espn-ppr"
+    home = client.get("/home?league=88883")
+    assert "Your league is connected" in home.text
+    dismissed = client.post("/onboarding/dismiss", data={"league": "88883", "csrf_token": "csrf"}, follow_redirects=False)
+    assert dismissed.status_code == 303 and dismissed.cookies.get("wp_tour_done") == "1"
+
+
+def test_ranking_preference_is_csrf_protected_and_changeable(monkeypatch) -> None:
+    web_app.sessions.clear()
+    league = MFLLeague("88884", "0001", "Rank League")
+    current = web_app.BrowserSession("rank-cookie", 2026, [league], "csrf")
+    web_app.sessions["rank-session"] = current
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", "rank-session")
+
+    assert client.post("/preferences/rankings", data={
+        "league": league.id, "ranking_preference": "mfl", "csrf_token": "wrong",
+    }).status_code == 403
+    invalid = client.post("/preferences/rankings", data={
+        "league": league.id, "ranking_preference": "unknown", "csrf_token": "csrf",
+    })
+    assert invalid.status_code == 400
+    saved = client.post("/preferences/rankings", data={
+        "league": league.id, "ranking_preference": "mfl", "csrf_token": "csrf",
+    }, follow_redirects=False)
+    assert saved.status_code == 303 and saved.cookies.get("wp_rankings") == "mfl"
+    assert current.ranking_preference == "mfl"
+
+
+def test_player_card_returns_bounded_weekly_totals_and_trend(monkeypatch) -> None:
+    web_app.sessions.clear()
+    league = MFLLeague("88885", "0001", "Trend League")
+    current = web_app.BrowserSession("trend-cookie", 2026, [league], "csrf")
+    web_app.sessions["trend-session"] = current
+    player = MFLPlayer("p1", "Trend Runner", "RB", "DET")
+    weekly = {1: 5.0, 2: 10.0, 3: 15.0, 4: 20.0}
+
+    class CardClient:
+        config = MFLConfig(2026, league.id, league.franchise_id, user_cookie="cookie")
+        def __init__(self): self._players = {player.id: player}
+        def players(self): return self._players
+        def projected_scores(self, **kwargs): return {player.id: 18.5}
+        def live_scoring(self, **kwargs):
+            live_player = MFLLivePlayer(player.id, 20.0, "starter", 0)
+            team = MFLLiveFranchise("0001", 20.0, False, 0, 0, 0, (live_player,))
+            return MFLLiveScoring(4, (MFLLiveMatchup((team,)),))
+        def player_scores(self, period, **kwargs):
+            if period == "YTD": return {player.id: 50.0}
+            if period == "AVG": return {player.id: 12.5}
+            return {player.id: weekly[int(period)]}
+        def scoring_rules(self): return {}
+
+    monkeypatch.setattr(web_app, "_client", lambda *args: CardClient())
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", "trend-session")
+    response = client.get("/api/players/p1?league=88885&week=4")
+    assert response.status_code == 200
+    data = response.json()
+    assert [row["points"] for row in data["weekly_points"]] == [5.0, 10.0, 15.0, 20.0]
+    assert data["season_summary"] == {
+        "ytd": 50.0, "average": 12.5, "recent_average": 15.0, "high": 20.0, "games": 4,
+    }
+    assert data["trend"]["direction"] == "up" and data["trend"]["delta"] == 10.0
+    assert data["ranking_preference"] == "ESPN PPR weekly consensus"
+
+
 def test_player_market_loader_merges_all_rosters_and_free_agents(monkeypatch) -> None:
     players = {
         "mine": MFLPlayer("mine", "My Player", "WR", "DET"),

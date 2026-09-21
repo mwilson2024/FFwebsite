@@ -19,6 +19,13 @@ for one signed-in owner and provides:
 - a League HQ with transaction activity, waiver trends/FAAB, power and luck rankings,
   playoff outlooks, automated score recaps, manager profiles, and session-only props;
 - trade offers, target analysis, suggested trades, and trade-block management;
+- session-only player watchlists, side-by-side player comparison, actionable alerts,
+  and combined local/MFL transaction receipts;
+- player cards with bounded weekly MFL point history and honest scoring trends;
+- a device-local, user-editable primary ranking preference for ESPN PPR, ESPN
+  Standard, or MFL league-scored projections;
+- a full MFL league schedule, readable rules/scoring pages, cache status, and
+  first-use guidance;
 - MFL league-scored projections and clearly separated third-party reference projections;
 - Maize & Blue and Detroit Lions themes across desktop and iPhone layouts.
 
@@ -115,9 +122,11 @@ must remain untracked.
   API keys in GET URLs.
 - Every state-changing browser request requires CSRF validation.
 - Device-local cookies may remember only non-secret preferences such as league ID,
-  season, selected week, and theme.
+  season, selected week, theme, and primary ranking choice.
 - Pending lineup, add/drop, trade, trade-block, and side-bet state remains memory-only
   and must never be restored with a remembered login.
+- Watchlists, notification state, and local transaction receipts are also memory-only;
+  they clear on disconnect, expiration, restart, or redeploy.
 
 Do not expand the encrypted persistence schema without a new explicit security review.
 
