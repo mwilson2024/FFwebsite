@@ -30,12 +30,13 @@ high, official overall and position ranks, the actual saved-list projection rank
 and a labeled recent-versus-prior trend. History reads reuse the same bounded weekly
 caches as the player market; missing weeks stay visibly unavailable.
 
-Appearance includes four device-local themes: Maize & Blue, the light Detroit
-Lions palette, Midnight Aurora, and a Detroit Tigers-inspired navy-and-orange
-theme. Every theme uses the same responsive layout and accessible state labels.
+Appearance includes six device-local themes: Maize & Blue, the light Detroit
+Lions palette, Midnight Aurora, Detroit Tigers navy-and-orange, Detroit Red Wings
+red-and-white, and Detroit Pistons blue-and-red. Every theme uses the same responsive
+layout and accessible state labels.
 
 The Rosters tab shows every member's official MFL roster in expandable team cards.
-Its Player Leaders board ranks all non-IDP scorers by official MFL YTD and position
+Its League Leaders board ranks all non-IDP scorers by official MFL YTD and position
 rank, identifies their fantasy team or free-agent status, and keeps the selected
 weekly projection rank separate. Free Agents and Trades remain grouped beside it as roster tools. The player market
 combines MFL free agents, waiver players, and every league

@@ -36,7 +36,7 @@
           <span class="team-monogram" aria-hidden="true">{{ team.name[:2]|upper }}</span>
           <h2>{{ team.name }}</h2><small>{{ 'YOUR TEAM' if team.franchise_id == league.franchise_id else 'LEAGUE TEAM' }}</small>
           <strong class="arena-total">{{ '%.2f'|format(team.score) }}</strong>
-          <span class="win-probability">{% if forecast %}{% set chance = forecast.percentages[loop.index0] %}{% if chance is none %}Tie{% elif forecast.final %}{{ 'Won · 100%' if chance == 100 else 'Lost · 0%' }}{% else %}{{ chance }}% estimated win{% endif %}{% else %}Win estimate unavailable{% endif %}</span>
+          <span class="win-probability">{% if forecast %}{% set chance = forecast.percentages[loop.index0] %}{% if chance is none %}Tie{% elif forecast.final %}{{ 'Won · 100.00%' if chance == 100 else 'Lost · 0.00%' }}{% else %}{{ '%.2f'|format(chance) }}% estimated win{% endif %}{% else %}Win estimate unavailable{% endif %}</span>
           {% set starters = team.players|selectattr('is_starter')|list %}
           {% set projected = starters|selectattr('projection','ne',none)|list %}
           <span class="arena-projection">{% if projected|length == starters|length and starters %}{{ '%.1f'|format(projected|sum(attribute='projection')) }} projected{% else %}Projection incomplete{% endif %}</span>

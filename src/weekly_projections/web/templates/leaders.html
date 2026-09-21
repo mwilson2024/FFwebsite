@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="csrf-token" content="{{ session.csrf_token }}">
-  <title>Player leaders · {{ league.name }}</title>
+  <title>League leaders · {{ league.name }}</title>
   <link rel="stylesheet" href="/static/app.css?v=20260920-rosters">
   <link rel="stylesheet" href="/static/workspace.css?v=3">
   <link rel="stylesheet" href="/static/fantasy.css?v=20260921-leaders">
@@ -18,7 +18,7 @@
   {% include '_league_header.html' %}
   <main class="workspace roster-workspace" id="main-content">
     <section class="roster-hero">
-      <div><p class="eyebrow">OFFICIAL MFL LEAGUE SCORING</p><h1>Player leaders</h1><p>See where every scoring player ranks, who rosters them, and how your selected projection list views the week.</p></div>
+      <div><p class="eyebrow">OFFICIAL MFL LEAGUE SCORING</p><h1>League leaders</h1><p>See where every scoring player ranks, who rosters them, and how your selected projection list views the week.</p></div>
       <div class="roster-summary" aria-label="Leader summary"><span><strong>{{ leader_count }}</strong> ranked players</span><span><strong>{{ week or '—' }}</strong> current week</span></div>
     </section>
     {% include '_roster_tabs.html' %}
@@ -26,7 +26,7 @@
     <form class="leader-filters" method="get" action="/leaders">
       <input type="hidden" name="league" value="{{ league.id }}">
       <label>Search<input name="q" value="{{ query }}" maxlength="80" placeholder="Player, NFL team, or fantasy team"></label>
-      <label>Position<select name="position"><option value="ALL">All positions</option>{% for item in positions %}<option value="{{ item }}" {% if selected_position == item %}selected{% endif %}>{{ item }}</option>{% endfor %}</select></label>
+      <label>Position<select name="position"><option value="ALL">All positions</option>{% for item in positions %}<option value="{{ item.value }}" {% if selected_position == item.value %}selected{% endif %}>{{ item.label }}</option>{% endfor %}</select></label>
       <label>Location<select name="availability"><option value="all">Everywhere</option><option value="rostered" {% if selected_availability == 'rostered' %}selected{% endif %}>Rostered</option><option value="free-agent" {% if selected_availability == 'free-agent' %}selected{% endif %}>Free agents</option></select></label>
       <button>Apply</button>
     </form>

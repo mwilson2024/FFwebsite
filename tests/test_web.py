@@ -438,6 +438,7 @@ def test_player_leaders_show_official_ranks_ownership_and_primary_rank(monkeypat
         "qb": MFLPlayer("qb", "Alpha Quarterback", "QB", "DET"),
         "rb": MFLPlayer("rb", "Beta Runner", "RB", "GB"),
         "fa": MFLPlayer("fa", "Gamma Receiver", "WR", "BUF"),
+        "def": MFLPlayer("def", "Detroit Defense", "Def", "DET"),
         "idp": MFLPlayer("idp", "Hidden Linebacker", "LB", "MIN"),
     }
 
@@ -452,11 +453,11 @@ def test_player_leaders_show_official_ranks_ownership_and_primary_rank(monkeypat
                 "0002": MFLFranchise("0002", "Rival Team"),
             })
         def player_scores(self, period, **kwargs):
-            return {"qb": 70.0, "rb": 55.0, "fa": 40.0, "idp": 100.0} if period == "YTD" else {
-                "qb": 23.3, "rb": 18.3, "fa": 13.3, "idp": 33.3,
+            return {"qb": 70.0, "rb": 55.0, "fa": 40.0, "def": 32.0, "idp": 100.0} if period == "YTD" else {
+                "qb": 23.3, "rb": 18.3, "fa": 13.3, "def": 10.7, "idp": 33.3,
             }
         def current_week(self): return 4
-        def projected_scores(self, **kwargs): return {"qb": 24.0, "rb": 17.0, "fa": 15.0}
+        def projected_scores(self, **kwargs): return {"qb": 24.0, "rb": 17.0, "fa": 15.0, "def": 8.0}
 
     monkeypatch.setattr(web_app, "_client", lambda *args: LeaderClient())
     monkeypatch.setattr(
@@ -464,7 +465,7 @@ def test_player_leaders_show_official_ranks_ownership_and_primary_rank(monkeypat
         "_load_reference_projection_blend",
         lambda *args, **kwargs: ProjectionBlend(
             kwargs["mfl_scores"], kwargs["mfl_scores"], {}, 0,
-            combined_ranks={"qb": 1.0, "rb": 2.0, "fa": 3.0}, combined_matched=3,
+            combined_ranks={"qb": 1.0, "rb": 2.0, "fa": 3.0, "def": 1.0}, combined_matched=4,
         ),
     )
     client = TestClient(web_app.app)
@@ -473,11 +474,22 @@ def test_player_leaders_show_official_ranks_ownership_and_primary_rank(monkeypat
     response = client.get("/leaders?league=77778")
 
     assert response.status_code == 200
-    assert "Player leaders" in response.text and "YTD player rankings" in response.text
+    assert "League leaders" in response.text and "YTD player rankings" in response.text
     assert "Alpha Quarterback" in response.text and "#1" in response.text
     assert "My Team" in response.text and "Rival Team" in response.text and "Free agent" in response.text
     assert "Hidden Linebacker" not in response.text
     assert "Combined MFL + ESPN + ML position rank" in response.text
+    tabs = response.text.split('<nav class="roster-tools"', 1)[1].split("</nav>", 1)[0]
+    assert tabs.index("Compare") < tabs.index("League leaders")
+    position_select = response.text.split('<select name="position">', 1)[1].split("</select>", 1)[0]
+    assert position_select.index("WR + TE") < position_select.index("FLEX (RB + WR + TE)")
+    assert position_select.rfind(">DEF<") > position_select.index("FLEX (RB + WR + TE)")
+
+    wr_te = client.get("/leaders", params={"league": "77778", "position": "WR+TE"})
+    assert "Gamma Receiver" in wr_te.text and "Beta Runner" not in wr_te.text
+    flex = client.get("/leaders", params={"league": "77778", "position": "FLEX"})
+    assert "Gamma Receiver" in flex.text and "Beta Runner" in flex.text
+    assert "Alpha Quarterback" not in flex.text
 
 
 def test_watchlist_toggle_and_player_compare_use_league_scored_board(monkeypatch) -> None:
@@ -1333,6 +1345,7 @@ def test_live_scores_page_renders_mfl_matchup(monkeypatch) -> None:
     assert "Opponent Player" in response.text
     assert "14.0" in response.text
     assert "12.50" in response.text
+    assert ".00% estimated win" in response.text
     assert 'class="matchup-player-row"' in response.text
     # An explicit choice survives a return without a week query parameter.
     monkeypatch.setattr(web_app, "_load_live_scoring_week", lambda client, requested_week=None, **kwargs: (requested_week, 2, live, {}, head_to_head))

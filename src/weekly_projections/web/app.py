@@ -3301,7 +3301,13 @@ def league_player_leaders_page(
                 or needle in row["player"].team.casefold()
                 or needle in row["owner_name"].casefold()
             ]
-        if selected_position != "ALL":
+        position_groups = {
+            "WR+TE": {"WR", "TE"},
+            "FLEX": {"RB", "WR", "TE"},
+        }
+        if selected_position in position_groups:
+            rows = [row for row in rows if row["position"] in position_groups[selected_position]]
+        elif selected_position != "ALL":
             rows = [row for row in rows if row["position"] == selected_position]
         if selected_availability == "rostered":
             rows = [row for row in rows if not row["is_free_agent"]]
@@ -3310,10 +3316,26 @@ def league_player_leaders_page(
     except MFLApiError as exc:
         _log_provider_error_once(current, selected.id, "league_player_leaders_unavailable", exc)
         error = "MFL could not load the league-scored player leaders right now. Cached results will return automatically when available."
-    positions = sorted(
-        {row["position"] for row in all_rows},
-        key=lambda value: (value not in {"QB", "RB", "WR", "TE", "PK", "DEF"}, value),
-    )
+    available_positions = {row["position"] for row in all_rows}
+    ordered_positions = [
+        value for value in ("QB", "RB", "WR", "TE", "PK")
+        if value in available_positions
+    ]
+    ordered_positions.extend(sorted(
+        available_positions - set(ordered_positions) - {"DEF"}
+    ))
+    insert_at = min(4, len(ordered_positions))
+    ordered_positions[insert_at:insert_at] = ["WR+TE", "FLEX"]
+    if "DEF" in available_positions:
+        ordered_positions.append("DEF")
+    position_labels = {
+        "WR+TE": "WR + TE",
+        "FLEX": "FLEX (RB + WR + TE)",
+    }
+    positions = [
+        {"value": value, "label": position_labels.get(value, value)}
+        for value in ordered_positions
+    ]
     return templates.TemplateResponse(
         request=request,
         name="leaders.html",

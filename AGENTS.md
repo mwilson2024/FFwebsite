@@ -13,7 +13,7 @@ for one signed-in owner and provides:
 - a league home dashboard;
 - saved lineups, drag/touch start-sit editing, and an automatic best-lineup suggestion;
 - a complete player market with free agents, waivers, locked players, and every roster;
-- a league player-leaders board with official YTD/position ranks, ownership, and the selected projection rank;
+- a League Leaders board with official YTD/position ranks, ownership, and the selected projection rank;
 - reviewed FCFS, priority-waiver, and blind-bid FAAB add/drop requests;
 - live and historical matchup scoring with starter-only summaries and point details;
 - standings grouped by MFL division when division data exists;
@@ -28,7 +28,8 @@ for one signed-in owner and provides:
 - a full MFL league schedule, readable rules/scoring pages, cache status, and
   first-use guidance;
 - MFL league-scored projections and clearly separated third-party reference projections;
-- Maize & Blue, Detroit Lions, Midnight Aurora, and Detroit Tigers themes across desktop and iPhone layouts.
+- Maize & Blue, Detroit Lions, Midnight Aurora, Detroit Tigers, Detroit Red Wings,
+  and Detroit Pistons themes across desktop and iPhone layouts.
 
 Provider scope is **MFL only**. Do not add ESPN, Sleeper, Yahoo, or another fantasy
 provider unless a future user request explicitly reopens that work.
@@ -186,7 +187,7 @@ The add/drop builder must retain:
 
 Never enable add controls for rostered or locked players.
 
-The Player Leaders page ranks non-IDP players from official MFL YTD league-scored
+The League Leaders page ranks non-IDP players from official MFL YTD league-scored
 points, shows both overall and position rank, and identifies the owning franchise or
 free-agent state. Player cards repeat those official ranks and separately label the
 user's selected weekly projection rank. Never present a projection rank as an official
@@ -269,13 +270,16 @@ season scoring rank.
 
 ## 12. UI and accessibility expectations
 
-- Maize & Blue, Detroit Lions, Midnight Aurora, and Detroit Tigers themes must cover every route and reusable card.
+- Maize & Blue, Detroit Lions, Midnight Aurora, Detroit Tigers, Detroit Red Wings,
+  and Detroit Pistons themes must cover every route and reusable card.
 - The Lions theme uses a white/light page background with official-inspired blue,
   silver, black, and white accents.
 - Midnight Aurora uses a dark navy base with violet and electric-cyan accents while
   preserving readable contrast and the same interaction states as the other themes.
 - Detroit Tigers uses a dark navy base with orange accents and warm white text while
   preserving readable contrast and the same interaction states as the other themes.
+- Detroit Red Wings uses a light white-and-red presentation. Detroit Pistons uses a
+  dark navy, royal-blue, red, and white presentation. Both preserve readable contrast.
 - Desktop is information-dense; iPhone layouts must remain touch-friendly and readable.
 - Maintain visible keyboard focus, semantic labels, real buttons, and accessible dialogs.
 - Never make color the only indication of playing/locked/final/error state.
