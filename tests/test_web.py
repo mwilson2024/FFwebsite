@@ -542,6 +542,7 @@ def test_database_status_reports_local_storage_without_database_url(monkeypatch)
         "label": "Local storage",
         "backend": "SQLite",
         "schema_version": None,
+        "reference": "",
         "detail": (
             "Supabase is not configured on this deployment. "
             "Local encrypted session storage remains active."
@@ -557,14 +558,25 @@ def test_database_status_hides_connection_error_details(monkeypatch) -> None:
     events = []
     monkeypatch.setenv("WP_DATABASE_URL", "postgresql://configured")
     monkeypatch.setattr(web_app, "_persistent_store", lambda: UnavailableStore())
-    monkeypatch.setattr(web_app, "log_error", lambda event, error: events.append(event))
-
-    status = web_app._database_status()
+    monkeypatch.setattr(
+        web_app, "log_error",
+        lambda event, error: events.append((event, str(error), type(error.__cause__).__name__)),
+    )
+    token = web_app.request_context.set(("db-ref-123", object()))
+    try:
+        status = web_app._database_status()
+    finally:
+        web_app.request_context.reset(token)
 
     assert status["state"] == "unavailable"
     assert status["label"] == "Database unavailable"
+    assert status["reference"] == "db-ref-123"
     assert "secret" not in repr(status)
-    assert events == ["database_status_unavailable"]
+    assert events == [(
+        "database_status_unavailable",
+        "Supabase PostgreSQL schema health check failed",
+        "RuntimeError",
+    )]
 
 
 def test_operations_schedule_rules_status_and_guide_pages_render(monkeypatch) -> None:

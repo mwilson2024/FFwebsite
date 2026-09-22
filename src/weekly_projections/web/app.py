@@ -86,6 +86,8 @@ _INDIVIDUAL_DEFENSE_POSITIONS = {
 }
 _SCORING_RULES_TTL = 7 * 86400
 _SCORING_RULES_STALE_TTL = 14 * 86400
+_WEEKLY_STATIC_TTL = 7 * 86400
+_PROJECTIONS_TTL = 12 * 3600
 _APP_TIME_ZONE = ZoneInfo(os.getenv("WP_TIME_ZONE", "America/New_York"))
 _LEAGUE_STATIC_STALE_TTL = 7 * 86400
 _SHARED_READ_CACHE_LIMIT = 512
@@ -620,17 +622,37 @@ def _database_status() -> dict:
             "label": "Local storage",
             "backend": "SQLite",
             "schema_version": None,
+            "reference": "",
             "detail": "Supabase is not configured on this deployment. Local encrypted session storage remains active.",
         }
     try:
-        status = _persistent_store().connection_status()
+        store = _persistent_store()
     except Exception as error:
-        log_error("database_status_unavailable", error)
+        diagnostic = RuntimeError("Supabase PostgreSQL store initialization failed")
+        diagnostic.__cause__ = error
+        log_error("database_status_unavailable", diagnostic)
+        context = request_context.get()
         return {
             "state": "unavailable",
             "label": "Database unavailable",
             "backend": "Supabase PostgreSQL",
             "schema_version": None,
+            "reference": context[0] if context else "",
+            "detail": "Supabase is configured, but this server could not verify the private database right now.",
+        }
+    try:
+        status = store.connection_status()
+    except Exception as error:
+        diagnostic = RuntimeError("Supabase PostgreSQL schema health check failed")
+        diagnostic.__cause__ = error
+        log_error("database_status_unavailable", diagnostic)
+        context = request_context.get()
+        return {
+            "state": "unavailable",
+            "label": "Database unavailable",
+            "backend": "Supabase PostgreSQL",
+            "schema_version": None,
+            "reference": context[0] if context else "",
             "detail": "Supabase is configured, but this server could not verify the private database right now.",
         }
     if status["connected"]:
@@ -639,6 +661,7 @@ def _database_status() -> dict:
             "label": "Supabase connected",
             "backend": status["backend"],
             "schema_version": status["schema_version"],
+            "reference": "",
             "detail": "This server reached the private fantasy_hq schema successfully.",
         }
     return {
@@ -646,6 +669,7 @@ def _database_status() -> dict:
         "label": "Schema unavailable",
         "backend": status["backend"],
         "schema_version": status["schema_version"],
+        "reference": "",
         "detail": "PostgreSQL responded, but the expected fantasy_hq migration record was not found.",
     }
 
@@ -807,6 +831,8 @@ def _cached_session_read(
     cookie itself. This lets a remembered browser session reuse stable data
     after its eight-hour active session rotates on a one-worker Azure host.
     """
+    ttl = _report_cache_ttl(label, ttl)
+    shared = shared or _report_cache_is_stable(label)
     cache_key = f"{current.year}:{league_id}:report:{label}"
     with current.read_lock:
         now = time.monotonic()
@@ -868,6 +894,95 @@ def _seconds_until_daily_refresh(now: datetime | None = None) -> int:
     tomorrow = current.date() + timedelta(days=1)
     midnight = datetime(tomorrow.year, tomorrow.month, tomorrow.day, tzinfo=_APP_TIME_ZONE)
     return max(60, int((midnight - current).total_seconds()))
+
+
+def _report_cache_ttl(label: str, requested_ttl: int) -> int:
+    """Apply conservative refresh ceilings to stable read-only reports."""
+    if label == "franchise-names" or label.startswith("nfl-schedule:"):
+        return _WEEKLY_STATIC_TTL
+    if label.startswith(("projections:", "reference-projections:")):
+        return _PROJECTIONS_TTL
+    if label in {"player-scores:avg", "player-scores:ytd"}:
+        return _seconds_until_daily_refresh()
+    return requested_ttl
+
+
+def _report_cache_is_stable(label: str) -> bool:
+    return (
+        label == "franchise-names"
+        or label.startswith(("nfl-schedule:", "projections:", "reference-projections:"))
+        or label in {"player-scores:avg", "player-scores:ytd"}
+    )
+
+
+def _cache_status_metadata(raw_label: str) -> dict[str, str]:
+    """Translate internal cache keys into useful, user-facing data descriptions."""
+    if raw_label == "details":
+        return {
+            "label": "League details",
+            "detail": "League name, divisions, teams, season weeks, FAAB balances and waiver order.",
+            "cadence": "Kept fresh for changing league settings",
+        }
+    if raw_label == "franchise-names":
+        return {
+            "label": "Franchise names",
+            "detail": "The display names of every fantasy team in this league.",
+            "cadence": "Checked weekly",
+        }
+    if raw_label.startswith("nfl-schedule:"):
+        week = raw_label.rsplit(":", 1)[-1]
+        return {
+            "label": f"NFL schedule · Week {week}",
+            "detail": "Opponent and kickoff information used by lineup and matchup views.",
+            "cadence": "Checked weekly; live game state is checked separately",
+        }
+    if raw_label == "player-scores:avg":
+        return {
+            "label": "Player scoring averages",
+            "detail": "Season average; it changes after newly finalized games or stat corrections.",
+            "cadence": "Checked daily",
+        }
+    if raw_label == "player-scores:ytd":
+        return {
+            "label": "Player points · Year to date",
+            "detail": "Official accumulated MFL points through the latest finalized scoring.",
+            "cadence": "Checked daily",
+        }
+    if raw_label.startswith("projections:"):
+        week = raw_label.rsplit(":", 1)[-1]
+        return {
+            "label": f"MFL projections · Week {week}",
+            "detail": "Weekly player projections scored with this league's MFL rules.",
+            "cadence": "Checked at most twice daily",
+        }
+    if raw_label.startswith("reference-projections:"):
+        parts = raw_label.split(":")
+        week = parts[1] if len(parts) > 1 else ""
+        return {
+            "label": f"Reference projections · Week {week}".strip(),
+            "detail": "Separately labeled ESPN and ML ranking context.",
+            "cadence": "Checked at most twice daily",
+        }
+    return {
+        "label": raw_label.replace("-", " ").replace(":", " · "),
+        "detail": "Cached read-only report used by this league view.",
+        "cadence": "Refresh timing depends on how quickly this data changes",
+    }
+
+
+def _cache_duration_label(seconds: int) -> str:
+    if seconds >= 86400:
+        days, remainder = divmod(seconds, 86400)
+        hours = remainder // 3600
+        return f"{days}d {hours}h" if hours else f"{days}d"
+    if seconds >= 3600:
+        hours, remainder = divmod(seconds, 3600)
+        minutes = remainder // 60
+        return f"{hours}h {minutes}m" if minutes else f"{hours}h"
+    if seconds >= 60:
+        minutes = max(1, seconds // 60)
+        return f"{minutes}m"
+    return f"{max(0, seconds)}s"
 
 
 def _score_cache_ttl(
@@ -2904,12 +3019,14 @@ def data_status_page(request: Request, league: str, refreshed: int = 0):
     for key, entry in current.read_cache.items():
         if not (key.startswith(prefix) or key.startswith(global_prefix)):
             continue
-        label = key.split(":report:", 1)[-1].replace("-", " ")
+        raw_label = key.split(":report:", 1)[-1]
+        metadata = _cache_status_metadata(raw_label)
         remaining = int(entry[0] - now)
         observed = current.cache_observed_at.get(key)
         cache_rows.append({
-            "label": label, "fresh": remaining > 0,
+            **metadata, "fresh": remaining > 0,
             "remaining": max(0, remaining),
+            "refresh_in": _cache_duration_label(max(0, remaining)),
             "age": int(max(0, now - observed)) if observed is not None else None,
         })
     cache_rows.sort(key=lambda row: row["label"])

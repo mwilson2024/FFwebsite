@@ -125,6 +125,14 @@ The application validates the installed schema version before using PostgreSQL
 and falls back to normal signed-in operation if optional persistence is temporarily
 unavailable.
 
+Database connection failures are written to standard output as the structured
+event `database_status_unavailable`. In Azure, enable **Monitoring → App Service
+logs → Application logging (File System)**, then open **Monitoring → Log stream**.
+Open the website's **Data status** page once and search the stream for that event
+or the reference displayed on the database card. The record identifies store
+initialization versus the schema health check and includes a redacted exception
+chain; it never includes the connection URL, database password, or session data.
+
 Free weekly consensus rankings are loaded from ESPN Fantasy's unauthenticated
 read feed. No FantasyPros subscription or API key is required. The optional
 format setting can be added in Railway Variables or a private local environment:
@@ -135,7 +143,7 @@ WP_ESPN_RANKING_FORMAT=PPR
 
 `WP_ESPN_RANKING_FORMAT` accepts `PPR` or `STANDARD` and supplies the default only
 until the user makes a device-level ranking choice. The normal default is `PPR`.
-Rankings are cached for one hour, are shown as a separate reference, and fail
+Rankings are cached for 12 hours, are shown as a separate reference, and fail
 softly if ESPN changes or temporarily disables the feed. ESPN access never uses
 your ESPN account, cookies, or credentials. This does not add ESPN league login
 or management; MFL remains the application's only league provider. The player

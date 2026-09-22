@@ -116,6 +116,23 @@ def test_exception_details_keep_useful_provider_failure(monkeypatch, tmp_path):
     assert "RuntimeError" in text and "TimeoutError" in text
 
 
+def test_exception_details_include_safe_postgres_sqlstate(monkeypatch, tmp_path):
+    logger = logging.Logger("isolated-database-error")
+    monkeypatch.setattr(diagnostics, "_logger", logger)
+    path = tmp_path / "errors.log"
+    monkeypatch.setattr(diagnostics, "LOG_PATH", path)
+
+    error = RuntimeError("Database schema lookup failed")
+    error.sqlstate = "3F000"
+    diagnostics.log_error("database_status_unavailable", error)
+
+    for handler in logger.handlers:
+        handler.flush()
+        handler.close()
+    text = path.read_text()
+    assert '"sqlstate": "3F000"' in text
+
+
 def test_browser_error_reports_require_session_and_csrf(monkeypatch):
     client = TestClient(web.app)
     payload = {"kind": "script", "page": "/lineup", "line": 42}

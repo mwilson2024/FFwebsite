@@ -20,7 +20,7 @@ ESPN_WEEKLY_RANKINGS_URL = (
     "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/"
     "{year}/segments/0/leaguedefaults/{scoring_id}"
 )
-_CACHE_SECONDS = 15 * 60
+_CACHE_SECONDS = 12 * 60 * 60
 _stathead_cache: dict[int, tuple[float, dict[str, Any]]] = {}
 _espn_cache: dict[tuple[int, int, str], tuple[float, dict[str, Any]]] = {}
 
@@ -185,7 +185,7 @@ def _download_espn_rankings(
     cached = _espn_cache.get(cache_key)
     now = time.monotonic()
     # ESPN publishes these ranks periodically, so hourly refreshes are sufficient.
-    if cached and now - cached[0] < 60 * 60:
+    if cached and now - cached[0] < _CACHE_SECONDS:
         return cached[1]
     fantasy_filter = {
         "players": {

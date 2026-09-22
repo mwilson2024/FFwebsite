@@ -85,6 +85,9 @@ def _exception_details(error: BaseException) -> list[dict]:
                 for frame in traceback.extract_tb(current.__traceback__)
             ],
         }
+        sqlstate = getattr(current, "sqlstate", None) or getattr(current, "pgcode", None)
+        if isinstance(sqlstate, str) and re.fullmatch(r"[0-9A-Z]{5}", sqlstate):
+            item["sqlstate"] = sqlstate
         request = getattr(current, "request", None)
         response = getattr(current, "response", None)
         if request is not None:

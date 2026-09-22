@@ -14,7 +14,7 @@ from weekly_projections.recommendations import PlayerRecommendation
 
 
 SCHEDULE_URL = "https://github.com/nflverse/nflverse-data/releases/download/schedules/games.csv"
-_SCHEDULE_TTL = 12 * 60 * 60
+_SCHEDULE_TTL = 7 * 24 * 60 * 60
 _schedule_cache: dict[int, tuple[float, dict[int, dict[str, str]]]] = {}
 _TEAM_ALIASES = {
     "GBP": "GB", "JAC": "JAX", "KCC": "KC", "LAR": "LA", "LVR": "LV",

@@ -311,6 +311,32 @@ def test_daily_and_game_aware_cache_windows():
     ) == 30 * 86400
 
 
+def test_stable_report_cache_windows_and_status_labels(monkeypatch):
+    monkeypatch.setattr(web, "_seconds_until_daily_refresh", lambda now=None: 12_345)
+
+    assert web._report_cache_ttl("franchise-names", 300) == 7 * 86400
+    assert web._report_cache_ttl("nfl-schedule:3", 300) == 7 * 86400
+    assert web._report_cache_ttl("projections:3", 300) == 12 * 3600
+    assert web._report_cache_ttl("reference-projections:3:combined", 300) == 12 * 3600
+    assert web._report_cache_ttl("player-scores:avg", 300) == 12_345
+    assert web._report_cache_ttl("player-scores:ytd", 300) == 12_345
+    assert web._report_cache_ttl("live-scoring:3", 30) == 30
+    assert web._report_cache_is_stable("franchise-names") is True
+    assert web._report_cache_is_stable("projections:3") is True
+    assert web._report_cache_is_stable("player-scores:ytd") is True
+    assert web._report_cache_is_stable("live-scoring:3") is False
+
+    details = web._cache_status_metadata("details")
+    assert details["label"] == "League details"
+    assert "FAAB balances" in details["detail"]
+    assert web._cache_status_metadata("franchise-names")["cadence"] == "Checked weekly"
+    assert web._cache_status_metadata("player-scores:avg")["cadence"] == "Checked daily"
+    assert "twice daily" in web._cache_status_metadata("projections:3")["cadence"]
+    assert web._cache_duration_label(604_799) == "6d 23h"
+    assert web._cache_duration_label(43_200) == "12h"
+    assert web._cache_duration_label(3_661) == "1h 1m"
+
+
 def test_shared_stable_cache_is_account_scoped():
     web.shared_read_cache.clear()
     league = MFLLeague("12345", "0001", "One")
