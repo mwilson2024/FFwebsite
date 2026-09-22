@@ -534,6 +534,39 @@ def test_watchlist_toggle_and_player_compare_use_league_scored_board(monkeypatch
     assert "No MFL designation" in compared.text and "MIN · #4 Favorable" in compared.text
 
 
+def test_database_status_reports_local_storage_without_database_url(monkeypatch) -> None:
+    monkeypatch.delenv("WP_DATABASE_URL", raising=False)
+
+    assert web_app._database_status() == {
+        "state": "local",
+        "label": "Local storage",
+        "backend": "SQLite",
+        "schema_version": None,
+        "detail": (
+            "Supabase is not configured on this deployment. "
+            "Local encrypted session storage remains active."
+        ),
+    }
+
+
+def test_database_status_hides_connection_error_details(monkeypatch) -> None:
+    class UnavailableStore:
+        def connection_status(self):
+            raise RuntimeError("postgresql://user:secret@example.test/postgres")
+
+    events = []
+    monkeypatch.setenv("WP_DATABASE_URL", "postgresql://configured")
+    monkeypatch.setattr(web_app, "_persistent_store", lambda: UnavailableStore())
+    monkeypatch.setattr(web_app, "log_error", lambda event, error: events.append(event))
+
+    status = web_app._database_status()
+
+    assert status["state"] == "unavailable"
+    assert status["label"] == "Database unavailable"
+    assert "secret" not in repr(status)
+    assert events == ["database_status_unavailable"]
+
+
 def test_operations_schedule_rules_status_and_guide_pages_render(monkeypatch) -> None:
     web_app.sessions.clear()
     league = MFLLeague("88882", "0001", "Operations League")
@@ -561,6 +594,11 @@ def test_operations_schedule_rules_status_and_guide_pages_render(monkeypatch) ->
             return {"positionRules": {"positions": "RB|WR", "rule": {"event": "RY", "range": "0-999", "points": "*.1"}}}
 
     monkeypatch.setattr(web_app, "_client", lambda *args: ToolsClient())
+    monkeypatch.setattr(web_app, "_database_status", lambda: {
+        "state": "connected", "label": "Supabase connected",
+        "backend": "Supabase PostgreSQL", "schema_version": 1,
+        "detail": "This server reached the private fantasy_hq schema successfully.",
+    })
     client = TestClient(web_app.app)
     client.cookies.set("wp_session", "tools-pages")
 
@@ -571,7 +609,11 @@ def test_operations_schedule_rules_status_and_guide_pages_render(monkeypatch) ->
     assert schedule.status_code == 200 and "101.50" in schedule.text and "Opponent" in schedule.text
     rules = client.get("/rules?league=88882")
     assert rules.status_code == 200 and "RB|WR" in rules.text and "*.1" in rules.text
-    assert client.get("/data-status?league=88882").status_code == 200
+    data_status = client.get("/data-status?league=88882")
+    assert data_status.status_code == 200
+    assert "Supabase connected" in data_status.text
+    assert "fantasy_hq · migration 1" in data_status.text
+    assert "Connection details, passwords, tokens" in data_status.text
     guide = client.get("/guide?league=88882")
     assert guide.status_code == 200 and "Four moves to get set" in guide.text
 

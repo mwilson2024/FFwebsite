@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import sqlite3
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
+import pytest
 
 from weekly_projections.mfl.client import MFLLeague
 from weekly_projections.mfl.client import MFLRateLimitError
@@ -26,6 +27,54 @@ class LoginClient:
 
     def account_leagues(self):
         return [MFLLeague("12345", "0001", "Secure League")]
+
+
+class FakePostgresResult:
+    def __init__(self, row=None):
+        self.row = row
+
+    def fetchone(self):
+        return self.row
+
+
+class FakePostgresConnection:
+    def __init__(self):
+        self.sessions = {}
+        self.preference = "combined"
+        self.statements = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def execute(self, query, params=()):
+        sql = " ".join(query.split())
+        self.statements.append((sql, params))
+        if sql.startswith("SELECT version FROM fantasy_hq.schema_migration"):
+            return FakePostgresResult((1,))
+        if sql.startswith("SELECT max(version) FROM fantasy_hq.schema_migration"):
+            return FakePostgresResult((1,))
+        if sql.startswith("INSERT INTO fantasy_hq.app_user"):
+            return FakePostgresResult(("user-1",))
+        if sql.startswith("INSERT INTO fantasy_hq.user_preference"):
+            self.preference = params[1]
+            return FakePostgresResult()
+        if sql.startswith("INSERT INTO fantasy_hq.remembered_session"):
+            self.sessions[params[0]] = (
+                params[2], datetime.fromtimestamp(params[5], timezone.utc),
+            )
+            return FakePostgresResult()
+        if sql.startswith("SELECT encrypted_mfl_session"):
+            return FakePostgresResult(self.sessions.get(params[0]))
+        if sql.startswith("SELECT preference.theme"):
+            return FakePostgresResult(("lions", self.preference, 2026, "12345", 2, False))
+        if sql.startswith("DELETE FROM fantasy_hq.remembered_session") and params and len(params) == 1:
+            if isinstance(params[0], bytes):
+                self.sessions.pop(params[0], None)
+            return FakePostgresResult()
+        return FakePostgresResult()
 
 
 def _store(monkeypatch, tmp_path) -> EncryptedSessionStore:
@@ -55,6 +104,56 @@ def test_remembered_session_is_encrypted_tamper_evident_and_revocable(monkeypatc
     )
     store.revoke(second)
     assert store.restore(second) is None
+
+
+def test_postgres_store_uses_private_schema_encryption_and_tls(monkeypatch):
+    monkeypatch.setenv("WP_SESSION_SECRET", Fernet.generate_key().decode("ascii"))
+    database = FakePostgresConnection()
+    store = EncryptedSessionStore(
+        database_url="postgresql://app:secret@db.example/postgres",
+        connection_factory=lambda url: database,
+    )
+    assert store.backend == "postgresql"
+    assert store.database_url.endswith("sslmode=require")
+
+    token = store.create(
+        mfl_cookie="private-cookie",
+        year=2026,
+        leagues=[{"id": "12345", "franchise_id": "0001", "name": "One", "url": ""}],
+        owner_fingerprint="account:owner-hash",
+        ranking_preference="combined",
+    )
+    assert store.restore(token)["mfl_cookie"] == "private-cookie"
+    assert store.restore(token)["owner_fingerprint"] == "account:owner-hash"
+    assert b"private-cookie" not in b"".join(value[0] for value in database.sessions.values())
+    assert store.load_preferences("account:owner-hash")["ranking_preference"] == "combined"
+    assert store.connection_status() == {
+        "backend": "Supabase PostgreSQL",
+        "configured": True,
+        "connected": True,
+        "schema_version": 1,
+    }
+    assert all("private-cookie" not in repr(params) for _, params in database.statements)
+
+    store.revoke(token)
+    assert store.restore(token) is None
+
+
+def test_postgres_store_rejects_non_tls_urls(monkeypatch):
+    monkeypatch.setenv("WP_SESSION_SECRET", Fernet.generate_key().decode("ascii"))
+    with pytest.raises(ValueError, match="require TLS"):
+        EncryptedSessionStore(
+            database_url="postgresql://app:secret@db.example/postgres?sslmode=disable",
+            connection_factory=lambda url: FakePostgresConnection(),
+        )
+    with pytest.raises(ValueError, match="require TLS"):
+        EncryptedSessionStore(
+            database_url=(
+                "postgresql://app:secret@db.example/postgres"
+                "?sslmode=disable&sslmode=require"
+            ),
+            connection_factory=lambda url: FakePostgresConnection(),
+        )
 
 
 def test_stay_signed_in_restores_fresh_app_session_without_password(monkeypatch, tmp_path):

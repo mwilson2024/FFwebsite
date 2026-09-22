@@ -88,6 +88,43 @@ WP_SESSION_DB=/data/sessions.sqlite3
 WP_SESSION_SECRET=<your generated Fernet key>
 ```
 
+## Supabase PostgreSQL on Azure App Service
+
+The application can use the free Supabase PostgreSQL project instead of the
+SQLite remembered-session file. The database must contain schema migration 1 in
+the private `fantasy_hq` schema. When `WP_DATABASE_URL` is absent, local and
+existing Railway deployments continue to use SQLite without any behavior change.
+
+In Supabase, open **Connect**, choose the **Session pooler** connection string,
+and keep TLS enabled. The session pooler is preferable to the direct endpoint for
+Azure App Service because it supports IPv4. Store the complete connection string
+only in Azure App Service **Environment variables**:
+
+```text
+WP_DATABASE_URL=postgresql://.../postgres?sslmode=require
+WP_SESSION_SECRET=<the existing stable Fernet key>
+WP_SECURE_COOKIES=1
+WP_ALLOWED_HOSTS=<app-name>.azurewebsites.net
+```
+
+`WP_DATABASE_URL` is a secret: never put it in GitHub, `.env`, diagnostics, or a
+browser-visible setting. Keep `WP_SESSION_SECRET` stable so remembered MFL session
+ciphertext remains decryptable. `WP_SESSION_DB` is ignored when
+`WP_DATABASE_URL` is configured. Restart the App Service after saving variables.
+
+The first PostgreSQL phase stores only:
+
+- a one-way owner fingerprint and connected-league metadata;
+- the selected ranking preference;
+- an opaque remember-token digest and authenticated encrypted MFL session.
+
+MFL passwords, CSRF state, pending lineup/add-drop/trade drafts, side bets, API
+keys, request bodies, and raw browser tokens are never stored. Existing SQLite
+remember tokens are not copied to Supabase; users sign in once after the switch.
+The application validates the installed schema version before using PostgreSQL
+and falls back to normal signed-in operation if optional persistence is temporarily
+unavailable.
+
 Free weekly consensus rankings are loaded from ESPN Fantasy's unauthenticated
 read feed. No FantasyPros subscription or API key is required. The optional
 format setting can be added in Railway Variables or a private local environment:

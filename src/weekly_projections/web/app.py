@@ -603,6 +603,53 @@ def _persistent_store() -> EncryptedSessionStore:
     return remembered_sessions
 
 
+def _database_preferences(owner_fingerprint: str) -> dict:
+    if not owner_fingerprint or not os.environ.get("WP_DATABASE_URL", "").strip():
+        return {}
+    try:
+        return _persistent_store().load_preferences(owner_fingerprint)
+    except Exception as error:
+        log_error("preference_restore_failed", error)
+        return {}
+
+
+def _database_status() -> dict:
+    if not os.environ.get("WP_DATABASE_URL", "").strip():
+        return {
+            "state": "local",
+            "label": "Local storage",
+            "backend": "SQLite",
+            "schema_version": None,
+            "detail": "Supabase is not configured on this deployment. Local encrypted session storage remains active.",
+        }
+    try:
+        status = _persistent_store().connection_status()
+    except Exception as error:
+        log_error("database_status_unavailable", error)
+        return {
+            "state": "unavailable",
+            "label": "Database unavailable",
+            "backend": "Supabase PostgreSQL",
+            "schema_version": None,
+            "detail": "Supabase is configured, but this server could not verify the private database right now.",
+        }
+    if status["connected"]:
+        return {
+            "state": "connected",
+            "label": "Supabase connected",
+            "backend": status["backend"],
+            "schema_version": status["schema_version"],
+            "detail": "This server reached the private fantasy_hq schema successfully.",
+        }
+    return {
+        "state": "unavailable",
+        "label": "Schema unavailable",
+        "backend": status["backend"],
+        "schema_version": status["schema_version"],
+        "detail": "PostgreSQL responded, but the expected fantasy_hq migration record was not found.",
+    }
+
+
 def _session_from_remembered(value: dict) -> BrowserSession | None:
     try:
         leagues = [
@@ -615,7 +662,13 @@ def _session_from_remembered(value: dict) -> BrowserSession | None:
         return None
     if not cookie or not leagues or not 2020 <= year <= 2100:
         return None
-    return BrowserSession(cookie, year, leagues, secrets.token_urlsafe(32))
+    return BrowserSession(
+        cookie,
+        year,
+        leagues,
+        secrets.token_urlsafe(32),
+        owner_fingerprint=str(value.get("owner_fingerprint", "")),
+    )
 
 
 def _session(request: Request) -> BrowserSession | None:
@@ -633,13 +686,24 @@ def _session(request: Request) -> BrowserSession | None:
         return current
     remember_token = request.cookies.get("wp_remember", "")
     if remember_token:
+        store = None
         try:
-            restored = _session_from_remembered(_persistent_store().restore(remember_token) or {})
+            store = _persistent_store()
+            restored = _session_from_remembered(store.restore(remember_token) or {})
         except Exception as error:
             log_error("remembered_session_restore_failed", error)
             restored = None
         if restored:
-            restored.ranking_preference = _ranking_preference(request.cookies.get("wp_rankings"))
+            cookie_preference = request.cookies.get("wp_rankings", "")
+            if cookie_preference in _RANKING_PREFERENCES:
+                restored.ranking_preference = cookie_preference
+            elif store is not None:
+                try:
+                    stored = store.load_preferences(restored.owner_fingerprint)
+                except Exception as error:
+                    log_error("preference_restore_failed", error)
+                    stored = {}
+                restored.ranking_preference = _ranking_preference(stored.get("ranking_preference"))
             restored.remember_token = remember_token
             restored_id = secrets.token_urlsafe(32)
             with sessions_lock:
@@ -2266,14 +2330,37 @@ def login(
             csrf_token=secrets.token_urlsafe(32),
             owner_fingerprint=keys[1],
         )
+        cookie_preference = request.cookies.get("wp_rankings", "")
+        stored_preferences = _database_preferences(current.owner_fingerprint)
+        current.ranking_preference = (
+            cookie_preference if cookie_preference in _RANKING_PREFERENCES
+            else _ranking_preference(stored_preferences.get("ranking_preference"))
+        )
+        persistent_leagues = [
+            {"id": item.id, "franchise_id": item.franchise_id, "name": item.name, "url": item.url}
+            for item in leagues
+        ]
         if remember_me == "1":
-            persistent_leagues = [
-                {"id": item.id, "franchise_id": item.franchise_id, "name": item.name, "url": item.url}
-                for item in leagues
-            ]
-            current.remember_token = _persistent_store().create(
-                mfl_cookie=current.mfl_cookie, year=year, leagues=persistent_leagues,
-            )
+            try:
+                current.remember_token = _persistent_store().create(
+                    mfl_cookie=current.mfl_cookie,
+                    year=year,
+                    leagues=persistent_leagues,
+                    owner_fingerprint=current.owner_fingerprint,
+                    ranking_preference=current.ranking_preference,
+                )
+            except Exception as error:
+                log_error("remembered_session_create_failed", error)
+        elif os.environ.get("WP_DATABASE_URL", "").strip():
+            try:
+                _persistent_store().sync_account(
+                    owner_fingerprint=current.owner_fingerprint,
+                    year=year,
+                    leagues=persistent_leagues,
+                    ranking_preference=current.ranking_preference,
+                )
+            except Exception as error:
+                log_error("account_sync_failed", error)
         with sessions_lock:
             same_owner = sorted(
                 (
@@ -2370,6 +2457,13 @@ def save_ranking_preference(
     if ranking_preference not in _RANKING_PREFERENCES:
         raise HTTPException(status_code=400, detail="Choose a valid ranking preference")
     current.ranking_preference = ranking_preference
+    if current.owner_fingerprint and os.environ.get("WP_DATABASE_URL", "").strip():
+        try:
+            _persistent_store().save_ranking_preference(
+                current.owner_fingerprint, ranking_preference,
+            )
+        except Exception as error:
+            log_error("preference_save_failed", error)
     _invalidate_player_board(current, selected.id)
     response = RedirectResponse(f"/home?league={selected.id}", status_code=303)
     response.set_cookie(
@@ -2824,6 +2918,7 @@ def data_status_page(request: Request, league: str, refreshed: int = 0):
         "session": current, "league": selected, "active_tool": "data-status",
         "page": "data-status", "page_title": "Data status", "error": "",
         "cache_rows": cache_rows, "cooldown": cooldown, "refreshed": bool(refreshed),
+        "database_status": _database_status(),
     })
 
 
