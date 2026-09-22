@@ -4,6 +4,55 @@
     leaguePicker.querySelector('select').addEventListener('change', () => leaguePicker.requestSubmit());
     leaguePicker.querySelector('button').hidden = true;
   }
+
+  const syncPlayerAutocomplete = (input) => {
+    const target = document.getElementById(input.dataset.playerAutocomplete || '');
+    const list = document.getElementById(input.getAttribute('list') || '');
+    if (!target || !list) return;
+    const entered = input.value.trim().toLocaleLowerCase();
+    const option = [...list.options].find(item => item.value.trim().toLocaleLowerCase() === entered);
+    target.value = option?.dataset.playerId || '';
+    input.setCustomValidity(input.value && !target.value ? 'Choose a player from the suggestions.' : '');
+    input.form?.dispatchEvent(new CustomEvent('player-autocomplete-change'));
+  };
+  document.querySelectorAll('[data-player-autocomplete]').forEach(input => {
+    input.addEventListener('input', () => syncPlayerAutocomplete(input));
+    input.addEventListener('change', () => syncPlayerAutocomplete(input));
+    syncPlayerAutocomplete(input);
+  });
+  document.querySelectorAll('[data-autocomplete-form]').forEach(form => {
+    const submit = form.querySelector('[data-autocomplete-submit]');
+    const requiredTargets = () => [...form.querySelectorAll('[data-autocomplete-required]')];
+    const update = () => { if (submit) submit.disabled = requiredTargets().some(input => !input.value); };
+    form.addEventListener('player-autocomplete-change', update);
+    form.addEventListener('submit', event => {
+      requiredTargets().forEach(input => {
+        if (!input.value) event.preventDefault();
+      });
+    });
+    update();
+  });
+
+  const rosterSearch = document.querySelector('#roster-player-search');
+  if (rosterSearch) {
+    const rosterRows = [...document.querySelectorAll('[data-roster-player]')];
+    const resultCount = document.querySelector('#roster-player-result-count');
+    const empty = document.querySelector('#roster-player-empty');
+    const filterRoster = () => {
+      const words = rosterSearch.value.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+      let visible = 0;
+      rosterRows.forEach(row => {
+        const haystack = (row.dataset.search || '').toLocaleLowerCase();
+        row.hidden = !words.every(word => haystack.includes(word));
+        if (!row.hidden) visible += 1;
+      });
+      if (resultCount) resultCount.textContent = String(visible);
+      if (empty) empty.hidden = visible !== 0;
+    };
+    rosterSearch.addEventListener('input', filterRoster);
+    rosterSearch.addEventListener('change', filterRoster);
+  }
+
   // Keep automatic stat reads bounded, including when several players finish.
   const statQueue = [];
   let activeStatReads = 0;

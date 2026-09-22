@@ -5,9 +5,9 @@
   <title>{{ league.name }} · {{ 'Standings' if active_tool == 'standings' else 'Home' }}</title>
   <meta name="csrf-token" content="{{ session.csrf_token }}">
   <link rel="stylesheet" href="/static/app.css?v=20260910-modern"><link rel="stylesheet" href="/static/workspace.css?v=2">
-  <link rel="stylesheet" href="/static/fantasy.css?v=20260921-leaders"><link rel="stylesheet" href="/static/hub.css?v=20260921-combined">
+  <link rel="stylesheet" href="/static/fantasy.css?v=20260921-leaders"><link rel="stylesheet" href="/static/hub.css?v=20260922-week-preference">
   <link rel="stylesheet" href="/static/lions.css?v=1"><link rel="stylesheet" href="/static/michigan.css?v=1">
-  <script src="/static/app.js?v=20260921-leaders" defer></script><script src="/static/hub.js?v=20260920-lazy" defer></script>
+  <script src="/static/app.js?v=20260922-autocomplete" defer></script><script src="/static/hub.js?v=20260922-week-preference" defer></script>
   {% include '_theme_assets.html' %}
 </head>
 <body class="gameday-page hub-page">
@@ -35,5 +35,14 @@
     <section class="hub-panel" id="standings"><div class="hub-panel-heading"><h2>Standings</h2><span>MFL · {{ league.name }}</span></div><div data-hub-url="/hub/standings?league={{ league.id }}"{% if active_tool == 'standings' %} data-hub-priority{% endif %} aria-live="polite"><p>Loading league standings…</p></div></section>
     <p class="hub-footnote">Your last league is remembered on this device. Each section uses the selected league’s data and scoring. Your password is not saved.</p>
   </main>
+  {% if active_tool != 'standings' %}<dialog class="week-preference-dialog" id="current-week-preference" data-show-notice="{{ 'true' if show_current_week_notice else 'false' }}" aria-labelledby="week-preference-title">
+    <form method="dialog">
+      <span class="dialog-kicker">HOME VIEW UPDATED</span>
+      <h2 id="week-preference-title">Current week is now your default</h2>
+      <p>When you open Home, your current matchup will load first. You can switch back to the last completed result at any time; that choice will become the new default on this device.</p>
+      <label class="dialog-choice"><input type="checkbox" data-hide-week-notice> Don’t show this message again</label>
+      <button value="confirm" data-close-week-notice>Continue to current week</button>
+    </form>
+  </dialog>{% endif %}
 </body>
 </html>

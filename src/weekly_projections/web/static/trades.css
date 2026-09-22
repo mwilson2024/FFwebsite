@@ -46,3 +46,7 @@
 .trade-pick input { width: 1.15rem; height: 1.15rem; flex: 0 0 auto; }
 .trade-pick span { display: grid; gap: .15rem; }
 .trade-pick small { opacity: .75; }
+#trade-builder .trade-player-list { max-height:28rem; overflow-y:auto; overscroll-behavior:contain; scrollbar-gutter:stable; }
+#trade-builder .trade-pick-list { max-height:14rem; overflow-y:auto; overscroll-behavior:contain; scrollbar-gutter:stable; }
+#trade-builder .trade-pick-list h3 { position:sticky; top:-1rem; z-index:1; padding:.75rem 0 .45rem; background:var(--site-panel,#fff); }
+#trade-builder :is(.trade-player-list,.trade-pick-list):focus-visible { outline:3px solid var(--site-accent,#0076b6); outline-offset:-3px; }

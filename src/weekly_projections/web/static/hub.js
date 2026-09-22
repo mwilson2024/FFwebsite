@@ -1,4 +1,19 @@
 (() => {
+  const weekDialog = document.querySelector('#current-week-preference');
+  let hideWeekNotice = false;
+  try { hideWeekNotice = localStorage.getItem('wp_hide_current_week_notice') === '1'; } catch (_) { /* Preference storage may be disabled. */ }
+  if (weekDialog?.dataset.showNotice === 'true' && !hideWeekNotice) {
+    weekDialog.showModal();
+  }
+  weekDialog?.addEventListener('close', () => {
+    if (weekDialog.querySelector('[data-hide-week-notice]')?.checked) {
+      try { localStorage.setItem('wp_hide_current_week_notice', '1'); } catch (_) { /* The dialog can still close normally. */ }
+    }
+  });
+  weekDialog?.addEventListener('click', event => {
+    if (event.target === weekDialog) weekDialog.close();
+  });
+
   const panels = [...document.querySelectorAll('[data-hub-url]')];
   const load = async panel => {
     if (panel.dataset.loading === 'true') return;

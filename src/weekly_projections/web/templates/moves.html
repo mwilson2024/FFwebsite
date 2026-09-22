@@ -93,8 +93,6 @@
           </div>
         </section>
 
-        {% include '_waiver_optimizer.html' %}
-
         <a class="mobile-move-shortcut" id="jump-to-move" href="#move-builder" hidden>Build selected move <span aria-hidden="true">→</span></a>
         <section class="move-builder" id="move-builder" aria-labelledby="move-builder-heading">
           <div class="builder-title"><p class="eyebrow" id="move-builder-heading">BUILD THE MOVE</p><strong id="selected-player">Choose a free agent or waiver target above</strong></div>
@@ -105,6 +103,7 @@
           <label class="conditional-field replace-claims" data-mode-field="replace" hidden><span><input name="replace_existing" type="checkbox" value="1"> Replace existing claims in this round</span><small>Leave off to append. Turning this on replaces claims already saved in the same MFL round.</small></label>
           <button type="submit" class="review-button" id="review-move" disabled>Review move <span>→</span></button>
         </section>
+        {% include '_waiver_optimizer.html' %}
       </form>
       {% include '_defense_streaming.html' %}
     </section>

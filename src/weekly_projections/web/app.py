@@ -2697,14 +2697,28 @@ def league_home(request: Request, league: str, connection: str = "", matchup: st
     if not current:
         return RedirectResponse("/", status_code=303)
     selected = _league(current, league)
-    return templates.TemplateResponse(request=request, name="home.html", context={
+    preference_cookie = f"wp_home_matchup_{selected.id}"
+    explicit_matchup = matchup if matchup in {"current", "previous"} else ""
+    matchup_view = explicit_matchup or (
+        request.cookies.get(preference_cookie, "")
+        if request.cookies.get(preference_cookie, "") in {"current", "previous"}
+        else ""
+    )
+    response = templates.TemplateResponse(request=request, name="home.html", context={
         "session": current, "league": selected, "active_tool": "home",
         "connection": connection if connection in {"api-key-added", "invalid-key"} else "",
         "show_onboarding": not current.onboarding_complete and request.cookies.get("wp_tour_done") != "1",
         "show_ranking_setup": not current.ranking_setup_complete and request.cookies.get("wp_rankings") not in _RANKING_PREFERENCES,
         "ranking_preferences": _RANKING_PREFERENCES,
-        "matchup_view": matchup if matchup in {"current", "previous"} else "",
+        "matchup_view": matchup_view,
+        "show_current_week_notice": explicit_matchup == "current",
     })
+    if explicit_matchup:
+        response.set_cookie(
+            preference_cookie, explicit_matchup, max_age=365 * 86400, path="/",
+            httponly=True, samesite="strict", secure=_secure_cookies(request),
+        )
+    return response
 
 
 @app.post("/preferences/rankings")
@@ -2923,6 +2937,7 @@ def watchlist_page(request: Request, league: str):
     selected = _league(current, league)
     client = _client(current, selected)
     rows: list[PlayerRecommendation] = []
+    choices: list[PlayerRecommendation] = []
     error = ""
     week = None
     watched = current.watchlists.setdefault(selected.id, set())
@@ -2930,6 +2945,7 @@ def watchlist_page(request: Request, league: str):
         week, _, recommendations, _, _ = _load_player_board(
             client, current, include_reference=False, include_score_context=True,
         )
+        choices = sorted(recommendations, key=lambda item: item.player.name.casefold())
         rows = [item for item in recommendations if item.player.id in watched]
     except MFLApiError as exc:
         _log_provider_error_once(current, selected.id, "watchlist_unavailable", exc)
@@ -2937,12 +2953,38 @@ def watchlist_page(request: Request, league: str):
     return templates.TemplateResponse(request=request, name="tools.html", context={
         "session": current, "league": selected, "active_tool": "watchlist",
         "page": "watchlist", "page_title": "Watchlist", "error": error,
-        "rows": rows, "week": week, "watched_count": len(watched),
+        "rows": rows, "choices": choices, "week": week, "watched_count": len(watched),
         "ytd_scores": getattr(client, "player_ytd_scores", {}),
         "avg_scores": getattr(client, "player_avg_scores", {}),
         "median_scores": getattr(client, "player_median_scores", {}),
         "opponent_strength": getattr(client, "opponent_strength", {}),
     })
+
+
+@app.post("/watchlist/add")
+def add_watchlist_player(
+    request: Request, league: str = Form(...), player_id: str = Form(...),
+    csrf_token: str = Form(...),
+):
+    current = _require_session(request)
+    _check_csrf(current, csrf_token)
+    selected = _league(current, league)
+    if not player_id.isdecimal():
+        raise HTTPException(status_code=400, detail="Choose a player from the search results")
+    client = _client(current, selected)
+    catalog = _cached_session_read(
+        current, "mfl-global", "players", client.players,
+        ttl=86400, stale_ttl=_LEAGUE_STATIC_STALE_TTL, shared=True,
+    )
+    player = catalog.get(player_id)
+    if player is None or not _include_on_player_board(player):
+        raise HTTPException(status_code=404, detail="Player not found")
+    watched = current.watchlists.setdefault(selected.id, set())
+    if player_id not in watched and len(watched) >= 100:
+        raise HTTPException(status_code=400, detail="Watchlist limit reached")
+    watched.add(player_id)
+    _persist_watchlist_player(current, selected.id, player_id, True)
+    return RedirectResponse(f"/watchlist?league={selected.id}", status_code=303)
 
 
 @app.post("/watchlist/remove")
@@ -2995,6 +3037,9 @@ def compare_players_page(
     client = _client(current, selected)
     choices: list[PlayerRecommendation] = []
     comparison: list[dict] = []
+    roster_choices: list[PlayerRecommendation] = []
+    selected_labels: dict[str, str] = {}
+    decision: dict | None = None
     error = ""
     week = None
     selected_ids = list(dict.fromkeys(player_id for player_id in (p1, p2, p3) if player_id.isdecimal()))[:3]
@@ -3004,8 +3049,22 @@ def compare_players_page(
         )
         choices = sorted(recommendations, key=lambda item: item.player.name.casefold())
         by_id = {item.player.id: item for item in recommendations}
+        roster_choices = [item for item in choices if item.market_status == "mine"]
         if not selected_ids:
             selected_ids = list(current.watchlists.get(selected.id, set()))[:2]
+        if len(selected_ids) == 1:
+            target = by_id.get(selected_ids[0])
+            suggested_id = target.suggested_drop.id if target and target.suggested_drop else ""
+            suggested = by_id.get(suggested_id)
+            if suggested and suggested.market_status == "mine":
+                selected_ids.append(suggested_id)
+        selected_labels = {
+            player_id: (
+                f"{by_id[player_id].player.name} · {by_id[player_id].player.position} · "
+                f"{by_id[player_id].player.team or 'FA'} · ID {player_id}"
+            )
+            for player_id in selected_ids if player_id in by_id
+        }
         injuries = _cached_session_read(
             current, "mfl-global", f"injuries:{week}",
             lambda: client.injuries(week=week), ttl=300, stale_ttl=3600, shared=True,
@@ -3021,6 +3080,28 @@ def compare_players_page(
                     "median": getattr(client, "player_median_scores", {}).get(player_id),
                     "strength": getattr(client, "opponent_strength", {}).get(player_id),
                 })
+        if len(comparison) >= 2:
+            target = comparison[0]["item"]
+            baseline = comparison[1]["item"]
+            if target.market_status == "mine" and baseline.market_status == "mine":
+                title = "Start / sit comparison"
+            elif not target.is_rostered and baseline.market_status == "mine":
+                title = "Pickup comparison"
+            elif target.market_status == "rostered" and baseline.market_status == "mine":
+                title = "Trade-target comparison"
+            else:
+                title = "Player comparison"
+            detail = "Weekly projection edge is unavailable because one player has no current MFL projection."
+            edge = None
+            if target.projection is not None and baseline.projection is not None:
+                edge = target.projection - baseline.projection
+                if abs(edge) < 0.05:
+                    detail = f"{target.player.name} and {baseline.player.name} have the same weekly projection."
+                elif edge > 0:
+                    detail = f"{target.player.name} projects {edge:.1f} points above {baseline.player.name} this week."
+                else:
+                    detail = f"{baseline.player.name} projects {abs(edge):.1f} points above {target.player.name} this week."
+            decision = {"title": title, "detail": detail, "edge": edge}
     except MFLApiError as exc:
         _log_provider_error_once(current, selected.id, "player_compare_unavailable", exc)
         error = "MFL could not load the comparison data right now."
@@ -3028,7 +3109,8 @@ def compare_players_page(
         "session": current, "league": selected, "active_tool": "compare",
         "page": "compare", "page_title": "Player comparison", "error": error,
         "choices": choices, "comparison": comparison, "selected_ids": selected_ids,
-        "week": week,
+        "roster_choices": roster_choices, "selected_labels": selected_labels,
+        "decision": decision, "week": week,
     })
 
 
@@ -3754,7 +3836,7 @@ def league_player_leaders_page(
 
 
 @app.get("/rosters", response_class=HTMLResponse)
-def rosters_page(request: Request, league: str, team: str = ""):
+def rosters_page(request: Request, league: str, team: str = "", view: str = "players"):
     current = _session(request)
     if not current:
         return RedirectResponse("/", status_code=303)
@@ -3762,6 +3844,7 @@ def rosters_page(request: Request, league: str, team: str = ""):
     selected_team = team.zfill(4) if team else ""
     client = _client(current, selected)
     teams: list[dict] = []
+    all_players: list[dict] = []
     error: str | None = None
     try:
         details = _cached_session_read(
@@ -3821,6 +3904,17 @@ def rosters_page(request: Request, league: str, team: str = ""):
                 "players": players,
                 "groups": groups,
             })
+        for roster_team in teams:
+            all_players.extend(
+                {
+                    "player": player,
+                    "team_id": roster_team["id"],
+                    "team_name": roster_team["name"],
+                    "is_own": roster_team["is_own"],
+                }
+                for player in roster_team["players"]
+            )
+        all_players.sort(key=lambda row: (row["player"].name.casefold(), row["player"].id))
     except MFLApiError as exc:
         _log_provider_error_once(current, selected.id, "league_rosters_unavailable", exc)
         error = "MFL could not load the league rosters right now. Cached roster data will appear automatically when available."
@@ -3831,9 +3925,11 @@ def rosters_page(request: Request, league: str, team: str = ""):
             "session": current,
             "league": selected,
             "teams": teams,
+            "all_players": all_players,
             "roster_player_count": sum(len(team["players"]) for team in teams),
             "error": error,
             "week": current.selected_week,
+            "roster_view": "teams" if view == "teams" or team else "players",
             "selected_team": selected_team if any(item["id"] == selected_team for item in teams) else "",
         },
     )

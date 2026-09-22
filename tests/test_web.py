@@ -225,6 +225,26 @@ def test_home_matchup_previous_view_links_back_to_current_week(monkeypatch) -> N
     assert "View current Week 3" in response.text
 
 
+def test_home_remembers_current_matchup_view_and_explains_the_change() -> None:
+    web_app.sessions.clear()
+    league = MFLLeague("11111", "0001", "Home League")
+    web_app.sessions["home-preference-session"] = web_app.BrowserSession(
+        "cookie", 2026, [league], "csrf",
+    )
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", "home-preference-session")
+
+    selected = client.get("/home?league=11111&matchup=current")
+
+    assert selected.status_code == 200
+    assert client.cookies.get("wp_home_matchup_11111") == "current"
+    assert 'data-show-notice="true"' in selected.text
+    assert "Current week is now your default" in selected.text
+    assert "Don’t show this message again" in selected.text
+    remembered = client.get("/home?league=11111")
+    assert "/hub/matchup?league=11111&amp;view=current" in remembered.text
+
+
 def test_insights_page_and_home_briefing_render_from_personalized_context(monkeypatch) -> None:
     web_app.sessions.clear()
     league = MFLLeague("11111", "0001", "Home League")
@@ -376,6 +396,7 @@ def test_move_page_shows_full_board_projections_and_locks(monkeypatch) -> None:
     assert 'id="clear-player-filters"' in response.text
     assert "Blind-bid waiver · FAAB" in response.text
     assert 'name="replace_existing"' in response.text
+    assert response.text.index('id="move-builder"') < response.text.index('id="waiver-optimizer"')
 
 
 @pytest.mark.parametrize("pricing_unavailable", [False, True])
@@ -485,15 +506,20 @@ def test_rosters_tab_shows_every_member_and_groups_roster_tools(monkeypatch) -> 
     assert "League rosters" in response.text
     assert "My Franchise" in response.text and "Division Rival" in response.text
     assert "Rival Quarterback" in response.text and "Lions Defense" in response.text
-    assert 'href="/trades?league=77777&target=0002"' in response.text
-    assert response.text.index("My Franchise") < response.text.index("Division Rival")
+    assert 'id="roster-player-search"' in response.text
+    assert 'data-roster-player' in response.text
+    assert 'aria-current="page"><strong>Players</strong>' in response.text
     assert "Free agents" in response.text and "Add, drop &amp; waivers" in response.text
     top_nav = response.text.split('<nav class="section-nav"', 1)[1].split("</nav>", 1)[0]
     assert "Rosters" in top_nav and ">Players<" not in top_nav and ">Trades<" not in top_nav
 
     assert client.get("/rosters?league=77777").status_code == 200
     assert reads == {"details": 1, "rosters": 1, "players": 1}
-    selected = client.get("/rosters?league=77777&team=0002#roster-0002")
+    teams = client.get("/rosters?league=77777&view=teams")
+    assert 'href="/trades?league=77777&target=0002"' in teams.text
+    assert "Browse full manager rosters" in teams.text
+    assert teams.text.index("My Franchise") < teams.text.index("Division Rival")
+    selected = client.get("/rosters?league=77777&view=teams&team=0002#roster-0002")
     rival_card = selected.text.split('id="roster-0002"', 1)[1].split(">", 1)[0]
     assert " open" in rival_card
 
@@ -573,8 +599,9 @@ def test_watchlist_toggle_and_player_compare_use_league_scored_board(monkeypatch
         15.5, 2.0, None, "Upgrade", "good", "Projects as a weekly starter.",
     )
     second = PlayerRecommendation(
-        MFLPlayer("102", "Beta Runner", "RB", "GB"), MFLAvailability("102"),
+        MFLPlayer("102", "Beta Runner", "RB", "GB"), MFLAvailability("102", status="mine"),
         12.0, 0.5, None, "Small edge", "fair", "Useful depth.",
+        fantasy_team_id="0001", fantasy_team_name="My Team",
     )
 
     class ToolsClient:
@@ -599,10 +626,19 @@ def test_watchlist_toggle_and_player_compare_use_league_scored_board(monkeypatch
     assert added.status_code == 200 and added.json() == {"watched": True, "count": 1}
     watched = client.get("/watchlist?league=88881")
     assert watched.status_code == 200 and "Alpha Runner" in watched.text and "31.0" in watched.text
+    assert 'id="watch-player-search"' in watched.text
+    assert "Compare to one of my players" in watched.text
+    direct_add = client.post("/watchlist/add", data={
+        "league": "88881", "player_id": "102", "csrf_token": "csrf",
+    }, follow_redirects=False)
+    assert direct_add.status_code == 303
     compared = client.get("/compare?league=88881&p1=101&p2=102")
     assert compared.status_code == 200
     assert "Alpha Runner" in compared.text and "Beta Runner" in compared.text
     assert "No MFL designation" in compared.text and "MIN · #4 Favorable" in compared.text
+    assert "PICKUP COMPARISON" in compared.text
+    assert "projects 3.5 points above" in compared.text
+    assert "Search your roster" in compared.text
 
 
 def test_database_status_reports_local_storage_without_database_url(monkeypatch) -> None:

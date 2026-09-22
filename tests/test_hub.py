@@ -54,7 +54,7 @@ def test_home_remembers_only_authorized_league_and_not_widget_navigation(hub, mo
     assert len(soup.select('select[name="league"]')) == 1
     assert len(soup.select('[data-hub-url]')) == 4
     assert len(soup.select('[data-hub-priority]')) == 2
-    assert '/static/hub.js?v=20260920-lazy' in home.text
+    assert '/static/hub.js?v=20260922-week-preference' in home.text
     assert '/home?league=22222' == client.get('/dashboard', follow_redirects=False).headers['location']
     assert client.get('/home?league=99999').status_code == 404
     assert client.get('/hub/block?league=12345').status_code == 200
