@@ -91,7 +91,7 @@ WP_SESSION_SECRET=<your generated Fernet key>
 ## Supabase PostgreSQL on Azure App Service
 
 The application can use the free Supabase PostgreSQL project instead of the
-SQLite remembered-session file. The database must contain schema migration 1 in
+SQLite remembered-session file. The database must contain schema migrations 1–2 in
 the private `fantasy_hq` schema. When `WP_DATABASE_URL` is absent, local and
 existing Railway deployments continue to use SQLite without any behavior change.
 
@@ -115,7 +115,7 @@ ciphertext remains decryptable. `WP_SESSION_DB` is ignored when
 The first PostgreSQL phase stores only:
 
 - a one-way owner fingerprint and connected-league metadata;
-- the selected ranking preference;
+- cross-device theme, ranking source, default league, selected week, and onboarding choices;
 - an opaque remember-token digest and authenticated encrypted MFL session.
 
 MFL passwords, CSRF state, pending lineup/add-drop/trade drafts, side bets, API
@@ -124,6 +124,12 @@ remember tokens are not copied to Supabase; users sign in once after the switch.
 The application validates the installed schema version before using PostgreSQL
 and falls back to normal signed-in operation if optional persistence is temporarily
 unavailable.
+
+Apply [`supabase/migrations/002_mfl_cross_device_preferences.sql`](supabase/migrations/002_mfl_cross_device_preferences.sql)
+in the Supabase SQL Editor before deploying code that requires migration 2. MFL
+login is the account identity: a normalized login is converted to a one-way
+application fingerprint, so the same MFL user receives the same preferences on
+every device without storing the MFL username or password.
 
 Database connection failures are written to standard output as the structured
 event `database_status_unavailable`. In Azure, enable **Monitoring → App Service
@@ -134,11 +140,14 @@ initialization versus the schema health check and includes a redacted exception
 chain; it never includes the connection URL, database password, or session data.
 
 Free weekly consensus rankings are loaded from ESPN Fantasy's unauthenticated
-read feed. No FantasyPros subscription or API key is required. The optional
-format setting can be added in Railway Variables or a private local environment:
+read feed. CBS Sports' public PPR projections are converted to within-position
+ranks. FantasyPros uses its full Half-PPR ranking pages rather than the limited
+prototype API response. The optional settings belong in Azure App Service
+**Environment variables** (or a private local environment):
 
 ```text
 WP_ESPN_RANKING_FORMAT=PPR
+WP_FANTASYPROS_SESSION_COOKIE=<the Cookie request-header value from your signed-in FantasyPros session>
 ```
 
 `WP_ESPN_RANKING_FORMAT` accepts `PPR` or `STANDARD` and supplies the default only
@@ -150,6 +159,12 @@ or management; MFL remains the application's only league provider. The player
 market defaults to ESPN's weekly consensus order, with MFL league projections,
 season performance, matchup strength, and recommendation order still available.
 
+`WP_FANTASYPROS_SESSION_COOKIE` is optional and is sent only from the server to
+FantasyPros. Treat it like a password: mark the Azure setting as deployment-slot
+specific, never paste it into Git or chat, and rotate/remove it after signing out
+or if it is exposed. The application never logs or returns this value. FantasyPros
+and CBS results are cached for 12 hours and fail softly if a source is unavailable.
+
 The Players page also includes a free **Defense streaming** panel comparing your
 defense with up to six claimable targets. An explainable 0–100 fit score uses
 ESPN Mike Clay's [2026 unit talent grades](https://g.espncdn.com/s/ffldraftkit/26/NFLDK2026_CS_ClayProjections2026.pdf)
@@ -160,7 +175,7 @@ injury-adjusted ratings, fantasy points, or probabilities. MFL projected points
 remain separate and league-scored. Talent cards require no paid key or extra
 runtime provider calls. Waiver targets also show advisory whole-unit FAAB bids
 using the owner's MFL balance and the median single-defense BBID awards in the
-last 21 days (bounded to 200 transactions, sharing League HQ's 90-second cache).
+last 14 days (bounded to 200 transactions, sharing League HQ's 90-second cache).
 Fit adjusts the median and a conservative 10%-of-remaining-budget ceiling applies.
 Without history, an explicitly labeled 2%-of-remaining-budget heuristic is used;
 missing balances produce no bid. Recent defense prices are shown alongside the

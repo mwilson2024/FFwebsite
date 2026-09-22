@@ -6,7 +6,7 @@
     {% if defense_pricing.bids %}
       <section class="defense-price-history" aria-label="Defense waiver pricing">
         <h2 class="defense-section-title">Waiver pricing · {% if defense_pricing.balance is not none %}{{ defense_pricing.balance }} FAAB remaining{% else %}Balance unavailable{% endif %}</h2>
-        <p class="defense-method">Recent successful defense bids · last 21 days, up to 200 league transactions. Estimates do not reserve funds for other pending claims. MFL validates your actual balance and minimum bid.</p>
+        <p class="defense-method">Recent successful defense bids · last 14 days, up to 200 league transactions. Estimates do not reserve funds for other pending claims. MFL validates your actual balance and minimum bid.</p>
         {% if defense_pricing_error %}<p role="status" class="defense-method">{{ defense_pricing_error }}{% include '_error_reference.html' %}</p>{% endif %}
         {% if defense_pricing.history %}
           <ul>{% for award in defense_pricing.history %}<li>{{ award.name }} <strong>{{ award.bid }} FAAB</strong></li>{% endfor %}</ul>

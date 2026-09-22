@@ -40,3 +40,9 @@
   .trade-selectors button,.trade-submit-row button,.trade-confirm button { width:100%; }
   .trade-player { padding:.6rem; }
 }
+.trade-pick-list { border-top: 1px solid var(--line, #44617a); padding: 1rem; }
+.trade-pick-list h3 { margin: 0 0 .65rem; font-size: .85rem; text-transform: uppercase; letter-spacing: .08em; }
+.trade-pick { display: flex; gap: .75rem; align-items: center; padding: .7rem; border: 1px solid var(--line, #44617a); border-radius: .7rem; margin-top: .5rem; cursor: pointer; }
+.trade-pick input { width: 1.15rem; height: 1.15rem; flex: 0 0 auto; }
+.trade-pick span { display: grid; gap: .15rem; }
+.trade-pick small { opacity: .75; }

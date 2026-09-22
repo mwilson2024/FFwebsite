@@ -4,7 +4,7 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Review trade · {{ league.name }}</title>
   <link rel="stylesheet" href="/static/app.css?v=20260910-modern"><link rel="stylesheet" href="/static/workspace.css?v=2">
-  <link rel="stylesheet" href="/static/trades.css?v=1"><link rel="stylesheet" href="/static/lions.css?v=1">
+  <link rel="stylesheet" href="/static/trades.css?v=2"><link rel="stylesheet" href="/static/lions.css?v=1">
   {% include '_theme_assets.html' %}
 </head>
 <body>
@@ -18,7 +18,7 @@
     {% else %}<h1>{{ 'Offer not sent' if draft.status == 'failed' else 'Offer not confirmed' }}</h1><div class="error" role="alert">{{ draft.message }}{% include '_error_reference.html' %}</div>{% endif %}
     {% if draft %}
     <div class="trade-rosters trade-review-rosters">
-      {% for title, players in [('You send', draft.give), ('You receive', draft.receive)] %}<section class="trade-roster"><header><h2>{{ title }}</h2></header><ul>{% for player in players %}<li><strong>{{ player.name }}</strong><small>{{ player.position }} · {{ player.team }}</small></li>{% endfor %}</ul></section>{% endfor %}
+      {% for title, players, picks in [('You send', draft.give, draft.give_assets), ('You receive', draft.receive, draft.receive_assets)] %}<section class="trade-roster"><header><h2>{{ title }}</h2></header><ul>{% for player in players %}<li><strong>{{ player.name }}</strong><small>{{ player.position }} · {{ player.team }}</small></li>{% endfor %}{% for pick in picks %}<li><strong>{{ pick.label }}</strong><small>Draft pick · MFL asset {{ pick.code }}</small></li>{% endfor %}</ul></section>{% endfor %}
     </div>
     {% if draft.comments %}<section class="trade-message"><h2>Your message</h2><p>{{ draft.comments }}</p></section>{% endif %}
     {% if draft.status == 'draft' %}

@@ -13,14 +13,14 @@
   const button = form.querySelector('#review-trade');
   const update = () => {
     const counts = ['give', 'receive'].map(side => {
-      const count = form.querySelectorAll(`input[name="${side}"]:checked`).length;
+      const count = form.querySelectorAll(`input[name="${side}"]:checked, input[name="${side}_asset"]:checked`).length;
       form.querySelector(`[data-count="${side}"]`).textContent = `${count} selected`;
       return count;
     });
     button.disabled = counts.some(count => !count);
     form.querySelector('#trade-selection-status').textContent = button.disabled
-      ? 'Choose at least one player from each team.'
-      : `You send ${counts[0]} and receive ${counts[1]}. Ready to review.`;
+      ? 'Choose at least one player or draft pick from each team.'
+      : `You send ${counts[0]} asset${counts[0] === 1 ? '' : 's'} and receive ${counts[1]}. Ready to review.`;
   };
   form.addEventListener('change', update);
   form.addEventListener('submit', event => {

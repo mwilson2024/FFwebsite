@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi.testclient import TestClient
 import pytest
 
@@ -155,6 +157,72 @@ def test_move_page_renders_budget_safe_waiver_queue(monkeypatch) -> None:
     assert "Waiver queue optimizer" in response.text
     assert 'data-queue-add="add"' in response.text
     assert "suggested across queue" in response.text
+
+
+def test_market_default_tracks_wednesday_run_and_never_opens_empty_view() -> None:
+    drop = MFLPlayer("drop", "Drop", "WR", "DET")
+    open_player = PlayerRecommendation(
+        MFLPlayer("open", "Open Player", "WR", "DET"), MFLAvailability("open"),
+        10, 1, drop, "Target", "good", "Available now",
+    )
+    waiver_player = PlayerRecommendation(
+        MFLPlayer("waiver", "Waiver Player", "RB", "BUF"),
+        MFLAvailability("waiver", status="waiver"), 9, 1, drop, "Target", "good", "Claim",
+    )
+    locked_player = PlayerRecommendation(
+        MFLPlayer("locked", "Locked Player", "TE", "GB"),
+        MFLAvailability("locked", status="locked", locked=True), 8, 1, drop, "Target", "good", "Claim",
+    )
+    zone = web_app._APP_TIME_ZONE
+
+    assert web_app._market_default_filter(
+        [open_player, waiver_player, locked_player], datetime(2026, 9, 23, 20, 59, tzinfo=zone),
+    ) == ("waiver", 2, "Waivers")
+    assert web_app._market_default_filter(
+        [open_player, waiver_player, locked_player], datetime(2026, 9, 23, 21, 0, tzinfo=zone),
+    ) == ("open", 1, "Free agents")
+    assert web_app._market_default_filter(
+        [open_player], datetime(2026, 9, 22, 12, 0, tzinfo=zone),
+    ) == ("open", 1, "Free agents")
+
+
+def test_home_matchup_defaults_to_last_week_on_tuesday_and_wednesday() -> None:
+    zone = web_app._APP_TIME_ZONE
+    assert web_app._home_matchup_week(3, now=datetime(2026, 9, 22, 12, 0, tzinfo=zone)) == 2
+    assert web_app._home_matchup_week(3, now=datetime(2026, 9, 23, 12, 0, tzinfo=zone)) == 2
+    assert web_app._home_matchup_week(3, now=datetime(2026, 9, 24, 12, 0, tzinfo=zone)) == 3
+    assert web_app._home_matchup_week(3, "current", datetime(2026, 9, 22, 12, 0, tzinfo=zone)) == 3
+
+
+def test_home_matchup_previous_view_links_back_to_current_week(monkeypatch) -> None:
+    web_app.sessions.clear()
+    league = MFLLeague("11111", "0001", "Home League")
+    web_app.sessions["home-score-session"] = web_app.BrowserSession(
+        "cookie", 2026, [league], "csrf",
+    )
+    matchup = web_app.HeadToHeadView((
+        web_app.LiveTeamView("0001", "My Team", 101.25, False, 0, 0, ()),
+        web_app.LiveTeamView("0002", "Opponent", 99.50, True, 0, 0, ()),
+    ), selected_week=2, current_week=3)
+    requested = []
+    monkeypatch.setattr(web_app, "_cached_current_week", lambda *args: 3)
+    monkeypatch.setattr(
+        web_app, "_load_live_scoring_week",
+        lambda client, requested_week=None, **kwargs: (
+            requested.append(requested_week) or requested_week, 3,
+            MFLLiveScoring(requested_week, ()), {}, matchup,
+        ),
+    )
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", "home-score-session")
+
+    response = client.get("/hub/matchup?league=11111&view=previous")
+
+    assert response.status_code == 200
+    assert requested == [2]
+    assert "Last completed matchup · Week 2" in response.text
+    assert '/home?league=11111&amp;matchup=current' in response.text
+    assert "View current Week 3" in response.text
 
 
 def test_insights_page_and_home_briefing_render_from_personalized_context(monkeypatch) -> None:
@@ -332,7 +400,7 @@ def test_defense_streaming_cards_use_loaded_data_and_existing_move_builder(monke
         return MFLLeagueDetails((), {"0001": MFLFranchise("0001", "My Team", faab_balance=43)})
 
     def transactions(**kwargs):
-        assert kwargs == {"days": 21, "count": 200}
+        assert kwargs == {"days": 14, "count": 200}
         reads["activity"] += 1
         if pricing_unavailable:
             raise MFLApiError("Synthetic unavailable activity")
@@ -425,6 +493,9 @@ def test_rosters_tab_shows_every_member_and_groups_roster_tools(monkeypatch) -> 
 
     assert client.get("/rosters?league=77777").status_code == 200
     assert reads == {"details": 1, "rosters": 1, "players": 1}
+    selected = client.get("/rosters?league=77777&team=0002#roster-0002")
+    rival_card = selected.text.split('id="roster-0002"', 1)[1].split(">", 1)[0]
+    assert " open" in rival_card
 
 
 def test_player_leaders_show_official_ranks_ownership_and_primary_rank(monkeypatch) -> None:
@@ -478,7 +549,7 @@ def test_player_leaders_show_official_ranks_ownership_and_primary_rank(monkeypat
     assert "Alpha Quarterback" in response.text and "#1" in response.text
     assert "My Team" in response.text and "Rival Team" in response.text and "Free agent" in response.text
     assert "Hidden Linebacker" not in response.text
-    assert "Combined MFL + ESPN + ML position rank" in response.text
+    assert "Combined MFL + ESPN + FantasyPros + CBS + ML ranks" in response.text
     tabs = response.text.split('<nav class="roster-tools"', 1)[1].split("</nav>", 1)[0]
     assert tabs.index("Compare") < tabs.index("League leaders")
     position_select = response.text.split('<select name="position">', 1)[1].split("</select>", 1)[0]
@@ -608,7 +679,7 @@ def test_operations_schedule_rules_status_and_guide_pages_render(monkeypatch) ->
     monkeypatch.setattr(web_app, "_client", lambda *args: ToolsClient())
     monkeypatch.setattr(web_app, "_database_status", lambda: {
         "state": "connected", "label": "Supabase connected",
-        "backend": "Supabase PostgreSQL", "schema_version": 1,
+        "backend": "Supabase PostgreSQL", "schema_version": 2,
         "detail": "This server reached the private fantasy_hq schema successfully.",
     })
     client = TestClient(web_app.app)
@@ -624,7 +695,7 @@ def test_operations_schedule_rules_status_and_guide_pages_render(monkeypatch) ->
     data_status = client.get("/data-status?league=88882")
     assert data_status.status_code == 200
     assert "Supabase connected" in data_status.text
-    assert "fantasy_hq · migration 1" in data_status.text
+    assert "fantasy_hq · migration 2" in data_status.text
     assert "Connection details, passwords, tokens" in data_status.text
     guide = client.get("/guide?league=88882")
     assert guide.status_code == 200 and "Four moves to get set" in guide.text
@@ -684,6 +755,60 @@ def test_ranking_preference_is_csrf_protected_and_changeable(monkeypatch) -> Non
     }, follow_redirects=False)
     assert combined.status_code == 303 and combined.cookies.get("wp_rankings") == "combined"
     assert current.ranking_preference == "combined"
+
+
+def test_mfl_account_choices_restore_across_devices_and_save_server_side(monkeypatch) -> None:
+    league_one = MFLLeague("11111", "0001", "One")
+    league_two = MFLLeague("22222", "0002", "Two")
+    stored = {
+        "theme": "pistons",
+        "ranking_preference": "fantasypros-half",
+        "default_league_id": "22222",
+        "selected_week": 6,
+        "onboarding_complete": True,
+        "ranking_setup_complete": True,
+    }
+    first = web_app.BrowserSession("one", 2026, [league_one, league_two], "csrf")
+    second = web_app.BrowserSession("two", 2026, [league_one, league_two], "csrf")
+    web_app._apply_account_preferences(first, stored)
+    web_app._apply_account_preferences(second, stored)
+    assert (first.theme, first.ranking_preference, first.default_league_id, first.selected_week) == (
+        "pistons", "fantasypros-half", "22222", 6,
+    )
+    assert second.theme == first.theme and second.onboarding_complete is True
+
+    saved = []
+    class PreferenceStore:
+        def save_preferences(self, owner, **values):
+            saved.append((owner, values))
+    first.owner_fingerprint = "account:stable-mfl-user"
+    web_app.sessions.clear()
+    web_app.sessions["account-choice"] = first
+    monkeypatch.setenv("WP_DATABASE_URL", "postgresql://configured")
+    monkeypatch.setattr(web_app, "_persistent_store", lambda: PreferenceStore())
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", "account-choice")
+    response = client.post(
+        "/preferences/theme", data={"theme": "redwings", "csrf_token": "csrf"},
+    )
+    assert response.status_code == 204 and first.theme == "redwings"
+    assert saved[-1] == ("account:stable-mfl-user", {"theme": "redwings"})
+    assert client.post(
+        "/preferences/theme", data={"theme": "unknown", "csrf_token": "csrf"},
+    ).status_code == 400
+
+
+def test_selected_week_is_saved_only_when_it_changes(monkeypatch) -> None:
+    current = web_app.BrowserSession(
+        "cookie", 2026, [MFLLeague("11111", "0001", "One")], "csrf",
+        owner_fingerprint="account:stable-mfl-user",
+    )
+    saved = []
+    monkeypatch.setattr(web_app, "_persist_account_preferences", lambda session, **values: saved.append(values))
+    web_app._set_selected_week(current, 4)
+    web_app._set_selected_week(current, 4)
+    assert current.selected_week == 4
+    assert saved == [{"selected_week": 4}]
 
 
 def test_player_card_returns_bounded_weekly_totals_and_trend(monkeypatch) -> None:
@@ -1127,6 +1252,7 @@ def test_league_hq_renders_intelligence_and_tracks_session_side_bets(monkeypatch
     assert "FRANCHISE PROFILE" in profile.text
     assert "Alpha" in profile.text
     assert "without inventing results" in profile.text
+    assert '/rosters?league=11111&amp;team=0001#roster-0001' in profile.text
 
 
 def test_social_posts_require_review_csrf_and_only_send_once(monkeypatch) -> None:

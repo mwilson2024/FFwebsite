@@ -260,7 +260,9 @@
     rows.forEach((row) => {
       const matchesSearch = !needle || row.dataset.search.includes(needle);
       const matchesPosition = wantedPosition === "all" || row.dataset.position === wantedPosition;
-      const matchesStatus = wantedStatus === "all" || row.dataset.status === wantedStatus;
+      const matchesStatus = wantedStatus === "all"
+        || (wantedStatus === "waiver" && ["waiver", "locked"].includes(row.dataset.status))
+        || row.dataset.status === wantedStatus;
       const matchesNflTeam = wantedNflTeam === "all" || row.dataset.nflTeam === wantedNflTeam;
       const matchesFantasyTeam = wantedFantasyTeam === "all" || row.dataset.fantasyTeam === wantedFantasyTeam;
       const matchesProjection = wantedProjection === "all" || row.dataset.projected === wantedProjection;

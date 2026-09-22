@@ -17,6 +17,9 @@ class Response:
     def json(self):
         return self._payload
 
+    def iter_lines(self, **kwargs):
+        return iter(self.content.splitlines())
+
 
 def test_depth_chart_matches_espn_id_and_detects_session_movement(monkeypatch):
     insights._depth_cache.clear()
@@ -33,6 +36,28 @@ def test_depth_chart_matches_espn_id_and_detects_session_movement(monkeypatch):
     assert roles["mfl-1"].role == "Wide Receiver · starter"
     assert roles["mfl-1"].movement == 1
     assert snapshot == {"mfl-1": 1}
+
+
+def test_depth_chart_stream_keeps_only_newest_snapshot(monkeypatch):
+    insights._depth_cache.clear()
+    payload = (
+        "dt,team,player_name,espn_id,pos_name,pos_rank\n"
+        "2026-09-10,DET,Old Player,1,Wide Receiver,2\n"
+        "2026-09-17,DET,Current Player,2,Wide Receiver,1\n"
+        "2026-09-10,BUF,Another Old Player,3,Running Back,1\n"
+        "2026-09-17,BUF,Current Runner,4,Running Back,2\n"
+    ).encode()
+    calls = []
+    monkeypatch.setattr(
+        insights.requests, "get",
+        lambda *args, **kwargs: calls.append(kwargs) or Response(content=payload),
+    )
+
+    updated, rows = insights._download_depth_chart(2026)
+
+    assert updated == "2026-09-17"
+    assert [row["player_name"] for row in rows] == ["Current Player", "Current Runner"]
+    assert calls[0]["stream"] is True
 
 
 def test_weather_uses_one_bounded_forecast_and_skips_indoor_venue(monkeypatch):

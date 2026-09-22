@@ -194,10 +194,10 @@ class EncryptedSessionStore:
             with self._connect_postgres() as connection:
                 row = connection.execute(
                     "SELECT version FROM fantasy_hq.schema_migration WHERE version = %s",
-                    (1,),
+                    (2,),
                 ).fetchone()
                 if not row:
-                    raise RuntimeError("Supabase schema migration 1 is not installed")
+                    raise RuntimeError("Supabase schema migration 2 is not installed")
             return
         with self._connect() as connection:
             connection.execute(
@@ -307,7 +307,8 @@ class EncryptedSessionStore:
             row = connection.execute(
                 "SELECT preference.theme, preference.ranking_preference, "
                 "preference.default_season, preference.default_league_id, "
-                "preference.selected_week, preference.briefing_alerts "
+                "preference.selected_week, preference.briefing_alerts, "
+                "preference.onboarding_complete, preference.ranking_setup_complete "
                 "FROM fantasy_hq.app_user AS app_user "
                 "JOIN fantasy_hq.user_preference AS preference ON preference.user_id = app_user.id "
                 "WHERE app_user.owner_fingerprint_hash = %s",
@@ -322,6 +323,8 @@ class EncryptedSessionStore:
             "default_league_id": row[3],
             "selected_week": row[4],
             "briefing_alerts": bool(row[5]),
+            "onboarding_complete": bool(row[6]),
+            "ranking_setup_complete": bool(row[7]),
         }
 
     def connection_status(self) -> dict[str, Any]:
@@ -344,17 +347,82 @@ class EncryptedSessionStore:
             "schema_version": int(row[0]) if row and row[0] is not None else None,
         }
 
-    def save_ranking_preference(self, owner_fingerprint: str, ranking_preference: str) -> None:
+    def save_preferences(self, owner_fingerprint: str, **preferences: Any) -> None:
+        """Persist an allow-listed set of non-secret, cross-device choices."""
         if not self.database_url:
+            return
+        allowed = {
+            "theme": lambda value: str(value)[:32],
+            "ranking_preference": lambda value: str(value)[:64],
+            "default_season": int,
+            "default_league_id": lambda value: str(value)[:32],
+            "selected_week": int,
+            "briefing_alerts": bool,
+            "onboarding_complete": bool,
+            "ranking_setup_complete": bool,
+        }
+        values = {
+            key: allowed[key](value)
+            for key, value in preferences.items()
+            if key in allowed and value is not None
+        }
+        if not values:
             return
         with self._connect_postgres() as connection:
             user_id = self._postgres_user_id(connection, owner_fingerprint)
             connection.execute(
-                "INSERT INTO fantasy_hq.user_preference (user_id, ranking_preference) VALUES (%s, %s) "
-                "ON CONFLICT (user_id) DO UPDATE SET "
-                "ranking_preference = excluded.ranking_preference, updated_at = now()",
-                (user_id, ranking_preference[:64]),
+                "INSERT INTO fantasy_hq.user_preference (user_id) VALUES (%s) "
+                "ON CONFLICT (user_id) DO NOTHING",
+                (user_id,),
             )
+            assignments = ", ".join(f"{column} = %s" for column in values)
+            connection.execute(
+                f"UPDATE fantasy_hq.user_preference SET {assignments}, updated_at = now() "
+                "WHERE user_id = %s",
+                (*values.values(), user_id),
+            )
+
+    def save_ranking_preference(self, owner_fingerprint: str, ranking_preference: str) -> None:
+        self.save_preferences(owner_fingerprint, ranking_preference=ranking_preference)
+
+    def load_watchlists(self, owner_fingerprint: str, year: int) -> dict[str, set[str]]:
+        if not self.database_url or not owner_fingerprint:
+            return {}
+        with self._connect_postgres() as connection:
+            rows = connection.execute(
+                "SELECT watchlist.league_id, watchlist.player_id "
+                "FROM fantasy_hq.app_user AS app_user "
+                "JOIN fantasy_hq.watchlist_player AS watchlist ON watchlist.user_id = app_user.id "
+                "WHERE app_user.owner_fingerprint_hash = %s AND watchlist.season = %s "
+                "ORDER BY watchlist.created_at",
+                (self._digest_bytes(owner_fingerprint), int(year)),
+            ).fetchall()
+        watchlists: dict[str, set[str]] = {}
+        for league_id, player_id in rows:
+            watchlists.setdefault(str(league_id), set()).add(str(player_id))
+        return watchlists
+
+    def save_watchlist_player(
+        self, owner_fingerprint: str, *, year: int, league_id: str,
+        player_id: str, enabled: bool,
+    ) -> None:
+        if not self.database_url:
+            return
+        with self._connect_postgres() as connection:
+            user_id = self._postgres_user_id(connection, owner_fingerprint)
+            if enabled:
+                connection.execute(
+                    "INSERT INTO fantasy_hq.watchlist_player "
+                    "(user_id, season, league_id, player_id) VALUES (%s, %s, %s, %s) "
+                    "ON CONFLICT (user_id, season, league_id, player_id) DO NOTHING",
+                    (user_id, int(year), str(league_id), str(player_id)),
+                )
+            else:
+                connection.execute(
+                    "DELETE FROM fantasy_hq.watchlist_player "
+                    "WHERE user_id = %s AND season = %s AND league_id = %s AND player_id = %s",
+                    (user_id, int(year), str(league_id), str(player_id)),
+                )
 
     def restore(self, token: str) -> dict[str, Any] | None:
         if not token or len(token) > 256:

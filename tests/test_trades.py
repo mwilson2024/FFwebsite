@@ -3,7 +3,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from weekly_projections.mfl.client import MFLApiError, MFLClient, MFLConfig, MFLLeague, MFLPlayer
+from weekly_projections.mfl.client import MFLApiError, MFLClient, MFLConfig, MFLLeague, MFLPlayer, MFLTradeAsset
 from weekly_projections.web import app as web
 
 
@@ -17,6 +17,11 @@ def trade_app(monkeypatch):
     monkeypatch.setattr(mfl, 'trade_rosters', lambda: rosters)
     monkeypatch.setattr(mfl, 'franchise_roster', lambda fid: rosters[fid])
     monkeypatch.setattr(mfl, 'franchise_names', lambda: {'0001': 'Your Team', '0002': 'Other Team'})
+    pick_assets = {
+        '0001': (MFLTradeAsset('FP_0001_2027_1', '0001', '2027 Round 1 pick'),),
+        '0002': (MFLTradeAsset('FP_0002_2027_2', '0002', '2027 Round 2 pick'),),
+    }
+    monkeypatch.setattr(mfl, 'trade_pick_assets', lambda: pick_assets)
     calls = []
     def write(kind, **params):
         calls.append((kind, params))
@@ -56,6 +61,24 @@ def test_build_review_then_send_exact_offer_once(trade_app):
     client.post(f'/trades/send/{draft_id}', data={'csrf_token': 'csrf'})
     client.get(url)
     assert len(calls) == 1
+
+
+def test_trade_builder_reviews_and_sends_draft_picks(trade_app):
+    client, mfl, session, rosters, calls = trade_app
+    page = client.get('/trades?league=12345&target=0002')
+    assert '2027 Round 1 pick' in page.text and '2027 Round 2 pick' in page.text
+    response = preview(
+        client, give=['101'], receive=[], give_asset=['FP_0001_2027_1'],
+        receive_asset=['FP_0002_2027_2'],
+    )
+    assert response.status_code == 303
+    review_url = response.headers['location']
+    review = client.get(review_url)
+    assert '2027 Round 1 pick' in review.text and '2027 Round 2 pick' in review.text
+    result = client.post(review_url.replace('/review/', '/send/'), data={'csrf_token': 'csrf'})
+    assert result.status_code == 200
+    assert calls[0][1]['WILL_GIVE_UP'] == '101,FP_0001_2027_1'
+    assert calls[0][1]['WILL_RECEIVE'] == 'FP_0002_2027_2'
 
 
 @pytest.mark.parametrize('change', [
@@ -127,3 +150,25 @@ def test_trade_roster_parser_keeps_teams_separate(monkeypatch):
         {'id': '0002', 'player': {'id': '201'}},
     ]}})
     assert mfl.trade_rosters() == {'0001': {'101', '102'}, '0002': {'201'}}
+
+
+def test_trade_pick_assets_are_parsed_and_sent_with_players(monkeypatch):
+    mfl = MFLClient(MFLConfig(2026, '12345', '0001'))
+    rosters = {'0001': {'101'}, '0002': {'201'}}
+    payload = {'assets': {'franchise': [
+        {'id': '1', 'asset': [{'id': '101'}, {'id': 'FP_0003_2027_1'}]},
+        {'id': '2', 'asset': [{'id': '201'}, {'id': 'DP_2_05'}]},
+    ]}}
+    monkeypatch.setattr(mfl, 'export', lambda kind, **kwargs: payload)
+    monkeypatch.setattr(mfl, 'trade_rosters', lambda: rosters)
+    calls = []
+    monkeypatch.setattr(mfl, 'import_request', lambda kind, **kwargs: calls.append((kind, kwargs)) or {'status': {'$t': 'OK'}})
+    assets = mfl.trade_pick_assets()
+    assert assets['0001'][0].code == 'FP_0003_2027_1'
+    assert assets['0002'][0].code == 'DP_2_05'
+    mfl.propose_player_trade(
+        target='0002', give=['101'], receive=['201'],
+        give_assets=['FP_0003_2027_1'], receive_assets=['DP_2_05'],
+    )
+    assert calls[0][1]['WILL_GIVE_UP'] == '101,FP_0003_2027_1'
+    assert calls[0][1]['WILL_RECEIVE'] == '201,DP_2_05'

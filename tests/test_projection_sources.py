@@ -5,8 +5,10 @@ import pytest
 from weekly_projections.mfl.client import MFLPlayer
 from weekly_projections.projection_sources import (
     blend_projection_scores,
+    cbs_weekly_projection_ranks,
     combined_position_ranks,
     espn_weekly_ranks,
+    fantasypros_weekly_ranks,
     stathead_weekly_scores,
 )
 
@@ -156,3 +158,57 @@ def test_espn_weekly_ranks_use_free_header_feed_and_match_mfl(monkeypatch) -> No
     assert kwargs["params"] == {"scoringPeriodId": 2, "view": "kona_player_info"}
     assert '"filterRanksForScoringPeriodIds":{"value":[2]}' in kwargs["headers"]["X-Fantasy-Filter"]
     assert "api" not in " ".join(kwargs["headers"]).lower()
+
+
+class HTMLResponse:
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+    def raise_for_status(self) -> None:
+        return None
+
+
+class HTMLSession:
+    def __init__(self, html: str) -> None:
+        self.html = html
+        self.calls = []
+
+    def get(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
+        return HTMLResponse(self.html)
+
+
+def test_fantasypros_uses_full_table_and_private_cookie(monkeypatch) -> None:
+    from weekly_projections import projection_sources
+
+    monkeypatch.setattr(projection_sources, "_fantasypros_cache", {})
+    monkeypatch.setenv("WP_FANTASYPROS_SESSION_COOKIE", "session=private")
+    session = HTMLSession('''<script>ecrData = {"year":"2026","week":"3","players":[
+        {"player_name":"Josh Jacobs","player_team_id":"GB","player_position_id":"RB","rank_ecr":1},
+        {"player_name":"Jahmyr Gibbs","player_team_id":"DET","player_position_id":"RB","rank_ecr":2}
+    ]};</script>''')
+    ranks = fantasypros_weekly_ranks(
+        [MFLPlayer("one", "Jacobs, Josh", "RB", "GBP")],
+        year=2026, week=3, session=session,
+    )
+    assert ranks == {"one": 1.0}
+    assert session.calls[0][1]["headers"]["Cookie"] == "session=private"
+
+
+def test_cbs_projection_points_become_position_ranks(monkeypatch) -> None:
+    from weekly_projections import projection_sources
+
+    monkeypatch.setattr(projection_sources, "_cbs_cache", {})
+    session = HTMLSession("""
+        <h1>Week 3 Proj</h1><table>
+        <tr><th>Player</th><th>GP</th><th>Fantasy Points</th><th>FPPG</th></tr>
+        <tr><td>J. Allen QB BUF Josh Allen QB BUF</td><td>1</td><td>28.4</td><td>28.4</td></tr>
+        <tr><td>P. Mahomes QB KC Patrick Mahomes QB KC</td><td>1</td><td>28.5</td><td>28.5</td></tr>
+        </table>
+    """)
+    ranks = cbs_weekly_projection_ranks(
+        [MFLPlayer("allen", "Allen, Josh", "QB", "BUF"),
+         MFLPlayer("mahomes", "Mahomes, Patrick", "QB", "KCC")],
+        year=2026, week=3, session=session,
+    )
+    assert ranks == {"mahomes": 1.0, "allen": 2.0}

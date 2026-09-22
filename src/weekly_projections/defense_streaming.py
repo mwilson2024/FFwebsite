@@ -9,6 +9,9 @@ from typing import Iterable, Mapping
 from weekly_projections.mfl.client import MFLPlayer, MFLTransaction
 from weekly_projections.recommendations import PlayerRecommendation
 
+
+DEFENSE_BID_LOOKBACK_DAYS = 14
+
 TALENT_SOURCE_URL = "https://g.espncdn.com/s/ffldraftkit/26/NFLDK2026_CS_ClayProjections2026.pdf"
 TALENT_SOURCE_DATE = "2026-09-09"
 # ESPN / Mike Clay, 2026 NFL Unit Grades, page 63. Each pair is
@@ -153,7 +156,7 @@ def defense_waiver_pricing(
         if (transaction.kind.upper() != "BBID_WAIVER" or transaction.bid is None
                 or transaction.bid < 0 or len(transaction.adds) != 1
                 or transaction.timestamp is None
-                or not now - 21 * 86400 <= transaction.timestamp <= now):
+                or not now - DEFENSE_BID_LOOKBACK_DAYS * 86400 <= transaction.timestamp <= now):
             continue
         player = catalog.get(transaction.adds[0])
         if not player or player.position.strip().upper() not in {"DEF", "DST", "D/ST"}:

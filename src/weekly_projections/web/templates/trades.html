@@ -6,12 +6,12 @@
   <link rel="stylesheet" href="/static/app.css?v=20260910-modern">
   <link rel="stylesheet" href="/static/workspace.css?v=2">
   <link rel="stylesheet" href="/static/fantasy.css?v=20260921-leaders">
-  <link rel="stylesheet" href="/static/trades.css?v=1">
+  <link rel="stylesheet" href="/static/trades.css?v=2">
   <link rel="stylesheet" href="/static/hub.css?v=2">
   <link rel="stylesheet" href="/static/lions.css?v=1">
   <link rel="stylesheet" href="/static/rosters.css?v=3">
   <meta name="csrf-token" content="{{ session.csrf_token }}">
-  <script src="/static/app.js?v=20260921-leaders" defer></script><script src="/static/trades.js?v=1" defer></script><script src="/static/hub.js?v=1" defer></script>
+  <script src="/static/app.js?v=20260921-leaders" defer></script><script src="/static/trades.js?v=2" defer></script><script src="/static/hub.js?v=1" defer></script>
   {% include '_theme_assets.html' %}
 </head>
 <body>
@@ -29,20 +29,21 @@
     {% if not error %}
     <form method="post" action="/trades/preview" id="trade-builder">
       <input type="hidden" name="league" value="{{ league.id }}"><input type="hidden" name="target" value="{{ target }}"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-      <div class="trade-submit-row"><p id="trade-selection-status" role="status">Choose at least one player from each team.</p><button type="submit" id="review-trade" {% if not target %}disabled{% endif %}>Review offer →</button></div>
+      <div class="trade-submit-row"><p id="trade-selection-status" role="status">Choose at least one player or draft pick from each team.</p><button type="submit" id="review-trade" {% if not target %}disabled{% endif %}>Review offer →</button></div>
       <div class="trade-rosters">
-        {% for side, players, title, team_name in [('give', own_players, 'You send', 'Your team'), ('receive', other_players, 'You receive', teams.get(target, 'Choose a trade partner'))] %}
+        {% for side, players, picks, title, team_name in [('give', own_players, own_picks, 'You send', 'Your team'), ('receive', other_players, other_picks, 'You receive', teams.get(target, 'Choose a trade partner'))] %}
         <section class="trade-roster" aria-label="{{ title }}">
           <header><div><p class="eyebrow">{{ team_name }}</p><h2>{{ title }}</h2></div><span class="trade-count" data-count="{{ side }}">0 selected</span></header>
           <div class="trade-player-list">
             {% for player in players %}<div class="trade-player"><label class="trade-check"><input type="checkbox" name="{{ side }}" value="{{ player.id }}" {% if (side == 'give' and player.id in suggested_give) or (side == 'receive' and player.id == suggested_receive) %}checked{% endif %} aria-label="{{ title }} {{ player.name }}"></label>{% include '_player_identity.html' %}{% if side == 'receive' %}<a class="suggest-player-offer" href="/trades?league={{ league.id }}&target={{ target }}&wanted={{ player.id }}#trade-ideas" aria-label="Suggest offers for {{ player.name }}">Suggest offer</a>{% endif %}</div>{% else %}<p class="empty">{{ 'Choose a team above to see its roster.' if side == 'receive' and not target else 'No rostered players available.' }}</p>{% endfor %}
           </div>
+          {% if picks %}<div class="trade-pick-list"><h3>Draft picks</h3>{% for pick in picks %}<label class="trade-pick"><input type="checkbox" name="{{ side }}_asset" value="{{ pick.code }}"><span><strong>{{ pick.label }}</strong><small>Verified MFL trade asset</small></span></label>{% endfor %}</div>{% endif %}
         </section>
         {% endfor %}
       </div>
       <div class="trade-compose">
         <details class="trade-message-toggle"><summary>Add a message to the other owner</summary><label for="trade-comments">Optional message · 500 characters</label><textarea id="trade-comments" name="comments" maxlength="500" rows="3" placeholder="Add a note about your offer"></textarea></details>
-        <p class="fine-print">Nothing is sent until you confirm on the next screen. Player trades only; MFL applies trade deadlines, roster, salary and approval rules. Game-day lineup locks do not automatically prevent a trade proposal.</p>
+        <p class="fine-print">Nothing is sent until you confirm on the next screen. Players and draft picks are revalidated against MFL before submission. MFL applies trade deadlines, roster, salary and approval rules.</p>
       </div>
     </form>
     {% endif %}

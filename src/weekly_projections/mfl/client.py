@@ -91,6 +91,13 @@ class MFLPlayer:
 
 
 @dataclass(frozen=True)
+class MFLTradeAsset:
+    code: str
+    owner_id: str
+    label: str
+
+
+@dataclass(frozen=True)
 class MFLAvailability:
     player_id: str
     status: str = "available"
@@ -1059,13 +1066,99 @@ class MFLClient:
             raise ValueError("A selected player is no longer on that team. Rebuild the offer using the current rosters.")
         return target, give, receive
 
-    def propose_player_trade(self, *, target: str, give: Iterable[str], receive: Iterable[str], comments: str = "") -> Any:
+    def trade_pick_assets(self) -> dict[str, tuple[MFLTradeAsset, ...]]:
+        """Return MFL's exact tradeable draft-pick asset tokens by owner."""
+        payload = self.export("assets")
+        picks: dict[str, list[MFLTradeAsset]] = {}
+
+        def tokens(value: Any) -> Iterator[str]:
+            if isinstance(value, str):
+                yield from (part.strip() for part in value.split(","))
+            elif isinstance(value, dict):
+                for child in value.values():
+                    yield from tokens(child)
+            elif isinstance(value, list):
+                for child in value:
+                    yield from tokens(child)
+
+        for franchise in _iter_key(payload, "franchise"):
+            if not isinstance(franchise, dict):
+                continue
+            owner = str(franchise.get("id") or franchise.get("franchise_id") or "")
+            if not owner.isdecimal():
+                continue
+            owner = owner.zfill(4)
+            seen: set[str] = set()
+            for code in tokens(franchise):
+                code = code.upper()
+                if code in seen or not re.fullmatch(r"(?:FP|DP)_[A-Z0-9_:-]+", code):
+                    continue
+                seen.add(code)
+                future = re.fullmatch(r"FP_(\d{1,4})_(\d{4})_(\d+)", code)
+                current = re.fullmatch(r"DP_(\d+)_(\d+)", code)
+                if future:
+                    original, year, round_number = future.groups()
+                    label = f"{year} Round {int(round_number)} pick · original team {original.zfill(4)}"
+                elif current:
+                    round_number, pick_number = current.groups()
+                    label = f"{self.config.year} Round {int(round_number)} · Pick {int(pick_number)}"
+                else:
+                    label = f"Draft pick · {code}"
+                picks.setdefault(owner, []).append(MFLTradeAsset(code, owner, label))
+        return {
+            owner: tuple(sorted(assets, key=lambda asset: (asset.label, asset.code)))
+            for owner, assets in picks.items()
+        }
+
+    def validate_trade(
+        self,
+        target: str,
+        give: Iterable[str],
+        receive: Iterable[str],
+        give_assets: Iterable[str] = (),
+        receive_assets: Iterable[str] = (),
+    ) -> tuple[str, list[str], list[str], list[str], list[str]]:
+        own = self.config.franchise_id.zfill(4)
+        target = str(target).zfill(4)
+        give, receive = sorted(set(give)), sorted(set(receive))
+        give_assets, receive_assets = sorted(set(give_assets)), sorted(set(receive_assets))
+        if not own.isdecimal() or own == "0000" or not target.isdecimal() or target in {own, "0000"}:
+            raise ValueError("Choose another team in this league.")
+        if not (give or give_assets) or not (receive or receive_assets):
+            raise ValueError("Choose at least one player or draft pick from each team.")
+        if len(give) + len(give_assets) > 100 or len(receive) + len(receive_assets) > 100:
+            raise ValueError("This trade contains too many assets.")
+        if not all(player.isdecimal() for player in give + receive):
+            raise ValueError("Only rostered players can be included as players in this trade.")
+        if not all(re.fullmatch(r"(?:FP|DP)_[A-Z0-9_:-]+", asset) for asset in give_assets + receive_assets):
+            raise ValueError("MFL returned an invalid draft-pick asset.")
+        if set(give + give_assets) & set(receive + receive_assets):
+            raise ValueError("The same asset cannot appear on both sides of this offer.")
+        rosters = self.trade_rosters()
+        if own not in rosters or target not in rosters:
+            raise ValueError("Both teams must have a roster in this league.")
+        if not set(give) <= rosters[own] or not set(receive) <= rosters[target]:
+            raise ValueError("A selected player is no longer on that team. Rebuild the offer using the current rosters.")
+        if give_assets or receive_assets:
+            assets = self.trade_pick_assets()
+            own_assets = {asset.code for asset in assets.get(own, ())}
+            target_assets = {asset.code for asset in assets.get(target, ())}
+            if not set(give_assets) <= own_assets or not set(receive_assets) <= target_assets:
+                raise ValueError("A selected draft pick is no longer owned by that team. Rebuild the offer using current assets.")
+        return target, give, receive, give_assets, receive_assets
+
+    def propose_player_trade(
+        self, *, target: str, give: Iterable[str], receive: Iterable[str],
+        give_assets: Iterable[str] = (), receive_assets: Iterable[str] = (), comments: str = "",
+    ) -> Any:
         if len(comments) > 500:
             raise ValueError("Keep your trade message to 500 characters or fewer.")
-        target, give, receive = self.validate_player_trade(target, give, receive)
+        target, give, receive, give_assets, receive_assets = self.validate_trade(
+            target, give, receive, give_assets, receive_assets,
+        )
         return self.import_request(
-            "tradeProposal", OFFEREDTO=target, WILL_GIVE_UP=",".join(give),
-            WILL_RECEIVE=",".join(receive), COMMENTS=comments,
+            "tradeProposal", OFFEREDTO=target, WILL_GIVE_UP=",".join(give + give_assets),
+            WILL_RECEIVE=",".join(receive + receive_assets), COMMENTS=comments,
             # Also binds commissioner-owned sessions to their selected team;
             # never offer as commissioner or perform a forced trade.
             FRANCHISE_ID=self.config.franchise_id.zfill(4),

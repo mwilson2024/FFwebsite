@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import statistics
 import time
 import unicodedata
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from typing import Any, Iterable, Mapping
 
 import requests
@@ -20,9 +22,22 @@ ESPN_WEEKLY_RANKINGS_URL = (
     "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl/seasons/"
     "{year}/segments/0/leaguedefaults/{scoring_id}"
 )
+FANTASYPROS_RANKINGS_URLS = {
+    "QB": "https://www.fantasypros.com/nfl/rankings/qb.php",
+    "RB": "https://www.fantasypros.com/nfl/rankings/half-point-ppr-rb.php",
+    "WR": "https://www.fantasypros.com/nfl/rankings/half-point-ppr-wr.php",
+    "TE": "https://www.fantasypros.com/nfl/rankings/half-point-ppr-te.php",
+    "K": "https://www.fantasypros.com/nfl/rankings/k.php",
+    "DST": "https://www.fantasypros.com/nfl/rankings/dst.php",
+}
+CBS_WEEKLY_PROJECTIONS_URL = (
+    "https://www.cbssports.com/fantasy/football/stats/{position}/{year}/tp/projections/ppr/"
+)
 _CACHE_SECONDS = 12 * 60 * 60
 _stathead_cache: dict[int, tuple[float, dict[str, Any]]] = {}
 _espn_cache: dict[tuple[int, int, str], tuple[float, dict[str, Any]]] = {}
+_fantasypros_cache: dict[tuple[int, int], tuple[float, dict[str, float]]] = {}
+_cbs_cache: dict[tuple[int, int], tuple[float, dict[str, float]]] = {}
 
 _ESPN_TEAM_IDS = {
     1: "ATL", 2: "BUF", 3: "CHI", 4: "CIN", 5: "CLE", 6: "DAL",
@@ -33,6 +48,12 @@ _ESPN_TEAM_IDS = {
     33: "BAL", 34: "HOU",
 }
 _ESPN_POSITION_IDS = {1: "QB", 2: "RB", 3: "WR", 4: "TE", 5: "K", 16: "DST"}
+_NFL_TEAMS = {
+    "ARI", "ATL", "BAL", "BUF", "CAR", "CHI", "CIN", "CLE", "DAL", "DEN",
+    "DET", "GB", "HOU", "IND", "JAX", "KC", "LV", "LA", "LAC", "MIA",
+    "MIN", "NE", "NO", "NYG", "NYJ", "PHI", "PIT", "SEA", "SF", "TB",
+    "TEN", "WAS",
+}
 
 
 class ProjectionSourceError(RuntimeError):
@@ -49,6 +70,12 @@ class ProjectionBlend:
     espn_ranks: dict[str, float] | None = None
     espn_matched: int = 0
     espn_source: str | None = None
+    fantasypros_ranks: dict[str, float] | None = None
+    fantasypros_matched: int = 0
+    fantasypros_source: str | None = None
+    cbs_ranks: dict[str, float] | None = None
+    cbs_matched: int = 0
+    cbs_source: str | None = None
     combined_ranks: dict[str, float] | None = None
     combined_matched: int = 0
     combined_source: str | None = None
@@ -315,6 +342,207 @@ def espn_weekly_ranks(
     return matched
 
 
+class _RankingTableParser(HTMLParser):
+    """Small, dependency-free table reader for third-party ranking pages."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows: list[list[str]] = []
+        self._row: list[str] | None = None
+        self._cell: list[str] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "tr":
+            self._row = []
+        elif tag in {"td", "th"} and self._row is not None:
+            self._cell = []
+
+    def handle_data(self, data: str) -> None:
+        if self._cell is not None:
+            self._cell.append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"td", "th"} and self._row is not None and self._cell is not None:
+            self._row.append(" ".join("".join(self._cell).split()))
+            self._cell = None
+        elif tag == "tr" and self._row is not None:
+            if self._row:
+                self.rows.append(self._row)
+            self._row = None
+
+
+def _match_external_ranks(
+    players: Iterable[MFLPlayer], rows: Iterable[tuple[str, str, str, float]],
+) -> dict[str, float]:
+    by_name_team: dict[tuple[str, str], float] = {}
+    by_name_position: dict[tuple[str, str], float] = {}
+    defenses: dict[str, float] = {}
+    for name, team, position, rank in rows:
+        name_key = _canonical_name(name)
+        team_key = _canonical_team(team)
+        position_key = _position_bucket(position)
+        if name_key:
+            by_name_team[(name_key, team_key)] = rank
+            by_name_position[(name_key, position_key)] = rank
+        if position_key == "DST" and team_key:
+            defenses[team_key] = rank
+    matched: dict[str, float] = {}
+    for player in players:
+        name = _canonical_name(player.name)
+        team = _canonical_team(player.team)
+        position = _position_bucket(player.position)
+        rank = defenses.get(team) if position == "DST" else by_name_team.get((name, team))
+        if rank is None:
+            rank = by_name_position.get((name, position))
+        if rank is not None:
+            matched[player.id] = float(rank)
+    return matched
+
+
+def _fantasypros_rows(html: str, position: str) -> list[tuple[str, str, str, float]]:
+    """Parse the full rendered ranking table, including authenticated pages."""
+    marker = re.search(r"\becrData\s*=\s*", html)
+    if marker:
+        try:
+            payload, _ = json.JSONDecoder().raw_decode(html[marker.end():])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            payload = None
+        if isinstance(payload, dict) and isinstance(payload.get("players"), list):
+            embedded: list[tuple[str, str, str, float]] = []
+            for player in payload["players"]:
+                if not isinstance(player, dict):
+                    continue
+                try:
+                    rank = float(player.get("rank_ecr"))
+                except (TypeError, ValueError):
+                    continue
+                name = str(player.get("player_name") or "").strip()
+                team = str(player.get("player_team_id") or "").strip()
+                row_position = str(player.get("player_position_id") or position)
+                if name and team and rank > 0:
+                    embedded.append((name, team, row_position, rank))
+            if embedded:
+                return embedded
+    parser = _RankingTableParser()
+    parser.feed(html)
+    rows: list[tuple[str, str, str, float]] = []
+    for cells in parser.rows:
+        if len(cells) < 2:
+            continue
+        rank_match = re.search(r"\b(\d+(?:\.\d+)?)\b", cells[0])
+        if not rank_match:
+            continue
+        text = " ".join(cells[1:4])
+        team = next((code for code in reversed(re.findall(r"\b[A-Z]{2,3}\b", text)) if code in _NFL_TEAMS), "")
+        name = re.sub(r"\s+\b(?:QB|RB|WR|TE|K|DST)\b.*$", "", cells[1]).strip()
+        if team:
+            name = re.sub(rf"\s+{re.escape(team)}(?:\s+.*)?$", "", name).strip()
+        if not name or not team:
+            continue
+        rows.append((name, team, position, float(rank_match.group(1))))
+    return rows
+
+
+def fantasypros_weekly_ranks(
+    players: Iterable[MFLPlayer], *, year: int, week: int,
+    session: requests.Session | None = None,
+) -> dict[str, float]:
+    """Load full FantasyPros tables; an optional login cookie stays server-side."""
+    cache_key = (year, week)
+    cached = _fantasypros_cache.get(cache_key)
+    now = time.monotonic()
+    if cached and now - cached[0] < _CACHE_SECONDS:
+        return dict(cached[1])
+    player_list = list(players)
+    positions = {_position_bucket(player.position) for player in player_list}
+    cookie = os.getenv("WP_FANTASYPROS_SESSION_COOKIE", "").strip()
+    headers = {"User-Agent": "WeeklyProjectionsML/0.8 (+personal fantasy client)"}
+    if cookie:
+        headers["Cookie"] = cookie
+    parsed: list[tuple[str, str, str, float]] = []
+    try:
+        for position in ("QB", "RB", "WR", "TE", "K", "DST"):
+            if position not in positions:
+                continue
+            response = (session or requests).get(
+                FANTASYPROS_RANKINGS_URLS[position], headers=headers, timeout=(3.05, 12),
+            )
+            response.raise_for_status()
+            # These friendly URLs point at the currently published week. Never
+            # relabel current ranks as historical ranks when browsing old weeks.
+            if (
+                f'"year":"{year}"' not in response.text
+                or f'"week":"{week}"' not in response.text
+            ):
+                continue
+            parsed.extend(_fantasypros_rows(response.text, position))
+    except requests.RequestException as error:
+        raise ProjectionSourceError("FantasyPros weekly rankings are unavailable") from error
+    matched = _match_external_ranks(player_list, parsed)
+    if not matched:
+        raise ProjectionSourceError(
+            "FantasyPros did not return a readable full ranking table; refresh its server-side session cookie"
+        )
+    _fantasypros_cache[cache_key] = (now, matched)
+    return matched
+
+
+def _cbs_rows(html: str, position: str) -> list[tuple[str, str, str, float]]:
+    parser = _RankingTableParser()
+    parser.feed(html)
+    projected: list[tuple[str, str, str, float]] = []
+    for cells in parser.rows:
+        if len(cells) < 3:
+            continue
+        player_cell = cells[0]
+        matches = re.findall(r"(.+?)\s+(QB|RB|WR|TE|K|DST)\s+([A-Z]{2,3})\b", player_cell)
+        if not matches:
+            continue
+        name, _, team = max(matches, key=lambda item: len(item[0].strip()))
+        try:
+            points = float(cells[-2])
+        except (TypeError, ValueError):
+            continue
+        projected.append((name.strip(), team, position, points))
+    projected.sort(key=lambda row: row[3], reverse=True)
+    return [(name, team, pos, float(index)) for index, (name, team, pos, _) in enumerate(projected, 1)]
+
+
+def cbs_weekly_projection_ranks(
+    players: Iterable[MFLPlayer], *, year: int, week: int,
+    session: requests.Session | None = None,
+) -> dict[str, float]:
+    """Convert CBS' public PPR projections to within-position weekly ranks."""
+    cache_key = (year, week)
+    cached = _cbs_cache.get(cache_key)
+    now = time.monotonic()
+    if cached and now - cached[0] < _CACHE_SECONDS:
+        return dict(cached[1])
+    player_list = list(players)
+    positions = {_position_bucket(player.position) for player in player_list}
+    parsed: list[tuple[str, str, str, float]] = []
+    try:
+        for position in ("QB", "RB", "WR", "TE", "K", "DST"):
+            if position not in positions:
+                continue
+            response = (session or requests).get(
+                CBS_WEEKLY_PROJECTIONS_URL.format(position=position, year=year),
+                timeout=(3.05, 12),
+                headers={"User-Agent": "WeeklyProjectionsML/0.8 (+personal fantasy client)"},
+            )
+            response.raise_for_status()
+            if f"Week {week} Proj" not in response.text:
+                continue
+            parsed.extend(_cbs_rows(response.text, position))
+    except requests.RequestException as error:
+        raise ProjectionSourceError("CBS weekly projections are unavailable") from error
+    matched = _match_external_ranks(player_list, parsed)
+    if not matched:
+        raise ProjectionSourceError("CBS did not return projections for the selected week")
+    _cbs_cache[cache_key] = (now, matched)
+    return matched
+
+
 def blend_projection_scores(
     players: Iterable[MFLPlayer],
     *,
@@ -359,6 +587,8 @@ def combined_position_ranks(
     mfl_scores: Mapping[str, float],
     ml_scores: Mapping[str, float],
     espn_ranks: Mapping[str, float],
+    fantasypros_ranks: Mapping[str, float] | None = None,
+    cbs_ranks: Mapping[str, float] | None = None,
 ) -> dict[str, float]:
     """Equal-weight available source ranks within each fantasy position.
 
@@ -391,6 +621,8 @@ def combined_position_ranks(
         source_ranks(mfl_scores, lower_is_better=False),
         source_ranks(ml_scores, lower_is_better=False),
         source_ranks(espn_ranks, lower_is_better=True),
+        source_ranks(fantasypros_ranks or {}, lower_is_better=True),
+        source_ranks(cbs_ranks or {}, lower_is_better=True),
     )
     combined: dict[str, float] = {}
     for player in player_list:
@@ -409,6 +641,8 @@ def projection_blend(
     session: requests.Session | None = None,
     include_espn: bool = False,
     espn_rank_type: str = "PPR",
+    include_fantasypros: bool = False,
+    include_cbs: bool = False,
 ) -> ProjectionBlend:
     player_list = list(players)
     generated_at: str | None = None
@@ -436,11 +670,35 @@ def projection_blend(
                 espn_source = f"ESPN weekly consensus ({espn_rank_type})"
         except ProjectionSourceError:
             espn_ranks = {}
+    fantasypros_ranks: dict[str, float] = {}
+    fantasypros_source: str | None = None
+    if include_fantasypros:
+        try:
+            fantasypros_ranks = fantasypros_weekly_ranks(
+                player_list, year=year, week=week, session=session,
+            )
+            if fantasypros_ranks:
+                fantasypros_source = "FantasyPros Half-PPR weekly expert consensus"
+        except ProjectionSourceError:
+            fantasypros_ranks = {}
+    cbs_ranks: dict[str, float] = {}
+    cbs_source: str | None = None
+    if include_cbs:
+        try:
+            cbs_ranks = cbs_weekly_projection_ranks(
+                player_list, year=year, week=week, session=session,
+            )
+            if cbs_ranks:
+                cbs_source = "CBS Sports PPR weekly projection rank"
+        except ProjectionSourceError:
+            cbs_ranks = {}
     combined_ranks = combined_position_ranks(
         player_list,
         mfl_scores=mfl_scores,
         ml_scores=ml_scores,
         espn_ranks=espn_ranks,
+        fantasypros_ranks=fantasypros_ranks,
+        cbs_ranks=cbs_ranks,
     )
     # MFL applies each league's exact rules to FantasySharks' raw projected stats.
     # Generic ML point totals cannot reproduce yardage bonuses or scoring tiers.
@@ -455,10 +713,16 @@ def projection_blend(
         espn_ranks=espn_ranks,
         espn_matched=len(espn_ranks),
         espn_source=espn_source,
+        fantasypros_ranks=fantasypros_ranks,
+        fantasypros_matched=len(fantasypros_ranks),
+        fantasypros_source=fantasypros_source,
+        cbs_ranks=cbs_ranks,
+        cbs_matched=len(cbs_ranks),
+        cbs_source=cbs_source,
         combined_ranks=combined_ranks,
         combined_matched=len(combined_ranks),
         combined_source=(
-            "Equal-weight available MFL / ESPN / StatHead position ranks"
+            "Equal-weight available MFL / ESPN / FantasyPros / CBS / StatHead position ranks"
             if combined_ranks
             else None
         ),

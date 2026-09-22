@@ -36,11 +36,20 @@ class FakePostgresResult:
     def fetchone(self):
         return self.row
 
+    def fetchall(self):
+        return self.row or []
+
 
 class FakePostgresConnection:
     def __init__(self):
         self.sessions = {}
         self.preference = "combined"
+        self.theme = "lions"
+        self.default_league_id = "12345"
+        self.selected_week = 2
+        self.onboarding_complete = False
+        self.ranking_setup_complete = False
+        self.watchlists = set()
         self.statements = []
 
     def __enter__(self):
@@ -53,13 +62,24 @@ class FakePostgresConnection:
         sql = " ".join(query.split())
         self.statements.append((sql, params))
         if sql.startswith("SELECT version FROM fantasy_hq.schema_migration"):
-            return FakePostgresResult((1,))
+            return FakePostgresResult((2,))
         if sql.startswith("SELECT max(version) FROM fantasy_hq.schema_migration"):
-            return FakePostgresResult((1,))
+            return FakePostgresResult((2,))
         if sql.startswith("INSERT INTO fantasy_hq.app_user"):
             return FakePostgresResult(("user-1",))
         if sql.startswith("INSERT INTO fantasy_hq.user_preference"):
-            self.preference = params[1]
+            if len(params) > 1:
+                self.preference = params[1]
+            return FakePostgresResult()
+        if sql.startswith("UPDATE fantasy_hq.user_preference"):
+            value_index = 0
+            for column in (
+                "theme", "ranking_preference", "default_season", "default_league_id",
+                "selected_week", "briefing_alerts", "onboarding_complete", "ranking_setup_complete",
+            ):
+                if f"{column} = %s" in sql:
+                    setattr(self, column, params[value_index])
+                    value_index += 1
             return FakePostgresResult()
         if sql.startswith("INSERT INTO fantasy_hq.remembered_session"):
             self.sessions[params[0]] = (
@@ -69,7 +89,18 @@ class FakePostgresConnection:
         if sql.startswith("SELECT encrypted_mfl_session"):
             return FakePostgresResult(self.sessions.get(params[0]))
         if sql.startswith("SELECT preference.theme"):
-            return FakePostgresResult(("lions", self.preference, 2026, "12345", 2, False))
+            return FakePostgresResult((
+                self.theme, self.preference, 2026, self.default_league_id,
+                self.selected_week, False, self.onboarding_complete, self.ranking_setup_complete,
+            ))
+        if sql.startswith("SELECT watchlist.league_id"):
+            return FakePostgresResult(sorted(self.watchlists))
+        if sql.startswith("INSERT INTO fantasy_hq.watchlist_player"):
+            self.watchlists.add((str(params[2]), str(params[3])))
+            return FakePostgresResult()
+        if sql.startswith("DELETE FROM fantasy_hq.watchlist_player"):
+            self.watchlists.discard((str(params[2]), str(params[3])))
+            return FakePostgresResult()
         if sql.startswith("DELETE FROM fantasy_hq.remembered_session") and params and len(params) == 1:
             if isinstance(params[0], bytes):
                 self.sessions.pop(params[0], None)
@@ -131,9 +162,27 @@ def test_postgres_store_uses_private_schema_encryption_and_tls(monkeypatch):
         "backend": "Supabase PostgreSQL",
         "configured": True,
         "connected": True,
-        "schema_version": 1,
+        "schema_version": 2,
     }
     assert all("private-cookie" not in repr(params) for _, params in database.statements)
+
+    store.save_preferences(
+        "account:owner-hash", theme="pistons", default_league_id="54321",
+        selected_week=7, onboarding_complete=True,
+    )
+    choices = store.load_preferences("account:owner-hash")
+    assert choices["theme"] == "pistons"
+    assert choices["default_league_id"] == "54321"
+    assert choices["selected_week"] == 7
+    assert choices["onboarding_complete"] is True
+    store.save_watchlist_player(
+        "account:owner-hash", year=2026, league_id="12345", player_id="999", enabled=True,
+    )
+    assert store.load_watchlists("account:owner-hash", 2026) == {"12345": {"999"}}
+    store.save_watchlist_player(
+        "account:owner-hash", year=2026, league_id="12345", player_id="999", enabled=False,
+    )
+    assert store.load_watchlists("account:owner-hash", 2026) == {}
 
     store.revoke(token)
     assert store.restore(token) is None

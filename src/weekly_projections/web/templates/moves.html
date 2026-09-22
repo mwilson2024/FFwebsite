@@ -12,7 +12,7 @@
   <link rel="stylesheet" href="/static/lions.css?v=1">
   <link rel="stylesheet" href="/static/rosters.css?v=3">
   <script src="/static/diagnostics.js" defer></script>
-  <script src="/static/app.js?v=20260921-leaders" defer></script>
+  <script src="/static/app.js?v=20260922-market-default" defer></script>
   {% include '_theme_assets.html' %}
 </head>
 <body>
@@ -50,7 +50,7 @@
           <div class="board-toolbar">
             <div>
               <p class="eyebrow" id="available-heading">ALL LEAGUE PLAYERS</p>
-              <p class="toolbar-note">Search free agents, waivers, your roster, and every other team.</p>
+              <p class="toolbar-note">Search free agents, waivers, your roster, and every other team. Default: {{ default_market_label }} · {{ default_market_count }} returned.</p>
             </div>
             <details class="board-filter-panel" open>
               <summary><span>Filters &amp; sorting</span><span id="player-result-count" aria-live="polite">{{ player_count }} shown</span></summary>
@@ -58,7 +58,7 @@
                 <label><span>Search</span><input id="player-filter" type="search" value="{{ query }}" placeholder="Player or team"></label>
                 <label><span>Position</span><select id="position-filter"><option value="all">All</option>{% for position in positions %}<option value="{{ position }}">{{ position }}</option>{% endfor %}</select></label>
                 <label><span>NFL team</span><select id="nfl-team-filter"><option value="all">All teams</option>{% for team in nfl_teams %}<option value="{{ team }}">{{ team }}</option>{% endfor %}</select></label>
-                <label><span>Availability</span><select id="status-filter"><option value="all">All players</option><option value="open">Free agents</option><option value="waiver">On waivers</option><option value="locked">Waiver claim only</option><option value="rostered">Other rosters</option><option value="mine">My roster</option></select></label>
+                <label><span>Availability</span><select id="status-filter" data-default-status="{{ default_market_filter }}"><option value="all" {% if default_market_filter == 'all' %}selected{% endif %}>All players</option><option value="open" {% if default_market_filter == 'open' %}selected{% endif %}>Free agents</option><option value="waiver" {% if default_market_filter == 'waiver' %}selected{% endif %}>Waivers / claim only</option><option value="locked">Waiver claim only</option><option value="rostered">Other rosters</option><option value="mine">My roster</option></select></label>
                 <label><span>Fantasy team</span><select id="fantasy-team-filter"><option value="all">All fantasy teams</option>{% for team_id, team_name in fantasy_teams %}<option value="{{ team_id }}">{{ team_name }}</option>{% endfor %}</select></label>
                 <label><span>Projection</span><select id="projection-filter"><option value="all">All</option><option value="projected">Has projection</option><option value="missing">No projection</option></select></label>
                 <label><span>Sort</span><select id="player-sort" data-default-sort="{{ ranking_default_sort }}"><option value="combined-rank" {% if ranking_default_sort == 'combined-rank' %}selected{% endif %}>Combined position rank</option><option value="espn-rank" {% if ranking_default_sort == 'espn-rank' %}selected{% endif %}>ESPN weekly rank</option><option value="recommended">Recommended</option><option value="projection" {% if ranking_default_sort == 'projection' %}selected{% endif %}>MFL projected points</option><option value="ytd">YTD points</option><option value="avg">Average points</option><option value="median">Recent median</option><option value="matchup">Best matchup</option><option value="edge">Roster edge</option><option value="name">Name A–Z</option><option value="nfl-team">NFL team</option><option value="fantasy-team">Fantasy team</option></select></label>

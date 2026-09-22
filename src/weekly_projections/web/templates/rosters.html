@@ -29,7 +29,7 @@
     </nav>
     <div class="league-roster-grid">
       {% for team in teams %}
-      <details class="team-roster-card{% if team.is_own %} own-roster{% endif %}" id="roster-{{ team.id }}"{% if team.is_own %} open{% endif %}>
+      <details class="team-roster-card{% if team.is_own %} own-roster{% endif %}" id="roster-{{ team.id }}"{% if team.is_own or team.id == selected_team %} open{% endif %}>
         <summary>
           <span class="roster-team-logo">{% if team.logo_url %}<img src="{{ team.logo_url }}" alt="" loading="lazy" referrerpolicy="no-referrer">{% else %}{{ team.name[:2]|upper }}{% endif %}</span>
           <span class="roster-team-title"><small>{{ 'YOUR TEAM' if team.is_own else 'LEAGUE MEMBER' }}</small><strong>{{ team.name }}</strong><span>{{ team.players|length }} players</span></span>

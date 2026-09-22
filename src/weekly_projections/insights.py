@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-import io
 import math
 import statistics
 import time
@@ -19,8 +18,10 @@ DEPTH_CHART_URL = (
     "depth_charts/depth_charts_{year}.csv"
 )
 WEATHER_URL = "https://api.open-meteo.com/v1/forecast"
-_DEPTH_TTL = 60 * 60
+_DEPTH_TTL = 12 * 60 * 60
 _WEATHER_TTL = 30 * 60
+_DEPTH_DOWNLOAD_LIMIT = 96_000_000
+_DEPTH_SNAPSHOT_ROW_LIMIT = 5_000
 _depth_cache: dict[int, tuple[float, str, list[dict[str, str]]]] = {}
 _weather_cache: dict[tuple[str, int], tuple[float, "WeatherOutlook"]] = {}
 
@@ -109,6 +110,26 @@ def position_bucket(value: str) -> str:
     return position
 
 
+def _depth_chart_lines(response) -> Iterable[str]:
+    """Yield a bounded decoded CSV stream without retaining the season file."""
+    total = 0
+    iterator = getattr(response, "iter_lines", None)
+    if callable(iterator):
+        source = iterator(decode_unicode=False)
+    else:
+        source = response.content.splitlines()
+    for raw_line in source:
+        if isinstance(raw_line, bytes):
+            total += len(raw_line) + 1
+            line = raw_line.decode("utf-8-sig" if total == len(raw_line) + 1 else "utf-8")
+        else:
+            line = str(raw_line)
+            total += len(line.encode("utf-8")) + 1
+        if total > _DEPTH_DOWNLOAD_LIMIT:
+            raise RuntimeError("nflverse depth chart response exceeded the safe download limit")
+        yield line
+
+
 def _download_depth_chart(year: int) -> tuple[str, list[dict[str, str]]]:
     cached = _depth_cache.get(year)
     now = time.monotonic()
@@ -117,22 +138,36 @@ def _download_depth_chart(year: int) -> tuple[str, list[dict[str, str]]]:
     try:
         response = requests.get(
             DEPTH_CHART_URL.format(year=year),
-            timeout=(3.05, 20),
+            timeout=(3.05, 45),
             headers={"User-Agent": "WeeklyProjectionsML/0.7 (+personal MFL client)"},
+            stream=True,
         )
         response.raise_for_status()
     except requests.RequestException as error:
         raise RuntimeError("nflverse depth charts are temporarily unavailable") from error
-    if len(response.content) > 12_000_000:
-        raise RuntimeError("nflverse depth chart response was unexpectedly large")
     try:
-        text = response.content.decode("utf-8-sig")
-        rows = [dict(row) for row in csv.DictReader(io.StringIO(text))]
-    except (UnicodeError, csv.Error) as error:
+        reader = csv.DictReader(_depth_chart_lines(response))
+        if not reader.fieldnames or not {"team", "player_name"}.issubset(reader.fieldnames):
+            raise RuntimeError("nflverse returned an unexpected depth chart format")
+        updated = ""
+        rows: list[dict[str, str]] = []
+        for raw_row in reader:
+            row = dict(raw_row)
+            row_date = str(row.get("dt") or "")
+            if row_date > updated:
+                updated, rows = row_date, []
+            if row_date == updated:
+                rows.append(row)
+                if len(rows) > _DEPTH_SNAPSHOT_ROW_LIMIT:
+                    raise RuntimeError("nflverse depth chart snapshot exceeded the safe row limit")
+    except (UnicodeError, csv.Error, requests.RequestException) as error:
         raise RuntimeError("nflverse returned an unreadable depth chart") from error
-    if not rows or not {"team", "player_name"}.issubset(rows[0]):
+    finally:
+        close = getattr(response, "close", None)
+        if callable(close):
+            close()
+    if not rows:
         raise RuntimeError("nflverse returned an unexpected depth chart format")
-    updated = str(rows[0].get("dt") or "")
     _depth_cache[year] = (now, updated, rows)
     return updated, rows
 

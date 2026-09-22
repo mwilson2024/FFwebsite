@@ -91,12 +91,17 @@ _PROJECTIONS_TTL = 12 * 3600
 _APP_TIME_ZONE = ZoneInfo(os.getenv("WP_TIME_ZONE", "America/New_York"))
 _LEAGUE_STATIC_STALE_TTL = 7 * 86400
 _SHARED_READ_CACHE_LIMIT = 512
+_ACTIVITY_LOOKBACK_DAYS = 14
+_THEMES = {"michigan", "lions", "aurora", "tigers", "redwings", "pistons"}
 _RANKING_PREFERENCES = {
     "espn-ppr": "ESPN PPR weekly consensus",
     "espn-standard": "ESPN Standard weekly consensus",
+    "fantasypros-half": "FantasyPros Half-PPR weekly consensus",
+    "cbs-ppr": "CBS Sports PPR weekly projection rank",
     "mfl": "MFL league-scored projections",
-    "combined": "Combined MFL + ESPN + ML position ranks",
+    "combined": "Combined MFL + ESPN + FantasyPros + CBS + ML ranks",
 }
+templates.env.globals["ranking_preferences"] = _RANKING_PREFERENCES
 
 
 def _default_ranking_preference() -> str:
@@ -114,6 +119,16 @@ def _ranking_reference(current: "BrowserSession") -> tuple[bool, str]:
     if preference == "combined":
         return True, "PPR"
     return True, "STANDARD" if preference == "espn-standard" else "PPR"
+
+
+def _ranking_sources(current: "BrowserSession" | None) -> tuple[bool, str, bool, bool]:
+    preference = _ranking_preference(current.ranking_preference) if current else "combined"
+    return (
+        preference.startswith("espn") or preference == "combined",
+        "STANDARD" if preference == "espn-standard" else "PPR",
+        preference == "fantasypros-half" or preference == "combined",
+        preference == "cbs-ppr" or preference == "combined",
+    )
 
 
 def _board_position(player: MFLPlayer) -> str:
@@ -365,6 +380,8 @@ class TradeDraft:
     give: tuple[MFLPlayer, ...]
     receive: tuple[MFLPlayer, ...]
     comments: str
+    give_assets: tuple[Any, ...] = ()
+    receive_assets: tuple[Any, ...] = ()
     created_at: float = field(default_factory=time.monotonic)
     status: str = "draft"
     message: str = ""
@@ -441,6 +458,10 @@ class BrowserSession:
     watchlists: dict[str, set[str]] = field(default_factory=dict)
     operations: list[OperationRecord] = field(default_factory=list)
     ranking_preference: str = field(default_factory=_default_ranking_preference)
+    theme: str = ""
+    default_league_id: str = ""
+    onboarding_complete: bool = False
+    ranking_setup_complete: bool = False
     remember_token: str = ""
     owner_fingerprint: str = ""
     created_at: float = field(default_factory=time.monotonic)
@@ -523,6 +544,11 @@ async def secure_local_responses(request: Request, call_next):
             and any(item.id == league_id for item in current.leagues)):
         response.set_cookie("wp_last_league", f"{current.year}:{league_id}", max_age=365*86400,
                             httponly=True, samesite="strict", secure=_secure_cookies(request))
+        if current.default_league_id != league_id:
+            current.default_league_id = str(league_id)
+            _persist_account_preferences(
+                current, default_season=current.year, default_league_id=league_id,
+            )
     response.headers["Cache-Control"] = "no-store"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -615,6 +641,81 @@ def _database_preferences(owner_fingerprint: str) -> dict:
         return {}
 
 
+def _database_watchlists(owner_fingerprint: str, year: int) -> dict[str, set[str]]:
+    if not owner_fingerprint or not os.environ.get("WP_DATABASE_URL", "").strip():
+        return {}
+    try:
+        return _persistent_store().load_watchlists(owner_fingerprint, year)
+    except Exception as error:
+        log_error("watchlist_restore_failed", error)
+        return {}
+
+
+def _persist_watchlist_player(
+    current: BrowserSession, league_id: str, player_id: str, enabled: bool,
+) -> None:
+    if not current.owner_fingerprint or not os.environ.get("WP_DATABASE_URL", "").strip():
+        return
+    try:
+        _persistent_store().save_watchlist_player(
+            current.owner_fingerprint, year=current.year, league_id=league_id,
+            player_id=player_id, enabled=enabled,
+        )
+    except Exception as error:
+        log_error("watchlist_save_failed", error)
+
+
+def _apply_account_preferences(
+    current: BrowserSession,
+    stored: dict,
+    *,
+    cookie_ranking: str = "",
+    cookie_league: str = "",
+) -> None:
+    """Apply database choices first, with device cookies as legacy fallback."""
+    stored_ranking = str(stored.get("ranking_preference") or "")
+    current.ranking_preference = (
+        stored_ranking if stored_ranking in _RANKING_PREFERENCES
+        else cookie_ranking if cookie_ranking in _RANKING_PREFERENCES
+        else _default_ranking_preference()
+    )
+    stored_theme = str(stored.get("theme") or "")
+    current.theme = stored_theme if stored_theme in _THEMES else ""
+    available_leagues = {item.id for item in current.leagues}
+    stored_league = str(stored.get("default_league_id") or "")
+    cookie_year, separator, cookie_league_id = cookie_league.partition(":")
+    if not separator or cookie_year != str(current.year):
+        cookie_league_id = ""
+    current.default_league_id = (
+        stored_league if stored_league in available_leagues
+        else cookie_league_id if cookie_league_id in available_leagues
+        else current.leagues[0].id
+    )
+    try:
+        selected_week = int(stored.get("selected_week"))
+    except (TypeError, ValueError):
+        selected_week = 0
+    current.selected_week = selected_week if 1 <= selected_week <= 18 else None
+    current.onboarding_complete = bool(stored.get("onboarding_complete", False))
+    current.ranking_setup_complete = bool(stored.get("ranking_setup_complete", False))
+
+
+def _persist_account_preferences(current: BrowserSession, **values: object) -> None:
+    if not current.owner_fingerprint or not os.environ.get("WP_DATABASE_URL", "").strip():
+        return
+    try:
+        _persistent_store().save_preferences(current.owner_fingerprint, **values)
+    except Exception as error:
+        log_error("preference_save_failed", error)
+
+
+def _set_selected_week(current: BrowserSession, week: int | None) -> None:
+    if week is None or not 1 <= week <= 18 or current.selected_week == week:
+        return
+    current.selected_week = week
+    _persist_account_preferences(current, selected_week=week)
+
+
 def _database_status() -> dict:
     if not os.environ.get("WP_DATABASE_URL", "").strip():
         return {
@@ -704,8 +805,6 @@ def _session(request: Request) -> BrowserSession | None:
     with sessions_lock:
         current = sessions.get(session_id or "")
     if current:
-        if request.cookies.get("wp_rankings"):
-            current.ranking_preference = _ranking_preference(request.cookies.get("wp_rankings"))
         request.state.browser_session = current
         return current
     remember_token = request.cookies.get("wp_remember", "")
@@ -719,15 +818,21 @@ def _session(request: Request) -> BrowserSession | None:
             restored = None
         if restored:
             cookie_preference = request.cookies.get("wp_rankings", "")
-            if cookie_preference in _RANKING_PREFERENCES:
-                restored.ranking_preference = cookie_preference
-            elif store is not None:
+            if store is not None:
                 try:
                     stored = store.load_preferences(restored.owner_fingerprint)
                 except Exception as error:
                     log_error("preference_restore_failed", error)
                     stored = {}
-                restored.ranking_preference = _ranking_preference(stored.get("ranking_preference"))
+            else:
+                stored = {}
+            _apply_account_preferences(
+                restored,
+                stored,
+                cookie_ranking=cookie_preference,
+                cookie_league=request.cookies.get("wp_last_league", ""),
+            )
+            restored.watchlists = _database_watchlists(restored.owner_fingerprint, restored.year)
             restored.remember_token = remember_token
             restored_id = secrets.token_urlsafe(32)
             with sessions_lock:
@@ -786,7 +891,10 @@ def _require_session(request: Request) -> BrowserSession:
 
 def _league_home_url(request: Request, current: BrowserSession) -> str:
     remembered = request.cookies.get("wp_last_league", "")
-    selected = next((item for item in current.leagues if remembered == f"{current.year}:{item.id}"), current.leagues[0])
+    selected = next(
+        (item for item in current.leagues if item.id == current.default_league_id),
+        next((item for item in current.leagues if remembered == f"{current.year}:{item.id}"), current.leagues[0]),
+    )
     return "/home?" + urlencode({"league": selected.id})
 
 
@@ -894,6 +1002,38 @@ def _seconds_until_daily_refresh(now: datetime | None = None) -> int:
     tomorrow = current.date() + timedelta(days=1)
     midnight = datetime(tomorrow.year, tomorrow.month, tomorrow.day, tzinfo=_APP_TIME_ZONE)
     return max(60, int((midnight - current).total_seconds()))
+
+
+def _market_default_filter(
+    recommendations: list[PlayerRecommendation], now: datetime | None = None,
+) -> tuple[str, int, str]:
+    """Choose a useful initial market view and verify it has visible rows."""
+    current = now.astimezone(_APP_TIME_ZONE) if now else datetime.now(_APP_TIME_ZONE)
+    before_waiver_run = current.weekday() < 2 or (
+        current.weekday() == 2 and (current.hour, current.minute) < (21, 0)
+    )
+    preferred = "waiver" if before_waiver_run else "open"
+    counts = {
+        "waiver": sum(item.market_status in {"waiver", "locked"} for item in recommendations),
+        "open": sum(item.market_status == "open" for item in recommendations),
+    }
+    selected = preferred
+    if counts[selected] == 0:
+        alternate = "open" if selected == "waiver" else "waiver"
+        selected = alternate if counts[alternate] else "all"
+    count = len(recommendations) if selected == "all" else counts[selected]
+    label = {"waiver": "Waivers", "open": "Free agents", "all": "All players"}[selected]
+    return selected, count, label
+
+
+def _home_matchup_week(current_week: int, view: str = "", now: datetime | None = None) -> int:
+    """Prefer the completed prior week on Tuesday/Wednesday unless overridden."""
+    if view == "current" or current_week <= 1:
+        return current_week
+    if view == "previous":
+        return max(1, current_week - 1)
+    current = now.astimezone(_APP_TIME_ZONE) if now else datetime.now(_APP_TIME_ZONE)
+    return current_week - 1 if current.weekday() in {1, 2} else current_week
 
 
 def _report_cache_ttl(label: str, requested_ttl: int) -> int:
@@ -1193,7 +1333,7 @@ def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
     activity = read(
         "activity",
         lambda: _cached_session_read(
-            current, selected.id, "activity", lambda: client.transactions(days=21, count=200),
+            current, selected.id, "activity", lambda: client.transactions(days=_ACTIVITY_LOOKBACK_DAYS, count=200),
             ttl=90,
         ),
         (),
@@ -1500,9 +1640,7 @@ def _load_reference_projection_blend(
         return ProjectionBlend(
             scores=mfl_scores, mfl_scores=mfl_scores, ml_scores={}, ml_matched=0,
         )
-    include_espn, espn_rank_type = _ranking_reference(current) if current else (
-        True, os.getenv("WP_ESPN_RANKING_FORMAT", "PPR")
-    )
+    include_espn, espn_rank_type, include_fantasypros, include_cbs = _ranking_sources(current)
 
     def load() -> ProjectionBlend:
         return projection_blend(
@@ -1513,6 +1651,8 @@ def _load_reference_projection_blend(
             session=getattr(client, "session", None),
             include_espn=include_espn,
             espn_rank_type=espn_rank_type,
+            include_fantasypros=include_fantasypros,
+            include_cbs=include_cbs,
         )
 
     if current is None:
@@ -1534,9 +1674,13 @@ def _primary_projection_ranks(
 ) -> tuple[dict[str, float], str]:
     preference = _ranking_preference(current.ranking_preference)
     if preference == "combined":
-        return dict(blend.combined_ranks or {}), "Combined MFL + ESPN + ML position rank"
+        return dict(blend.combined_ranks or {}), _RANKING_PREFERENCES[preference]
     if preference.startswith("espn"):
         return dict(blend.espn_ranks or {}), _RANKING_PREFERENCES[preference]
+    if preference == "fantasypros-half":
+        return dict(blend.fantasypros_ranks or {}), _RANKING_PREFERENCES[preference]
+    if preference == "cbs-ppr":
+        return dict(blend.cbs_ranks or {}), _RANKING_PREFERENCES[preference]
     return {
         player_id: float(rank)
         for player_id, rank in _position_score_ranks(players, blend.mfl_scores).items()
@@ -2447,10 +2591,13 @@ def login(
         )
         cookie_preference = request.cookies.get("wp_rankings", "")
         stored_preferences = _database_preferences(current.owner_fingerprint)
-        current.ranking_preference = (
-            cookie_preference if cookie_preference in _RANKING_PREFERENCES
-            else _ranking_preference(stored_preferences.get("ranking_preference"))
+        _apply_account_preferences(
+            current,
+            stored_preferences,
+            cookie_ranking=cookie_preference,
+            cookie_league=request.cookies.get("wp_last_league", ""),
         )
+        current.watchlists = _database_watchlists(current.owner_fingerprint, current.year)
         persistent_leagues = [
             {"id": item.id, "franchise_id": item.franchise_id, "name": item.name, "url": item.url}
             for item in leagues
@@ -2545,7 +2692,7 @@ def dashboard(request: Request, source: str = ""):
 
 
 @app.get("/home", response_class=HTMLResponse)
-def league_home(request: Request, league: str, connection: str = ""):
+def league_home(request: Request, league: str, connection: str = "", matchup: str = ""):
     current = _session(request)
     if not current:
         return RedirectResponse("/", status_code=303)
@@ -2553,9 +2700,10 @@ def league_home(request: Request, league: str, connection: str = ""):
     return templates.TemplateResponse(request=request, name="home.html", context={
         "session": current, "league": selected, "active_tool": "home",
         "connection": connection if connection in {"api-key-added", "invalid-key"} else "",
-        "show_onboarding": request.cookies.get("wp_tour_done") != "1",
-        "show_ranking_setup": request.cookies.get("wp_rankings") not in _RANKING_PREFERENCES,
+        "show_onboarding": not current.onboarding_complete and request.cookies.get("wp_tour_done") != "1",
+        "show_ranking_setup": not current.ranking_setup_complete and request.cookies.get("wp_rankings") not in _RANKING_PREFERENCES,
         "ranking_preferences": _RANKING_PREFERENCES,
+        "matchup_view": matchup if matchup in {"current", "previous"} else "",
     })
 
 
@@ -2572,10 +2720,13 @@ def save_ranking_preference(
     if ranking_preference not in _RANKING_PREFERENCES:
         raise HTTPException(status_code=400, detail="Choose a valid ranking preference")
     current.ranking_preference = ranking_preference
+    current.ranking_setup_complete = True
     if current.owner_fingerprint and os.environ.get("WP_DATABASE_URL", "").strip():
         try:
-            _persistent_store().save_ranking_preference(
-                current.owner_fingerprint, ranking_preference,
+            _persistent_store().save_preferences(
+                current.owner_fingerprint,
+                ranking_preference=ranking_preference,
+                ranking_setup_complete=True,
             )
         except Exception as error:
             log_error("preference_save_failed", error)
@@ -2588,6 +2739,21 @@ def save_ranking_preference(
     return response
 
 
+@app.post("/preferences/theme", status_code=204)
+def save_theme_preference(
+    request: Request,
+    theme: str = Form(...),
+    csrf_token: str = Form(...),
+):
+    current = _require_session(request)
+    _check_csrf(current, csrf_token)
+    if theme not in _THEMES:
+        raise HTTPException(status_code=400, detail="Choose a valid theme")
+    current.theme = theme
+    _persist_account_preferences(current, theme=theme)
+    return HTMLResponse(status_code=204)
+
+
 @app.post("/onboarding/dismiss")
 def dismiss_onboarding(
     request: Request, league: str = Form(...), csrf_token: str = Form(...),
@@ -2595,6 +2761,8 @@ def dismiss_onboarding(
     current = _require_session(request)
     _check_csrf(current, csrf_token)
     selected = _league(current, league)
+    current.onboarding_complete = True
+    _persist_account_preferences(current, onboarding_complete=True)
     response = RedirectResponse(f"/home?league={selected.id}", status_code=303)
     response.set_cookie(
         "wp_tour_done", "1", max_age=365 * 86400, path="/", httponly=True,
@@ -2786,6 +2954,7 @@ def remove_watchlist_player(
     _check_csrf(current, csrf_token)
     selected = _league(current, league)
     current.watchlists.setdefault(selected.id, set()).discard(player_id)
+    _persist_watchlist_player(current, selected.id, player_id, False)
     return RedirectResponse(f"/watchlist?league={selected.id}", status_code=303)
 
 
@@ -2813,6 +2982,7 @@ def toggle_watchlist_player(request: Request, player_id: str, league: str):
             raise HTTPException(status_code=400, detail="Watchlist limit reached")
         watched.add(player_id)
         enabled = True
+    _persist_watchlist_player(current, selected.id, player_id, enabled)
     return {"watched": enabled, "count": len(watched)}
 
 
@@ -3293,7 +3463,10 @@ def settle_side_bet(
 
 
 @app.get("/hub/{section}", response_class=HTMLResponse)
-def hub_section(request: Request, section: str, league: str, target: str = "", wanted: str = "", package_size: int = 2):
+def hub_section(
+    request: Request, section: str, league: str, target: str = "", wanted: str = "",
+    package_size: int = 2, view: str = "",
+):
     current = _require_session(request)
     selected = _league(current, league)
     if section not in {"briefing", "matchup", "pickups", "standings", "block", "ideas"}:
@@ -3311,13 +3484,25 @@ def hub_section(request: Request, section: str, league: str, target: str = "", w
             )
             context.update(week=briefing["week"], actions=briefing["actions"])
         elif section == "matchup":
+            current_week = _cached_current_week(current, client)
+            if current_week is None:
+                raise ValueError("MFL has not published the current scoring week.")
+            requested_week = _home_matchup_week(current_week, view)
             week, _, _, _, matchup = _load_live_scoring_week(
-                client, requested_week=None, current=current, include_reference=False,
+                client, requested_week=requested_week, current=current, include_reference=False,
             )
             own = selected.franchise_id.zfill(4)
+            if (not matchup or not any(team.franchise_id.zfill(4) == own for team in matchup.teams)) \
+                    and requested_week != current_week and view != "previous":
+                week, _, _, _, matchup = _load_live_scoring_week(
+                    client, requested_week=current_week, current=current, include_reference=False,
+                )
             if not matchup or not any(team.franchise_id.zfill(4) == own for team in matchup.teams):
                 raise ValueError("MFL has no current matchup for your team.")
-            context.update(week=week, matchup=matchup, own=own)
+            context.update(
+                week=week, matchup=matchup, own=own, current_week=current_week,
+                showing_previous=week < current_week,
+            )
         elif section == "pickups":
             week, _, recommendations, _, _ = _load_player_board(
                 client, current, include_reference=False, include_score_context=False,
@@ -3569,11 +3754,12 @@ def league_player_leaders_page(
 
 
 @app.get("/rosters", response_class=HTMLResponse)
-def rosters_page(request: Request, league: str):
+def rosters_page(request: Request, league: str, team: str = ""):
     current = _session(request)
     if not current:
         return RedirectResponse("/", status_code=303)
     selected = _league(current, league)
+    selected_team = team.zfill(4) if team else ""
     client = _client(current, selected)
     teams: list[dict] = []
     error: str | None = None
@@ -3648,6 +3834,7 @@ def rosters_page(request: Request, league: str):
             "roster_player_count": sum(len(team["players"]) for team in teams),
             "error": error,
             "week": current.selected_week,
+            "selected_team": selected_team if any(item["id"] == selected_team for item in teams) else "",
         },
     )
 
@@ -3699,7 +3886,8 @@ def moves(request: Request, league: str, q: str = "", error: str = ""):
             franchise = details.franchises.get(selected.franchise_id.zfill(4))
             balance = franchise.faab_balance if franchise else None
             activity = _cached_session_read(
-                current, selected.id, "activity", lambda: client.transactions(days=21, count=200), ttl=90,
+                current, selected.id, "activity",
+                lambda: client.transactions(days=_ACTIVITY_LOOKBACK_DAYS, count=200), ttl=90,
             )
         except MFLApiError as caught:
             _log_provider_error_once(current, selected.id, "defense_pricing_unavailable", caught)
@@ -3723,6 +3911,7 @@ def moves(request: Request, league: str, q: str = "", error: str = ""):
         },
         key=lambda item: item[1].casefold(),
     )
+    default_market_filter, default_market_count, default_market_label = _market_default_filter(recommendations)
     return templates.TemplateResponse(
         request=request,
         name="moves.html",
@@ -3773,6 +3962,9 @@ def moves(request: Request, league: str, q: str = "", error: str = ""):
             "roster_locked": roster_locked,
             "query": query,
             "error": api_error,
+            "default_market_filter": default_market_filter,
+            "default_market_count": default_market_count,
+            "default_market_label": default_market_label,
         },
     )
 
@@ -3805,7 +3997,7 @@ def lineup_page(request: Request, league: str, error: str = "", week: int | None
         )
         api_error = str(caught)
     if week is not None and 1 <= week <= 18:
-        current.selected_week = week
+        _set_selected_week(current, week)
     return templates.TemplateResponse(
         request=request,
         name="lineup.html",
@@ -3874,7 +4066,7 @@ def scores_page(request: Request, league: str, week: int | None = None, matchup:
             log_error("scores_load_failed", caught)
         api_error = str(caught)
     if selected_week is not None:
-        current.selected_week = selected_week
+        _set_selected_week(current, selected_week)
     refresh_state = {"active": False, "next_kickoff": None}
     if selected_week is not None and selected_week == current_week:
         loaded_refresh_state = getattr(client, "live_refresh_state", None)
@@ -4312,7 +4504,7 @@ def trades_page(request: Request, league: str, target: str = "", give: str = "",
         return RedirectResponse("/", status_code=303)
     selected = _league(current, league)
     client = _client(current, selected)
-    names, own_players, other_players, error = {}, [], [], None
+    names, own_players, other_players, own_picks, other_picks, error = {}, [], [], [], [], None
     target = target.zfill(4) if target else ""
     try:
         league_names = _cached_session_read(current, selected.id, "franchise-names", client.franchise_names, ttl=300)
@@ -4343,13 +4535,24 @@ def trades_page(request: Request, league: str, target: str = "", give: str = "",
         def roster(team):
             return sorted((catalog.get(pid, MFLPlayer(pid, f"Player {pid}")) for pid in rosters.get(team, set())), key=lambda p: (p.position, p.name.casefold()))
         own_players, other_players = roster(own), roster(target)
+        try:
+            pick_assets = _cached_session_read(
+                current, selected.id, "trade-pick-assets", client.trade_pick_assets,
+                ttl=300, stale_ttl=3600,
+            )
+            own_picks = list(pick_assets.get(own, ()))
+            other_picks = list(pick_assets.get(target, ())) if target else []
+        except MFLApiError as exc:
+            log_error("trade_pick_assets_unavailable", exc)
         _remember_catalog(current, client)
     except (MFLApiError, ValueError) as exc:
         log_error("trade_rosters_failed", exc)
         error = str(exc) if isinstance(exc, ValueError) else "MFL could not load the selected roster. Use Load rosters to retry. If it keeps failing, disconnect and sign in again. No offer was sent."
     return templates.TemplateResponse(request=request, name="trades.html", context={
         "session": current, "league": selected, "teams": names, "target": target,
-        "own_players": own_players, "other_players": other_players, "error": error, "week": current.selected_week,
+        "own_players": own_players, "other_players": other_players,
+        "own_picks": own_picks, "other_picks": other_picks,
+        "error": error, "week": current.selected_week,
         "suggested_give": set(give.split(",")), "suggested_receive": receive,
         "wanted": wanted, "package_size": package_size if package_size in {1,2} else 2,
     })
@@ -4358,19 +4561,28 @@ def trades_page(request: Request, league: str, target: str = "", give: str = "",
 @app.post("/trades/preview")
 def preview_trade(request: Request, league: str = Form(...), target: str = Form(...),
                   give: list[str] = Form(default=[]), receive: list[str] = Form(default=[]),
+                  give_asset: list[str] = Form(default=[]), receive_asset: list[str] = Form(default=[]),
                   comments: str = Form(default="", max_length=500), csrf_token: str = Form(...)):
     current = _require_session(request)
     _check_csrf(current, csrf_token)
     selected = _league(current, league)
     client = _client(current, selected)
     try:
-        target, give, receive = client.validate_player_trade(target, give, receive)
+        target, give, receive, give_asset, receive_asset = client.validate_trade(
+            target, give, receive, give_asset, receive_asset,
+        )
         catalog = client.players()
+        trade_assets = client.trade_pick_assets() if give_asset or receive_asset else {}
+        asset_lookup = {
+            asset.code: asset for assets in trade_assets.values() for asset in assets
+        }
         names = {key.zfill(4): value for key, value in client.franchise_names().items()}
         if target not in names:
             raise ValueError("Choose another team in this league.")
         if any(pid not in catalog for pid in give + receive):
             raise ValueError("Player details are unavailable. Reload the rosters before reviewing.")
+        if any(code not in asset_lookup for code in give_asset + receive_asset):
+            raise ValueError("Draft-pick details are unavailable. Reload the trade builder before reviewing.")
     except ValueError as exc:
         return templates.TemplateResponse(request=request, name="trade_review.html", status_code=400,
             context={"session": current, "league": selected, "draft": None, "validation_error": str(exc)})
@@ -4389,7 +4601,8 @@ def preview_trade(request: Request, league: str = Form(...), target: str = Form(
             else:
                 raise HTTPException(status_code=429, detail="Wait for your current offers to finish.")
         current.trades[pending_id] = TradeDraft(selected.id, selected.franchise_id, target, names[target],
-            tuple(catalog[p] for p in give), tuple(catalog[p] for p in receive), comments.strip())
+            tuple(catalog[p] for p in give), tuple(catalog[p] for p in receive), comments.strip(),
+            tuple(asset_lookup[p] for p in give_asset), tuple(asset_lookup[p] for p in receive_asset))
     return RedirectResponse(f"/trades/review/{pending_id}", status_code=303)
 
 
@@ -4422,7 +4635,9 @@ def send_trade(request: Request, pending_id: str, csrf_token: str = Form(...)):
         draft.status = "sending"
     try:
         result = _client(current, selected).propose_player_trade(target=draft.target,
-            give=[p.id for p in draft.give], receive=[p.id for p in draft.receive], comments=draft.comments)
+            give=[p.id for p in draft.give], receive=[p.id for p in draft.receive],
+            give_assets=[asset.code for asset in draft.give_assets],
+            receive_assets=[asset.code for asset in draft.receive_assets], comments=draft.comments)
         status = result.get("status", "") if isinstance(result, dict) else ""
         status = status.get("$t", "") if isinstance(status, dict) else status
         if str(status).strip().casefold() not in {"ok", "success", "1"}:

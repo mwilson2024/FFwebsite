@@ -62,7 +62,7 @@
 
     <div class="league-two-column" data-equal-scroll-cards>
       <section class="league-card" id="waivers" data-scroll-height-source>
-        <div class="league-section-heading"><div><span class="card-kicker">21-DAY WINDOW</span><h2>Waiver wire intelligence</h2></div><a href="/moves?league={{ league.id }}">Open player market</a></div>
+        <div class="league-section-heading"><div><span class="card-kicker">14-DAY WINDOW</span><h2>Waiver wire intelligence</h2></div><a href="/moves?league={{ league.id }}">Open player market</a></div>
         {% if trends %}<ol class="trend-list">{% for trend in trends %}{% set player = catalog.get(trend.player_id) %}<li><span class="trend-rank">{{ loop.index }}</span><span><strong>{{ player.name if player else trend.player_id }}</strong><small>{{ player.team if player else 'MFL player' }}{% if player %} · {{ player.position }}{% endif %}</small></span><span class="trend-count"><b>+{{ trend.adds }}</b><small>adds</small></span><span class="trend-count drops">−{{ trend.drops }}<small>drops</small></span></li>{% endfor %}</ol>{% else %}<p class="empty-state">No adds or drops were returned in this activity window.</p>{% endif %}
         <h3 class="subheading">FAAB &amp; waiver priority</h3>
         <div class="budget-grid">{% for team_id,team in teams.items() %}<div><span>{{ team.name }}</span><strong>{% if team.faab_balance is not none %}${{ '%.0f'|format(team.faab_balance) }}{% else %}—{% endif %}</strong><small>{% if team.waiver_order %}Priority {{ team.waiver_order }}{% else %}Priority unavailable{% endif %}</small></div>{% endfor %}</div>
