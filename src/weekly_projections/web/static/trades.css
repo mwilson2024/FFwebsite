@@ -6,6 +6,7 @@
 .trade-roster:nth-child(2) { border-top-color:#b0b7bc; }
 .trade-roster header { display:flex; justify-content:space-between; align-items:center; gap:1rem; padding:1.1rem; background:#eef3f6; border-bottom:1px solid #cbd3d8; }
 .trade-roster h2 { font-size:1.25rem; margin:0; }
+.trade-roster-total { display:block; margin-top:.2rem; color:var(--site-muted,#52616d); font-size:.72rem; }
 .trade-count { color:#005c90; background:#e5f2fa; padding:.3rem .6rem; border-radius:6px; font-size:.875rem; white-space:nowrap; }
 .trade-player { display:flex; align-items:center; gap:.6rem; padding:.65rem 1rem; border-bottom:1px solid #e0e6ea; }
 .trade-player:has(input:checked) { background:#e5f2fa; box-shadow:inset 3px 0 #0076b6; }

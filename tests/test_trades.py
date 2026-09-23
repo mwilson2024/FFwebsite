@@ -12,8 +12,10 @@ def trade_app(monkeypatch):
     mfl = MFLClient(MFLConfig(2026, '12345', '0001'))
     mfl._players = {'101': MFLPlayer('101', 'Your Receiver', 'WR', 'DET'),
                     '102': MFLPlayer('102', 'Your Runner', 'RB', 'SEA'),
-                    '201': MFLPlayer('201', 'Their Quarterback', 'QB', 'BUF')}
-    rosters = {'0001': {'101', '102'}, '0002': {'201'}}
+                    '103': MFLPlayer('103', 'Your Defense', 'Def', 'DET'),
+                    '201': MFLPlayer('201', 'Their Quarterback', 'QB', 'BUF'),
+                    '202': MFLPlayer('202', 'Their Defense', 'Def', 'BUF')}
+    rosters = {'0001': {'101', '102', '103'}, '0002': {'201', '202'}}
     monkeypatch.setattr(mfl, 'trade_rosters', lambda: rosters)
     monkeypatch.setattr(mfl, 'franchise_roster', lambda fid: rosters[fid])
     monkeypatch.setattr(mfl, 'franchise_names', lambda: {'0001': 'Your Team', '0002': 'Other Team'})
@@ -46,6 +48,11 @@ def test_build_review_then_send_exact_offer_once(trade_app):
     page = client.get('/trades?league=12345&target=0002')
     assert page.status_code == 200
     assert 'Your Receiver' in page.text and 'Their Quarterback' in page.text
+    assert 'Your Defense' in page.text and 'Their Defense' in page.text
+    assert page.text.index('Your Receiver') < page.text.index('Your Defense')
+    assert page.text.index('Their Quarterback') < page.text.index('Their Defense')
+    assert '3 players · complete roster' in page.text
+    assert '2 players · complete roster' in page.text
     assert 'href="/trades?league=12345"' in page.text
     response = preview(client, comments='<script>not executable</script>')
     assert response.status_code == 303 and not calls

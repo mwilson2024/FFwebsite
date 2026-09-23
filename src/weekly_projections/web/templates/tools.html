@@ -22,9 +22,9 @@
     {% if error %}<div class="error" role="alert">{{ error }}{% include '_error_reference.html' %}</div>{% endif %}
 
     {% if page == 'transactions' %}
-      <section class="tool-card"><div class="tool-heading"><div><span class="card-kicker">ACTION CENTER</span><h2>Waiting for you</h2></div><span>{{ pending_moves|length + pending_lineups|length }} local reviews</span></div>
+      <section class="tool-card"><div class="tool-heading"><div><span class="card-kicker">ACTION CENTER</span><h2>Waiting for you</h2></div><a href="/transactions/pending?league={{ league.id }}">View pending MFL claims →</a></div><p class="data-note">{{ pending_moves|length + pending_lineups|length }} local review{{ '' if pending_moves|length + pending_lineups|length == 1 else 's' }} waiting. Pending MFL waiver claims are available separately so this page stays fast.</p>
         <div class="pending-grid">
-          {% for pending_id, preview in pending_moves %}<a href="/preview/{{ pending_id }}"><strong>Add {{ preview.add.name }}</strong><span>Drop {{ preview.drop.name }} · {{ preview.mode|replace('-', ' ')|title }}</span><small>Review not submitted to MFL</small></a>{% endfor %}
+          {% for pending_id, preview in pending_moves %}<a href="/preview/{{ pending_id }}"><strong>Add {{ preview.add.name }}</strong><span>Drop {{ preview.drop.name }} · {% if preview.mode == 'fcfs' %}Immediate add/drop{% elif preview.mode == 'waiver' %}Priority waiver claim{% else %}Blind-bid waiver claim{% endif %}</span><small>Review not submitted to MFL</small></a>{% endfor %}
           {% for pending_id, preview in pending_lineups %}<a href="/lineup/preview/{{ pending_id }}"><strong>Week {{ preview.week }} lineup</strong><span>{{ preview.starters|length }} selected starters</span><small>Review not submitted to MFL</small></a>{% endfor %}
           {% if not pending_moves and not pending_lineups %}<p class="empty-state">No local reviews are waiting for confirmation.</p>{% endif %}
         </div>
@@ -40,6 +40,11 @@
           {% for item in activity %}<li><span class="status-dot" aria-hidden="true"></span><div><strong>{{ item.kind|replace('_',' ')|title }}</strong><p>{% if item.adds %}Added {% for id in item.adds %}{{ catalog[id].name if id in catalog else 'Player ' ~ id }}{{ ', ' if not loop.last }}{% endfor %}.{% endif %} {% if item.drops %}Dropped {% for id in item.drops %}{{ catalog[id].name if id in catalog else 'Player ' ~ id }}{{ ', ' if not loop.last }}{% endfor %}.{% endif %}{% if not item.adds and not item.drops %}{{ item.description or 'MFL transaction' }}{% endif %}</p><small>{{ activity_time(item.timestamp) }}{% if item.bid is not none %} · {{ item.bid }} FAAB{% endif %}</small></div></li>{% else %}<li><p class="empty-state">No matching MFL transactions were returned for your franchise.</p></li>{% endfor %}
         </ol></section>
       </div>
+
+    {% elif page == 'pending-claims' %}
+      <section class="tool-card"><div class="tool-heading"><div><span class="card-kicker">MFL · AUTHORITATIVE</span><h2>Your unprocessed waiver claims</h2></div><a href="/transactions?league={{ league.id }}">Back to My Transactions →</a></div><p class="data-note">These claims come from MFL’s authenticated pending-waivers report. This page is read-only and does not reorder, replace, or submit anything.</p><ol class="operation-list pending-claim-list">
+        {% for claim in claims %}<li class="pending"><span class="status-dot" aria-hidden="true"></span><div><strong>{% if claim.adds %}Claim {% for id in claim.adds %}{{ catalog[id].name if id in catalog else 'Player ' ~ id }}{{ ', ' if not loop.last }}{% endfor %}{% else %}Pending waiver claim{% endif %}</strong><p>{% if claim.drops %}Drop {% for id in claim.drops %}{{ catalog[id].name if id in catalog else 'Player ' ~ id }}{{ ', ' if not loop.last }}{% endfor %}{% else %}No drop player supplied by MFL{% endif %}</p><small>{% if claim.round is not none %}Round {{ claim.round }}{% else %}Round not supplied{% endif %}{% if claim.order is not none %} · Priority {{ claim.order }}{% endif %}{% if claim.bid is not none %} · {{ claim.bid }} FAAB{% endif %}</small></div></li>{% else %}<li><p class="empty-state">MFL reports no pending waiver claims for your franchise.</p></li>{% endfor %}
+      </ol></section>
 
     {% elif page == 'watchlist' %}
       <section class="tool-card"><div class="tool-heading"><div><span class="card-kicker">SESSION WATCHLIST</span><h2>{{ watched_count }} saved player{{ '' if watched_count == 1 else 's' }}</h2></div><a href="/moves?league={{ league.id }}">Find players →</a></div>

@@ -25,15 +25,15 @@
     {% if error %}<div class="error" role="alert">{{ error }}{% include '_error_reference.html' %}</div>{% endif %}
     {% if teams %}
     <nav class="roster-view-tabs" aria-label="Roster view">
-      <a href="/rosters?league={{ league.id }}" {% if roster_view == 'players' %}class="active" aria-current="page"{% endif %}><strong>Players</strong><span>Search every rostered player</span></a>
-      <a href="/rosters?league={{ league.id }}&amp;view=teams" {% if roster_view == 'teams' %}class="active" aria-current="page"{% endif %}><strong>Teams</strong><span>Browse full manager rosters</span></a>
+      <a href="/rosters?league={{ league.id }}" {% if roster_view == 'teams' %}class="active" aria-current="page"{% endif %}><strong>Rosters</strong><span>Browse every manager’s full team</span></a>
+      <a href="/rosters?league={{ league.id }}&amp;view=players" {% if roster_view == 'players' %}class="active" aria-current="page"{% endif %}><strong>Players</strong><span>Search every rostered player</span></a>
     </nav>
     {% if roster_view == 'players' %}
     <section class="roster-player-directory" aria-labelledby="roster-directory-title">
       <header><div><p class="eyebrow">ALL ROSTERED PLAYERS</p><h2 id="roster-directory-title">Player directory</h2></div><p><strong id="roster-player-result-count">{{ all_players|length }}</strong> players shown</p></header>
       <label class="roster-player-search" for="roster-player-search"><span>Search by player, NFL team, position, or fantasy team</span><input id="roster-player-search" type="search" list="roster-player-options" autocomplete="off" placeholder="Start typing a player name…"><datalist id="roster-player-options">{% for row in all_players %}<option value="{{ row.player.name }}">{{ row.player.position }} · {{ row.player.team or 'FA' }} · {{ row.team_name }}</option>{% endfor %}</datalist></label>
       <div class="roster-directory-grid" id="roster-directory-grid">
-        {% for row in all_players %}{% set player=row.player %}<article class="roster-directory-row" data-roster-player data-search="{{ player.name }} {{ player.position }} {{ player.team }} {{ row.team_name }}">{% include '_player_identity.html' %}<a href="/rosters?league={{ league.id }}&amp;view=teams&amp;team={{ row.team_id }}#roster-{{ row.team_id }}"><span>{{ row.team_name }}</span>{% if row.is_own %}<small>Your team</small>{% else %}<small>View full roster</small>{% endif %}</a></article>{% endfor %}
+        {% for row in all_players %}{% set player=row.player %}<article class="roster-directory-row" data-roster-player data-search="{{ player.name }} {{ player.position }} {{ player.team }} {{ row.team_name }}">{% include '_player_identity.html' %}<a href="/rosters?league={{ league.id }}&amp;team={{ row.team_id }}#roster-{{ row.team_id }}"><span>{{ row.team_name }}</span>{% if row.is_own %}<small>Your team</small>{% else %}<small>View full roster</small>{% endif %}</a></article>{% endfor %}
       </div>
       <p class="empty-state" id="roster-player-empty" hidden>No rostered players match that search.</p>
     </section>

@@ -13,6 +13,7 @@ from weekly_projections.mfl.client import (
     MFLClient,
     MFLConfig,
     MFLLeague,
+    MFLPendingWaiver,
     MFLPlayer,
     MFLRateLimitError,
     MFLWriteUncertainError,
@@ -188,6 +189,34 @@ def test_default_week_is_current_scoring_week_not_next_lineup_week():
     client = MFLClient(_config(base_url="https://www49.myfantasyleague.com"), session=session)
     assert client.current_week() == 1
     assert session.url == "https://api.myfantasyleague.com/fflnetdynamic2026/mfl_status.json"
+
+
+def test_pending_waivers_parse_current_franchise_claims(monkeypatch):
+    client = MFLClient(_config(user_cookie="cookie"))
+    calls = []
+
+    def export(kind, **params):
+        calls.append((kind, params))
+        return {"pendingWaivers": {"waiver": [
+            {"id": "w1", "add": "100", "drop": "200", "round": "1", "order": "2"},
+            {"id": "w2", "transaction": "300|5|400", "bid": "5", "round": "1", "priority": "3"},
+        ]}}
+
+    monkeypatch.setattr(client, "export", export)
+
+    claims = client.pending_waivers()
+
+    assert calls == [("pendingWaivers", {"FRANCHISE_ID": "0007"})]
+    assert claims == (
+        MFLPendingWaiver("w1", ("100",), ("200",), round=1, order=2),
+        MFLPendingWaiver("w2", ("300",), ("400",), round=1, order=3, bid=5),
+    )
+
+
+def test_pending_waivers_accept_an_empty_report(monkeypatch):
+    client = MFLClient(_config(user_cookie="cookie"))
+    monkeypatch.setattr(client, "export", lambda *args, **kwargs: {"pendingWaivers": {}})
+    assert client.pending_waivers() == ()
 
 
 def test_player_card_uses_api_metadata_and_valid_photo_id():

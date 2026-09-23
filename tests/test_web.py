@@ -24,6 +24,7 @@ from weekly_projections.mfl.client import (
     MFLLineupSettings,
     MFLMessageThread,
     MFLChatMessage,
+    MFLPendingWaiver,
     MFLPlayer,
     MFLWriteUncertainError,
 )
@@ -396,6 +397,7 @@ def test_move_page_shows_full_board_projections_and_locks(monkeypatch) -> None:
     assert 'id="clear-player-filters"' in response.text
     assert "Blind-bid waiver · FAAB" in response.text
     assert 'name="replace_existing"' in response.text
+    assert 'name="round_number" type="number" min="1" value="1"' in response.text
     assert response.text.index('id="move-builder"') < response.text.index('id="waiver-optimizer"')
 
 
@@ -466,6 +468,15 @@ def test_player_market_keeps_team_defense_and_removes_idp() -> None:
     for position in ("DE", "DT", "LB", "CB", "S", "DB", "DL", "EDGE"):
         assert not web_app._include_on_player_board(MFLPlayer(position, "IDP", position, "DET"))
     assert web_app._include_on_player_board(MFLPlayer("wr", "Receiver", "WR", "DET"))
+    ordered = sorted(
+        (
+            MFLPlayer("def", "Lions Defense", "Def", "DET"),
+            MFLPlayer("wr", "Receiver", "WR", "DET"),
+            MFLPlayer("qb", "Quarterback", "QB", "DET"),
+        ),
+        key=web_app._player_position_sort_key,
+    )
+    assert [web_app._board_position(player) for player in ordered] == ["QB", "WR", "DEF"]
 
 
 def test_rosters_tab_shows_every_member_and_groups_roster_tools(monkeypatch) -> None:
@@ -506,22 +517,55 @@ def test_rosters_tab_shows_every_member_and_groups_roster_tools(monkeypatch) -> 
     assert "League rosters" in response.text
     assert "My Franchise" in response.text and "Division Rival" in response.text
     assert "Rival Quarterback" in response.text and "Lions Defense" in response.text
-    assert 'id="roster-player-search"' in response.text
-    assert 'data-roster-player' in response.text
-    assert 'aria-current="page"><strong>Players</strong>' in response.text
+    assert 'id="roster-player-search"' not in response.text
+    assert 'aria-current="page"><strong>Rosters</strong>' in response.text
     assert "Free agents" in response.text and "Add, drop &amp; waivers" in response.text
     top_nav = response.text.split('<nav class="section-nav"', 1)[1].split("</nav>", 1)[0]
     assert "Rosters" in top_nav and ">Players<" not in top_nav and ">Trades<" not in top_nav
 
     assert client.get("/rosters?league=77777").status_code == 200
     assert reads == {"details": 1, "rosters": 1, "players": 1}
-    teams = client.get("/rosters?league=77777&view=teams")
-    assert 'href="/trades?league=77777&target=0002"' in teams.text
-    assert "Browse full manager rosters" in teams.text
-    assert teams.text.index("My Franchise") < teams.text.index("Division Rival")
-    selected = client.get("/rosters?league=77777&view=teams&team=0002#roster-0002")
+    players = client.get("/rosters?league=77777&view=players")
+    assert 'id="roster-player-search"' in players.text
+    assert 'data-roster-player' in players.text
+    assert 'aria-current="page"><strong>Players</strong>' in players.text
+    assert 'href="/rosters?league=77777&amp;team=0002#roster-0002"' in players.text
+    assert 'href="/trades?league=77777&target=0002"' in response.text
+    assert "Browse every manager’s full team" in response.text
+    assert response.text.index("My Franchise") < response.text.index("Division Rival")
+    selected = client.get("/rosters?league=77777&team=0002#roster-0002")
     rival_card = selected.text.split('id="roster-0002"', 1)[1].split(">", 1)[0]
     assert " open" in rival_card
+
+
+def test_pending_waiver_claims_are_read_only_and_resolve_player_names(monkeypatch) -> None:
+    web_app.sessions.clear()
+    league = MFLLeague("77779", "0001", "Waiver League")
+    current = web_app.BrowserSession("pending-cookie", 2026, [league], "csrf")
+    web_app.sessions["pending-waivers-session"] = current
+
+    class PendingClient:
+        def pending_waivers(self):
+            return (MFLPendingWaiver("claim-1", ("101",), ("102",), round=1, order=2, bid=7),)
+
+        def players(self):
+            return {
+                "101": MFLPlayer("101", "Target Runner", "RB", "DET"),
+                "102": MFLPlayer("102", "Bench Runner", "RB", "GB"),
+            }
+
+    monkeypatch.setattr(web_app, "_client", lambda *args: PendingClient())
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", "pending-waivers-session")
+
+    response = client.get("/transactions/pending?league=77779")
+
+    assert response.status_code == 200
+    assert "Your unprocessed waiver claims" in response.text
+    assert "Target Runner" in response.text and "Bench Runner" in response.text
+    assert "Round 1" in response.text and "Priority 2" in response.text and "7 FAAB" in response.text
+    assert "read-only" in response.text
+    assert not current.pending_moves
 
 
 def test_player_leaders_show_official_ranks_ownership_and_primary_rank(monkeypatch) -> None:

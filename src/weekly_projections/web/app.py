@@ -136,6 +136,13 @@ def _board_position(player: MFLPlayer) -> str:
     return "DEF" if value in _TEAM_DEFENSE_POSITIONS else "PK" if value == "K" else value
 
 
+def _player_position_sort_key(player: MFLPlayer) -> tuple[int, str, str]:
+    """Keep team defenses after every offensive and kicking position."""
+    position = _board_position(player)
+    order = {"QB": 0, "RB": 1, "WR": 2, "TE": 3, "PK": 4, "DEF": 99}
+    return order.get(position, 50), position, player.name.casefold()
+
+
 def _include_on_player_board(player: MFLPlayer) -> bool:
     """Keep team defense, but hide IDP records from this non-IDP player market."""
     position = _board_position(player)
@@ -540,7 +547,7 @@ async def secure_local_responses(request: Request, call_next):
         response.delete_cookie("wp_remember", path="/", httponly=True, samesite="strict", secure=_secure_cookies(request))
     league_id = request.query_params.get("league")
     if (current and request.method == "GET" and response.status_code == 200
-            and request.url.path in {"/home", "/lineup", "/rosters", "/moves", "/scores", "/trades", "/standings", "/league", "/insights", "/planner", "/transactions", "/watchlist", "/compare", "/notifications", "/schedule", "/rules", "/data-status", "/guide"}
+            and request.url.path in {"/home", "/lineup", "/rosters", "/moves", "/scores", "/trades", "/standings", "/league", "/insights", "/planner", "/transactions", "/transactions/pending", "/watchlist", "/compare", "/notifications", "/schedule", "/rules", "/data-status", "/guide"}
             and any(item.id == league_id for item in current.leagues)):
         response.set_cookie("wp_last_league", f"{current.year}:{league_id}", max_age=365*86400,
                             httponly=True, samesite="strict", secure=_secure_cookies(request))
@@ -2400,8 +2407,7 @@ def _load_live_scoring_week(
         players.sort(
             key=lambda item: (
                 not item.is_starter,
-                item.player.position,
-                item.player.name.casefold(),
+                *_player_position_sort_key(item.player),
             )
         )
         teams.append(
@@ -2928,6 +2934,33 @@ def transactions_page(request: Request, league: str):
         "activity": own_activity, "catalog": catalog, "operations": operations,
         "trades": trades, "blocks": blocks, "pending_moves": pending_moves,
         "pending_lineups": pending_lineups, "activity_time": _activity_time,
+    })
+
+
+@app.get("/transactions/pending", response_class=HTMLResponse)
+def pending_waiver_claims_page(request: Request, league: str):
+    current = _require_session(request)
+    selected = _league(current, league)
+    client = _client(current, selected)
+    claims = ()
+    catalog: dict[str, MFLPlayer] = {}
+    error = ""
+    try:
+        claims = _cached_session_read(
+            current, selected.id, "pending-waivers", client.pending_waivers,
+            ttl=30, stale_ttl=300,
+        )
+        catalog = _cached_session_read(
+            current, "mfl-global", "players", client.players,
+            ttl=86400, stale_ttl=_LEAGUE_STATIC_STALE_TTL, shared=True,
+        )
+    except MFLApiError as exc:
+        _log_provider_error_once(current, selected.id, "pending_waivers_unavailable", exc)
+        error = "MFL could not load your pending waiver claims. No claim was changed."
+    return templates.TemplateResponse(request=request, name="tools.html", context={
+        "session": current, "league": selected, "active_tool": "transactions",
+        "page": "pending-claims", "page_title": "Pending waiver claims",
+        "claims": claims, "catalog": catalog, "error": error,
     })
 
 
@@ -3836,7 +3869,7 @@ def league_player_leaders_page(
 
 
 @app.get("/rosters", response_class=HTMLResponse)
-def rosters_page(request: Request, league: str, team: str = "", view: str = "players"):
+def rosters_page(request: Request, league: str, team: str = "", view: str = "teams"):
     current = _session(request)
     if not current:
         return RedirectResponse("/", status_code=303)
@@ -3929,7 +3962,7 @@ def rosters_page(request: Request, league: str, team: str = "", view: str = "pla
             "roster_player_count": sum(len(team["players"]) for team in teams),
             "error": error,
             "week": current.selected_week,
-            "roster_view": "teams" if view == "teams" or team else "players",
+            "roster_view": "players" if view == "players" and not team else "teams",
             "selected_team": selected_team if any(item["id"] == selected_team for item in teams) else "",
         },
     )
@@ -4559,7 +4592,15 @@ def submit_move(request: Request, pending_id: str, csrf_token: str = Form(...)):
             else:
                 raise write_error
         _invalidate_player_board(current, league.id)
-        success = "MFL accepted the transaction request."
+        if preview.mode != "fcfs":
+            current.read_cache.pop(
+                f"{current.year}:{league.id}:report:pending-waivers", None,
+            )
+        success = (
+            "MFL accepted the waiver claim."
+            if preview.mode != "fcfs"
+            else "MFL accepted the add/drop request."
+        )
         error = None
         operation_status = "submitted" if preview.mode != "fcfs" else "completed"
     except (MFLApiError, ValueError) as api_error:
@@ -4572,8 +4613,9 @@ def submit_move(request: Request, pending_id: str, csrf_token: str = Form(...)):
     _record_operation(
         current,
         league_id=league.id,
-        kind="waiver" if preview.mode != "fcfs" else "add/drop",
-        title=f"Add {preview.add.name} · drop {preview.drop.name}",
+        kind="waiver claim" if preview.mode != "fcfs" else "add/drop",
+        title=("Waiver claim · " if preview.mode != "fcfs" else "")
+              + f"Add {preview.add.name} · drop {preview.drop.name}",
         status=operation_status,
         message=success or error or "No receipt was returned.",
     )
@@ -4629,7 +4671,10 @@ def trades_page(request: Request, league: str, target: str = "", give: str = "",
         if own not in rosters or (target and target not in rosters):
             raise ValueError("MFL has not made both rosters available.")
         def roster(team):
-            return sorted((catalog.get(pid, MFLPlayer(pid, f"Player {pid}")) for pid in rosters.get(team, set())), key=lambda p: (p.position, p.name.casefold()))
+            return sorted(
+                (catalog.get(pid, MFLPlayer(pid, f"Player {pid}")) for pid in rosters.get(team, set())),
+                key=_player_position_sort_key,
+            )
         own_players, other_players = roster(own), roster(target)
         try:
             pick_assets = _cached_session_read(

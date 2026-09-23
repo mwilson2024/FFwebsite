@@ -418,6 +418,7 @@
     const dropOption = dropSelect?.querySelector(`option[value="${CSS.escape(button.dataset.queueDrop || "")}"]:not(:disabled)`);
     if (!radio || radio.disabled || !dropOption) return;
     radio.click();
+    if (modeSelect) modeSelect.value = button.dataset.queueBid !== "" ? "blind-bid" : "waiver";
     dropSelect.value = button.dataset.queueDrop;
     const bidInput = document.querySelector('#waiver-form input[name="bid"]');
     const roundInput = document.querySelector('#waiver-form input[name="round_number"]');
