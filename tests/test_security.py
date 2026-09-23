@@ -11,6 +11,7 @@ import pytest
 
 from weekly_projections.mfl.client import MFLLeague
 from weekly_projections.mfl.client import MFLRateLimitError
+from weekly_projections.history import HistoricalFranchise, HistoricalMatchupTeam, HistoricalSeason
 from weekly_projections.web import app as web
 from weekly_projections.web.session_store import EncryptedSessionStore
 
@@ -108,6 +109,21 @@ class FakePostgresConnection:
         return FakePostgresResult()
 
 
+class HistoryPostgresConnection(FakePostgresConnection):
+    def execute(self, query, params=()):
+        sql = " ".join(query.split())
+        if sql.startswith("SELECT version FROM fantasy_hq.schema_migration") and params == (3,):
+            self.statements.append((sql, params))
+            return FakePostgresResult((3,))
+        if sql.startswith("SELECT season.season"):
+            self.statements.append((sql, params))
+            return FakePostgresResult([(
+                2025, "54321", "Archive League",
+                datetime(2026, 1, 1, tzinfo=timezone.utc), 2, 1,
+            )])
+        return super().execute(query, params)
+
+
 def _store(monkeypatch, tmp_path) -> EncryptedSessionStore:
     monkeypatch.setenv("WP_SESSION_SECRET", Fernet.generate_key().decode("ascii"))
     return EncryptedSessionStore(tmp_path / "sessions.sqlite3")
@@ -203,6 +219,45 @@ def test_postgres_store_rejects_non_tls_urls(monkeypatch):
             ),
             connection_factory=lambda url: FakePostgresConnection(),
         )
+
+
+def test_postgres_store_replaces_one_historical_season_transactionally(monkeypatch):
+    monkeypatch.setenv("WP_SESSION_SECRET", Fernet.generate_key().decode("ascii"))
+    database = HistoryPostgresConnection()
+    store = EncryptedSessionStore(
+        database_url="postgresql://app:secret@db.example/postgres",
+        connection_factory=lambda url: database,
+    )
+    archive = HistoricalSeason(
+        season=2025,
+        source_league_id="54321",
+        league_name="Archive League",
+        start_week=1,
+        end_week=17,
+        regular_season_end=14,
+        franchises=(
+            HistoricalFranchise("0001", "Alpha", "01", 1, 10, 4, 0, 1600.0, 1400.0, 20.0),
+            HistoricalFranchise("0002", "Beta", "01", 2, 8, 6, 0, 1500.0, 1450.0, 18.0),
+        ),
+        matchup_teams=(
+            HistoricalMatchupTeam(1, 1, "0001", 101.0),
+            HistoricalMatchupTeam(1, 1, "0002", 99.0),
+        ),
+    )
+
+    store.save_historical_season(
+        "account:owner-hash", current_league_id="12345", season=archive,
+    )
+    rows = store.load_historical_seasons(
+        "account:owner-hash", current_league_id="12345",
+    )
+
+    sql = [statement for statement, _ in database.statements]
+    assert any(statement.startswith("INSERT INTO fantasy_hq.historical_season") for statement in sql)
+    assert any(statement.startswith("DELETE FROM fantasy_hq.historical_franchise") for statement in sql)
+    assert sum(statement.startswith("INSERT INTO fantasy_hq.historical_franchise") for statement in sql) == 2
+    assert sum(statement.startswith("INSERT INTO fantasy_hq.historical_matchup_team") for statement in sql) == 2
+    assert rows[0]["season"] == 2025 and rows[0]["matchups"] == 1
 
 
 def test_stay_signed_in_restores_fresh_app_session_without_password(monkeypatch, tmp_path):

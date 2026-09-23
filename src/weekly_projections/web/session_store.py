@@ -8,10 +8,13 @@ import sqlite3
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 from urllib.parse import parse_qs, urlsplit
 
 from cryptography.fernet import Fernet, InvalidToken, MultiFernet
+
+if TYPE_CHECKING:
+    from weekly_projections.history import HistoricalSeason
 
 
 DEFAULT_REMEMBER_DAYS = 30
@@ -423,6 +426,107 @@ class EncryptedSessionStore:
                     "WHERE user_id = %s AND season = %s AND league_id = %s AND player_id = %s",
                     (user_id, int(year), str(league_id), str(player_id)),
                 )
+
+    def save_historical_season(
+        self,
+        owner_fingerprint: str,
+        *,
+        current_league_id: str,
+        season: "HistoricalSeason",
+    ) -> None:
+        """Replace one normalized historical season in one database transaction."""
+        if not self.database_url:
+            raise RuntimeError("Historical imports require PostgreSQL storage")
+        if not owner_fingerprint or not str(current_league_id).isdecimal():
+            raise ValueError("A connected MFL account and league are required")
+        if len(season.franchises) > 256 or len(season.matchup_teams) > 2_000:
+            raise ValueError("The MFL historical season is unexpectedly large")
+
+        with self._connect_postgres() as connection:
+            installed = connection.execute(
+                "SELECT version FROM fantasy_hq.schema_migration WHERE version = %s",
+                (3,),
+            ).fetchone()
+            if not installed:
+                raise RuntimeError("Supabase schema migration 3 is not installed")
+            user_id = self._postgres_user_id(connection, owner_fingerprint)
+            identity = (user_id, str(current_league_id), int(season.season))
+            connection.execute(
+                "INSERT INTO fantasy_hq.historical_season "
+                "(user_id, current_league_id, season, source_league_id, league_name, "
+                "start_week, end_week, regular_season_end, imported_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, now()) "
+                "ON CONFLICT (user_id, current_league_id, season) DO UPDATE SET "
+                "source_league_id = excluded.source_league_id, "
+                "league_name = excluded.league_name, start_week = excluded.start_week, "
+                "end_week = excluded.end_week, regular_season_end = excluded.regular_season_end, "
+                "imported_at = now()",
+                (*identity, season.source_league_id, season.league_name[:200],
+                 season.start_week, season.end_week, season.regular_season_end),
+            )
+            # Replacing child rows prevents removed MFL corrections from leaving
+            # stale standings or matchups while the surrounding transaction keeps
+            # the previous import intact if any insert fails.
+            connection.execute(
+                "DELETE FROM fantasy_hq.historical_franchise "
+                "WHERE user_id = %s AND current_league_id = %s AND season = %s",
+                identity,
+            )
+            connection.execute(
+                "DELETE FROM fantasy_hq.historical_matchup_team "
+                "WHERE user_id = %s AND current_league_id = %s AND season = %s",
+                identity,
+            )
+            for row in season.franchises:
+                connection.execute(
+                    "INSERT INTO fantasy_hq.historical_franchise "
+                    "(user_id, current_league_id, season, franchise_id, franchise_name, "
+                    "division_id, standing_rank, wins, losses, ties, points_for, "
+                    "points_against, victory_points) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    (*identity, row.franchise_id, row.name[:200], row.division_id or None,
+                     row.standing_rank, row.wins, row.losses, row.ties, row.points_for,
+                     row.points_against, row.victory_points),
+                )
+            for row in season.matchup_teams:
+                connection.execute(
+                    "INSERT INTO fantasy_hq.historical_matchup_team "
+                    "(user_id, current_league_id, season, week, matchup_index, "
+                    "franchise_id, score) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    (*identity, row.week, row.matchup_index, row.franchise_id, row.score),
+                )
+
+    def load_historical_seasons(
+        self, owner_fingerprint: str, *, current_league_id: str,
+    ) -> tuple[dict[str, Any], ...]:
+        if not self.database_url or not owner_fingerprint:
+            return ()
+        with self._connect_postgres() as connection:
+            rows = connection.execute(
+                "SELECT season.season, season.source_league_id, season.league_name, "
+                "season.imported_at, "
+                "(SELECT count(*) FROM fantasy_hq.historical_franchise AS franchise "
+                " WHERE franchise.user_id = season.user_id "
+                " AND franchise.current_league_id = season.current_league_id "
+                " AND franchise.season = season.season), "
+                "(SELECT count(*) FROM (SELECT 1 FROM fantasy_hq.historical_matchup_team AS team "
+                " WHERE team.user_id = season.user_id "
+                " AND team.current_league_id = season.current_league_id "
+                " AND team.season = season.season GROUP BY team.week, team.matchup_index) AS games) "
+                "FROM fantasy_hq.app_user AS app_user "
+                "JOIN fantasy_hq.historical_season AS season ON season.user_id = app_user.id "
+                "WHERE app_user.owner_fingerprint_hash = %s "
+                "AND season.current_league_id = %s ORDER BY season.season DESC",
+                (self._digest_bytes(owner_fingerprint), str(current_league_id)),
+            ).fetchall()
+        return tuple({
+            "season": int(row[0]),
+            "source_league_id": str(row[1]),
+            "league_name": str(row[2]),
+            "imported_at": row[3],
+            "franchises": int(row[4]),
+            "matchups": int(row[5]),
+        } for row in rows)
 
     def restore(self, token: str) -> dict[str, Any] | None:
         if not token or len(token) > 256:

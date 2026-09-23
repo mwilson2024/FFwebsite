@@ -40,7 +40,7 @@
         <p>{{ ranking_label }} leads the default sort. MFL remains authoritative for league scoring, locks, ownership, and moves. Change this anytime in Settings.</p>
       </section>
 
-      <div class="market-jump-grid"><a class="defense-stream-link" href="#waiver-optimizer"><span><strong>Build my waiver queue</strong><small>Order claims and budget FAAB</small></span><span aria-hidden="true">↓</span></a><a class="defense-stream-link" href="#defense-streaming"><span><strong>Streaming a defense?</strong><small>Compare talent, matchup and waiver price</small></span><span aria-hidden="true">↓</span></a></div>
+      <div class="market-jump-grid"><a class="defense-stream-link" href="/transactions/pending?league={{ league.id }}"><span><strong>Pending claims</strong><small>Review or withdraw MFL waivers</small></span><span aria-hidden="true">→</span></a><a class="defense-stream-link" href="#waiver-optimizer"><span><strong>Build my waiver queue</strong><small>Order claims and budget FAAB</small></span><span aria-hidden="true">↓</span></a><a class="defense-stream-link" href="#defense-streaming"><span><strong>Streaming a defense?</strong><small>Compare talent, matchup and waiver price</small></span><span aria-hidden="true">↓</span></a></div>
 
       <form method="post" action="/preview" id="waiver-form">
         <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">

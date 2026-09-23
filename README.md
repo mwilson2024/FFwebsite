@@ -91,7 +91,7 @@ WP_SESSION_SECRET=<your generated Fernet key>
 ## Supabase PostgreSQL on Azure App Service
 
 The application can use the free Supabase PostgreSQL project instead of the
-SQLite remembered-session file. The database must contain schema migrations 1–2 in
+SQLite remembered-session file. The database must contain schema migrations 1–3 in
 the private `fantasy_hq` schema. When `WP_DATABASE_URL` is absent, local and
 existing Railway deployments continue to use SQLite without any behavior change.
 
@@ -130,6 +130,15 @@ in the Supabase SQL Editor before deploying code that requires migration 2. MFL
 login is the account identity: a normalized login is converted to a one-way
 application fingerprint, so the same MFL user receives the same preferences on
 every device without storing the MFL username or password.
+
+Apply [`supabase/migrations/003_mfl_historical_archive.sql`](supabase/migrations/003_mfl_historical_archive.sql)
+to add the private historical archive. After migration 3 is installed, sign in,
+open **Data status → Historical archive**, and import one season or all seasons
+linked by MFL. The import reads only MFL league metadata, final standings, and
+weekly matchup results. Each season is replaced transactionally, so rerunning an
+import refreshes corrected MFL data without duplicating rows. The archive tables
+stay in the private `fantasy_hq` schema, have RLS enabled as defense in depth, and
+grant no browser Data API access to `anon` or `authenticated` roles.
 
 Database connection failures are written to standard output as the structured
 event `database_status_unavailable`. In Azure, enable **Monitoring → App Service

@@ -12,7 +12,9 @@ from weekly_projections.mfl.client import (
     MFLAvailability,
     MFLClient,
     MFLConfig,
+    MFLHistoricalLeague,
     MFLLeague,
+    MFLPendingTrade,
     MFLPendingWaiver,
     MFLPlayer,
     MFLRateLimitError,
@@ -219,6 +221,82 @@ def test_pending_waivers_accept_an_empty_report(monkeypatch):
     assert client.pending_waivers() == ()
 
 
+def test_pending_trades_parse_incoming_outgoing_players_and_picks(monkeypatch):
+    client = MFLClient(_config(franchise_id="0007"))
+    monkeypatch.setattr(client, "export", lambda *args, **kwargs: {
+        "pendingTrades": {"pendingTrade": [
+            {
+                "trade_id": "trade-in", "offeringteam": "2", "offeredTo": "7",
+                "willGiveUp": "101,FP_0002_2027_1", "willReceive": "201,BB_5",
+                "expires": "1800000000",
+            },
+            {
+                "trade_id": "trade-out", "offeringteam": "7", "offeredTo": "3",
+                "willGiveUp": {"$t": "301"}, "willReceive": {"$t": "401,DP_2_05"},
+            },
+        ]}
+    })
+
+    assert client.pending_trades() == (
+        MFLPendingTrade(
+            "trade-in", "0002", "0007", ("101", "FP_0002_2027_1"),
+            ("201", "BB_5"), 1800000000,
+        ),
+        MFLPendingTrade(
+            "trade-out", "0007", "0003", ("301",), ("401", "DP_2_05"), None,
+        ),
+    )
+
+
+def test_revoke_pending_waiver_preserves_other_claims_in_round(monkeypatch):
+    client = MFLClient(_config(franchise_id="0007"))
+    target = MFLPendingWaiver("first", ("101",), ("201",), round=1, order=1, bid=8)
+    keep = MFLPendingWaiver("second", ("102",), (), round=1, order=2, bid=5)
+    monkeypatch.setattr(client, "pending_waivers", lambda: (target, keep))
+    calls = []
+    monkeypatch.setattr(
+        client, "import_request",
+        lambda kind, **kwargs: calls.append((kind, kwargs)) or {"status": {"$t": "OK"}},
+    )
+
+    client.revoke_pending_waiver(target)
+
+    assert calls == [("blindBidWaiverRequest", {
+        "ROUND": 1, "PICKS": "102_5_0000", "REPLACE": 1, "FRANCHISE_ID": "0007",
+    })]
+
+
+@pytest.mark.parametrize("response", ["accept", "reject"])
+def test_trade_response_revalidates_incoming_offer(monkeypatch, response):
+    client = MFLClient(_config(franchise_id="0007"))
+    offer = MFLPendingTrade("trade-1", "0002", "0007", ("101",), ("201",))
+    monkeypatch.setattr(client, "pending_trades", lambda: (offer,))
+    calls = []
+    monkeypatch.setattr(
+        client, "import_request",
+        lambda kind, **kwargs: calls.append((kind, kwargs)) or {"status": {"$t": "OK"}},
+    )
+
+    client.respond_to_trade(
+        trade_id="trade-1", response=response, comments="No thanks", expected=offer,
+    )
+
+    assert calls[0][0] == "tradeResponse"
+    assert calls[0][1]["TRADE_ID"] == "trade-1"
+    assert calls[0][1]["RESPONSE"] == response
+    assert ("COMMENTS" in calls[0][1]) is (response == "reject")
+
+
+def test_trade_response_only_originator_can_revoke(monkeypatch):
+    client = MFLClient(_config(franchise_id="0007"))
+    incoming = MFLPendingTrade("trade-1", "0002", "0007", ("101",), ("201",))
+    monkeypatch.setattr(client, "pending_trades", lambda: (incoming,))
+    monkeypatch.setattr(client, "import_request", lambda *args, **kwargs: pytest.fail("must not write"))
+
+    with pytest.raises(ValueError, match="sent this trade"):
+        client.respond_to_trade(trade_id="trade-1", response="revoke")
+
+
 def test_player_card_uses_api_metadata_and_valid_photo_id():
     player = MFLPlayer.from_dict({"id":"13116", "name":"Mahomes, Patrick", "espn_id":"3139477", "jersey":"15", "college":"Texas Tech"})
     assert player.photo_url == "https://a.espncdn.com/i/headshots/nfl/players/full/3139477.png"
@@ -252,7 +330,10 @@ def test_league_details_parse_faab_weeks_and_history(monkeypatch):
     monkeypatch.setattr(client, "export", lambda kind, **params: {"league": {
         "name": "Test League", "startWeek": "1", "endWeek": "17",
         "lastRegularSeasonWeek": "14", "bbidSeasonLimit": "100",
-        "history": {"league": [{"year": "2026"}, {"year": "2025"}]},
+        "history": {"league": [
+            {"year": "2026", "url": "https://www49.myfantasyleague.com/2026/home/12345"},
+            {"year": "2025", "url": "http://www49.myfantasyleague.com/2025/home/54321"},
+        ]},
         "franchises": {"franchise": {"id": "1", "name": "One",
             "bbidAvailableBalance": "74", "waiverSortOrder": "3"}},
     }})
@@ -261,6 +342,11 @@ def test_league_details_parse_faab_weeks_and_history(monkeypatch):
     assert (details.start_week, details.end_week, details.last_regular_season_week) == (1, 17, 14)
     assert details.faab_limit == 100
     assert details.history_years == (2026, 2025)
+    assert details.history_leagues == (
+        MFLHistoricalLeague(2026, "12345", "https://www49.myfantasyleague.com/2026/home/12345"),
+        MFLHistoricalLeague(2025, "54321", "http://www49.myfantasyleague.com/2025/home/54321"),
+    )
+    assert details.history_leagues[1].api_base_url == "https://www49.myfantasyleague.com"
     assert details.franchises["0001"].faab_balance == 74
     assert details.franchises["0001"].waiver_order == 3
 

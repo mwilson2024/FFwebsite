@@ -222,6 +222,18 @@ class MFLLeagueDetails:
     last_regular_season_week: int = 14
     faab_limit: float | None = None
     history_years: tuple[int, ...] = ()
+    history_leagues: tuple["MFLHistoricalLeague", ...] = ()
+
+
+@dataclass(frozen=True)
+class MFLHistoricalLeague:
+    year: int
+    league_id: str
+    url: str
+
+    @property
+    def api_base_url(self) -> str:
+        return MFLLeague(self.league_id, "", "", self.url).api_base_url
 
 
 @dataclass(frozen=True)
@@ -252,6 +264,16 @@ class MFLPendingWaiver:
     round: int | None = None
     order: int | None = None
     bid: int | None = None
+
+
+@dataclass(frozen=True)
+class MFLPendingTrade:
+    id: str
+    offering_team: str
+    offered_to: str
+    will_give_up: tuple[str, ...]
+    will_receive: tuple[str, ...]
+    expires: int | None = None
 
 
 @dataclass(frozen=True)
@@ -889,7 +911,7 @@ class MFLClient:
         reverse_pattern = re.compile(r"(?:^|;)\s*(ADD|DROP)\s*[,|:]\s*(\d+)", re.IGNORECASE)
         rows: list[MFLPendingWaiver] = []
         seen_claims: set[tuple] = set()
-        for index, item in enumerate(candidates):
+        for item in candidates:
             normalized = {str(key).replace("_", "").casefold(): value for key, value in item.items()}
             direct_adds = values(normalized.get("add")) + values(normalized.get("addid"))
             direct_drops = values(normalized.get("drop")) + values(normalized.get("dropid"))
@@ -925,9 +947,171 @@ class MFLClient:
             if signature in seen_claims:
                 continue
             seen_claims.add(signature)
-            claim_id = str(item.get("id") or item.get("request_id") or f"claim-{index}")
+            fallback_id = "claim-" + "-".join((
+                str(round_number or 0), str(order or 0), str(bid if bid is not None else "n"),
+                ".".join(adds) or "none", ".".join(drops) or "none",
+            ))
+            claim_id = str(item.get("id") or item.get("request_id") or fallback_id)[:100]
             rows.append(MFLPendingWaiver(claim_id, adds, drops, round_number, order, bid))
         return tuple(sorted(rows, key=lambda row: (row.round or 1, row.order or 9999, row.id)))
+
+    def pending_trades(self) -> tuple[MFLPendingTrade, ...]:
+        """Return trade offers sent by or offered to the authenticated franchise."""
+        payload = self.export(
+            "pendingTrades", FRANCHISE_ID=self.config.franchise_id.zfill(4),
+        )
+        if not isinstance(payload, dict):
+            raise MFLApiError("MFL pending trades are unavailable")
+        root = payload.get("pendingTrades", payload.get("pending_trades"))
+        if root in (None, ""):
+            return ()
+        if not isinstance(root, (dict, list)):
+            raise MFLApiError("MFL pending trades are unavailable")
+
+        candidates = [
+            item for item in _iter_key(root, "pendingTrade") if isinstance(item, dict)
+        ]
+        if not candidates:
+            if isinstance(root, list):
+                candidates = [item for item in root if isinstance(item, dict)]
+            elif isinstance(root, dict) and any(
+                str(key).replace("_", "").casefold() in {"tradeid", "id"}
+                for key in root
+            ):
+                candidates = [root]
+
+        def value(item: dict[str, Any], *names: str) -> str:
+            normalized = {
+                str(key).replace("_", "").casefold(): raw for key, raw in item.items()
+            }
+            for name in names:
+                raw = normalized.get(name.replace("_", "").casefold())
+                if isinstance(raw, dict):
+                    raw = raw.get("$t") or raw.get("id")
+                if raw not in (None, ""):
+                    return str(raw).strip()
+            return ""
+
+        def assets(raw: str) -> tuple[str, ...]:
+            return tuple(dict.fromkeys(
+                token.strip().upper() if not token.strip().isdecimal() else token.strip()
+                for token in raw.split(",")
+                if re.fullmatch(
+                    r"(?:\d+|(?:FP|DP|BB)_[A-Za-z0-9_.:-]+)", token.strip(), re.IGNORECASE,
+                )
+            ))
+
+        own = self.config.franchise_id.zfill(4)
+        rows: list[MFLPendingTrade] = []
+        seen: set[str] = set()
+        for item in candidates:
+            trade_id = value(item, "trade_id", "tradeid", "id")
+            offering = value(
+                item, "offeringteam", "offering_team", "offeredby", "franchise1",
+            )
+            offered_to = value(
+                item, "offeredto", "offered_to", "targetteam", "franchise2",
+            )
+            if offering.isdecimal():
+                offering = offering.zfill(4)
+            if offered_to.isdecimal():
+                offered_to = offered_to.zfill(4)
+            if offering and offering != own and not offered_to:
+                offered_to = own
+            give = assets(value(item, "willGiveUp", "will_give_up", "give"))
+            receive = assets(value(item, "willReceive", "will_receive", "receive"))
+            if not trade_id or trade_id in seen or not offering or not (give or receive):
+                continue
+            seen.add(trade_id)
+            expires_text = value(item, "expires", "expiration")
+            try:
+                expires = int(expires_text) if expires_text else None
+            except ValueError:
+                expires = None
+            rows.append(MFLPendingTrade(
+                trade_id, offering, offered_to, give, receive, expires,
+            ))
+        return tuple(rows)
+
+    def revoke_pending_waiver(self, expected: MFLPendingWaiver) -> Any:
+        """Remove one claim by rebuilding its MFL waiver round without it."""
+        if expected.round is None or expected.round < 1:
+            raise ValueError("MFL did not identify this claim's waiver round.")
+        current = self.pending_waivers()
+        signature = (
+            expected.adds, expected.drops, expected.round, expected.order, expected.bid,
+        )
+        matches = [
+            claim for claim in current
+            if (claim.adds, claim.drops, claim.round, claim.order, claim.bid) == signature
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                "This waiver claim changed or is no longer pending. Refresh before trying again."
+            )
+        target = matches[0]
+        blind_bid = target.bid is not None
+        round_claims = [
+            claim for claim in current
+            if claim.round == target.round and (claim.bid is not None) == blind_bid
+            and claim is not target
+        ]
+        picks: list[str] = []
+        for claim in sorted(round_claims, key=lambda row: (row.order or 9999, row.id)):
+            if len(claim.adds) != 1 or len(claim.drops) > 1:
+                raise ValueError(
+                    "MFL returned a waiver queue this app cannot safely rebuild. Nothing was changed."
+                )
+            add = claim.adds[0]
+            drop = claim.drops[0] if claim.drops else "0000"
+            if blind_bid:
+                if claim.bid is None or claim.bid < 0:
+                    raise ValueError("MFL returned an invalid pending FAAB bid. Nothing was changed.")
+                picks.append(f"{add}_{claim.bid}_{drop}")
+            else:
+                picks.append(f"{add}_{drop}")
+        return self.import_request(
+            "blindBidWaiverRequest" if blind_bid else "waiverRequest",
+            ROUND=target.round,
+            PICKS=",".join(picks),
+            REPLACE=1,
+            FRANCHISE_ID=self.config.franchise_id.zfill(4),
+        )
+
+    def respond_to_trade(
+        self, *, trade_id: str, response: Literal["accept", "reject", "revoke"],
+        comments: str = "", expected: MFLPendingTrade | None = None,
+    ) -> Any:
+        """Revalidate and respond to one exact pending MFL trade offer."""
+        trade_id = str(trade_id).strip()
+        if not trade_id or len(trade_id) > 100 or not all(
+            char.isalnum() or char in "-_.:" for char in trade_id
+        ):
+            raise ValueError("Choose a valid pending trade.")
+        if response not in {"accept", "reject", "revoke"}:
+            raise ValueError("Choose a valid trade response.")
+        if len(comments) > 500:
+            raise ValueError("Keep your trade response to 500 characters or fewer.")
+        trade = next((item for item in self.pending_trades() if item.id == trade_id), None)
+        if trade is None:
+            raise ValueError("This trade is no longer pending. Refresh before trying again.")
+        if expected is not None and trade != expected:
+            raise ValueError("This trade offer changed since review. Refresh before responding.")
+        own = self.config.franchise_id.zfill(4)
+        if response == "revoke" and trade.offering_team != own:
+            raise ValueError("Only the owner who sent this trade can revoke it.")
+        if response in {"accept", "reject"} and trade.offering_team == own:
+            raise ValueError("You cannot accept or reject your own outgoing trade.")
+        if response in {"accept", "reject"} and trade.offered_to not in {"", own}:
+            raise ValueError("This trade was not offered to your franchise.")
+        parameters: dict[str, Any] = {
+            "TRADE_ID": trade.id,
+            "RESPONSE": response,
+            "FRANCHISE_ID": own,
+        }
+        if response == "reject" and comments.strip():
+            parameters["COMMENTS"] = comments.strip()
+        return self.import_request("tradeResponse", **parameters)
 
     @staticmethod
     def _message_value(item: dict[str, Any], *names: str) -> str:
@@ -1120,9 +1304,17 @@ class MFLClient:
                     self._optional_int(item.get("waiverSortOrder")),
                 )
         history_years = []
+        history_leagues: list[MFLHistoricalLeague] = []
         for item in _iter_key(root.get("history", {}), "league"):
-            if isinstance(item, dict) and str(item.get("year", "")).isdecimal():
-                history_years.append(int(item["year"]))
+            if not isinstance(item, dict) or not str(item.get("year", "")).isdecimal():
+                continue
+            year = int(item["year"])
+            history_years.append(year)
+            url = str(item.get("url") or "")
+            path_match = re.search(rf"/{year}/home/(\d+)(?:/|$)", urlsplit(url).path)
+            league_id = str(item.get("id") or (path_match.group(1) if path_match else ""))
+            if league_id.isdecimal() and 1990 <= year <= 2100:
+                history_leagues.append(MFLHistoricalLeague(year, league_id, url))
         self._league_details = MFLLeagueDetails(
             tuple(divisions),
             franchises,
@@ -1132,6 +1324,11 @@ class MFLClient:
             last_regular_season_week=self._optional_int(root.get("lastRegularSeasonWeek")) or 14,
             faab_limit=self._optional_float(root.get("bbidSeasonLimit")),
             history_years=tuple(sorted(set(history_years), reverse=True)),
+            history_leagues=tuple(sorted(
+                {item.year: item for item in history_leagues}.values(),
+                key=lambda item: item.year,
+                reverse=True,
+            )),
         )
         return self._league_details
 

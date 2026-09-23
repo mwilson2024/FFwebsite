@@ -19,7 +19,7 @@
   <main class="workspace trade-workspace">
     {% include '_roster_tabs.html' %}
     <div class="page-heading"><div><p class="eyebrow">TRADE CENTER</p><h1>Build an offer</h1></div></div>
-    <div class="trade-tabs"><a href="#trade-builder">Build offer</a><a href="#trade-block">Trade block</a><a href="#trade-ideas">Suggested trades</a></div>
+    <div class="trade-tabs"><a href="/transactions/pending?league={{ league.id }}">Pending offers</a><a href="#trade-builder">Build offer</a><a href="#trade-block">Trade block</a><a href="#trade-ideas">Suggested trades</a></div>
     <form method="get" action="/trades" class="trade-selectors">
       <input type="hidden" name="league" value="{{ league.id }}">
       <label>Trade partner<select name="target"><option value="">Choose a team</option>{% for id, name in teams.items() %}<option value="{{ id }}" {% if id == target %}selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>

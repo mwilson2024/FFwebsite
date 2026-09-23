@@ -6,7 +6,7 @@ import pytest
 def test_all_pages_load_their_requested_theme_last():
     templates = Path(__file__).resolve().parents[1] / 'src/weekly_projections/web/templates'
     pages = [p for p in templates.glob('*.html') if '<!doctype html>' in p.read_text(encoding='utf-8').lower()]
-    assert len(pages) == 21
+    assert len(pages) == 22
     for page in pages:
         source = page.read_text(encoding='utf-8')
         assert "{% include '_theme_assets.html' %}" in source, page.name

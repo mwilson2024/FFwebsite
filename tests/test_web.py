@@ -15,6 +15,7 @@ from weekly_projections.mfl.client import (
     MFLLeague,
     MFLLeagueDetails,
     MFLFantasyGame,
+    MFLHistoricalLeague,
     MFLTransaction,
     MFLLiveFranchise,
     MFLLiveMatchup,
@@ -24,6 +25,7 @@ from weekly_projections.mfl.client import (
     MFLLineupSettings,
     MFLMessageThread,
     MFLChatMessage,
+    MFLPendingTrade,
     MFLPendingWaiver,
     MFLPlayer,
     MFLWriteUncertainError,
@@ -538,7 +540,7 @@ def test_rosters_tab_shows_every_member_and_groups_roster_tools(monkeypatch) -> 
     assert " open" in rival_card
 
 
-def test_pending_waiver_claims_are_read_only_and_resolve_player_names(monkeypatch) -> None:
+def test_pending_transactions_resolve_players_and_show_available_actions(monkeypatch) -> None:
     web_app.sessions.clear()
     league = MFLLeague("77779", "0001", "Waiver League")
     current = web_app.BrowserSession("pending-cookie", 2026, [league], "csrf")
@@ -548,10 +550,20 @@ def test_pending_waiver_claims_are_read_only_and_resolve_player_names(monkeypatc
         def pending_waivers(self):
             return (MFLPendingWaiver("claim-1", ("101",), ("102",), round=1, order=2, bid=7),)
 
+        def pending_trades(self):
+            return (
+                MFLPendingTrade("incoming", "0002", "0001", ("201",), ("101",)),
+                MFLPendingTrade("outgoing", "0001", "0002", ("101",), ("201",)),
+            )
+
+        def franchise_names(self):
+            return {"0001": "My Team", "0002": "Trade Partner"}
+
         def players(self):
             return {
                 "101": MFLPlayer("101", "Target Runner", "RB", "DET"),
                 "102": MFLPlayer("102", "Bench Runner", "RB", "GB"),
+                "201": MFLPlayer("201", "Incoming Star", "WR", "DET"),
             }
 
     monkeypatch.setattr(web_app, "_client", lambda *args: PendingClient())
@@ -561,11 +573,79 @@ def test_pending_waiver_claims_are_read_only_and_resolve_player_names(monkeypatc
     response = client.get("/transactions/pending?league=77779")
 
     assert response.status_code == 200
-    assert "Your unprocessed waiver claims" in response.text
+    assert "Your unprocessed waiver claims" in response.text and "Pending trade offers" in response.text
     assert "Target Runner" in response.text and "Bench Runner" in response.text
     assert "Round 1" in response.text and "Priority 2" in response.text and "7 FAAB" in response.text
-    assert "read-only" in response.text
+    assert "Withdraw claim" in response.text
+    assert "Incoming offer from Trade Partner" in response.text
+    assert "Review accept" in response.text and "Review reject" in response.text
+    assert "Outgoing offer to Trade Partner" in response.text and "Withdraw offer" in response.text
     assert not current.pending_moves
+
+
+def test_pending_waiver_and_trade_actions_require_review_and_revalidation(monkeypatch) -> None:
+    web_app.sessions.clear()
+    league = MFLLeague("77779", "0001", "Action League")
+    current = web_app.BrowserSession("pending-cookie", 2026, [league], "csrf")
+    web_app.sessions["pending-actions-session"] = current
+    claim = MFLPendingWaiver("claim-1", ("101",), ("102",), round=1, order=1, bid=7)
+    trade = MFLPendingTrade("trade-1", "0002", "0001", ("201",), ("101",))
+
+    class PendingClient:
+        def __init__(self): self.calls = []
+        def pending_waivers(self): return (claim,)
+        def pending_trades(self): return (trade,)
+        def franchise_names(self): return {"0001": "My Team", "0002": "Trade Partner"}
+        def players(self): return {
+            "101": MFLPlayer("101", "My Runner", "RB", "DET"),
+            "102": MFLPlayer("102", "My Bench", "RB", "GB"),
+            "201": MFLPlayer("201", "Their Receiver", "WR", "BUF"),
+        }
+        def revoke_pending_waiver(self, expected):
+            assert expected == claim
+            self.calls.append(("waiver", "revoke"))
+            return {"status": {"$t": "OK"}}
+        def respond_to_trade(self, **kwargs):
+            self.calls.append(("trade", kwargs["response"], kwargs["trade_id"]))
+            return {"status": {"$t": "OK"}}
+
+    pending_client = PendingClient()
+    monkeypatch.setattr(web_app, "_client", lambda *args: pending_client)
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", "pending-actions-session")
+
+    bad = client.post("/transactions/pending/preview", data={
+        "league": "77779", "kind": "waiver", "item_id": "claim-1",
+        "action": "revoke", "csrf_token": "bad",
+    })
+    assert bad.status_code == 403 and not pending_client.calls
+
+    waiver_preview = client.post("/transactions/pending/preview", data={
+        "league": "77779", "kind": "waiver", "item_id": "claim-1",
+        "action": "revoke", "csrf_token": "csrf",
+    }, follow_redirects=False)
+    assert waiver_preview.status_code == 303 and not pending_client.calls
+    waiver_review = waiver_preview.headers["location"]
+    assert "This removes one pending claim" in client.get(waiver_review).text
+    completed = client.post(
+        waiver_review.replace("/review/", "/confirm/"),
+        data={"csrf_token": "csrf"},
+    )
+    assert "MFL confirmed the pending transaction was withdrawn" in completed.text
+    assert pending_client.calls == [("waiver", "revoke")]
+
+    trade_preview = client.post("/transactions/pending/preview", data={
+        "league": "77779", "kind": "trade", "item_id": "trade-1",
+        "action": "accept", "csrf_token": "csrf",
+    }, follow_redirects=False)
+    trade_review = trade_preview.headers["location"]
+    assert "Accepting can immediately change both rosters" in client.get(trade_review).text
+    accepted = client.post(
+        trade_review.replace("/review/", "/confirm/"),
+        data={"csrf_token": "csrf"},
+    )
+    assert "MFL confirmed the trade was accepted" in accepted.text
+    assert pending_client.calls[-1] == ("trade", "accept", "trade-1")
 
 
 def test_player_leaders_show_official_ranks_ownership_and_primary_rank(monkeypatch) -> None:
@@ -779,6 +859,67 @@ def test_operations_schedule_rules_status_and_guide_pages_render(monkeypatch) ->
     assert "Connection details, passwords, tokens" in data_status.text
     guide = client.get("/guide?league=88882")
     assert guide.status_code == 200 and "Four moves to get set" in guide.text
+
+
+def test_historical_import_uses_discovered_mfl_season_and_private_store(monkeypatch) -> None:
+    web_app.sessions.clear()
+    league = MFLLeague("88886", "0001", "History League")
+    current = web_app.BrowserSession("history-cookie", 2026, [league], "csrf")
+    current.owner_fingerprint = "account:history-owner"
+    web_app.sessions["history-session"] = current
+    source = MFLHistoricalLeague(
+        2025, "55555", "https://www49.myfantasyleague.com/2025/home/55555",
+    )
+
+    class CurrentClient:
+        def league_details(self):
+            return MFLLeagueDetails((), {}, history_years=(2026, 2025), history_leagues=(source,))
+
+    class HistoricalClient:
+        def league_details(self):
+            return MFLLeagueDetails((), {
+                "0001": MFLFranchise("0001", "Alpha"),
+                "0002": MFLFranchise("0002", "Beta"),
+            }, name="History League 2025", end_week=17, last_regular_season_week=14)
+
+        def league_standings(self):
+            return [
+                {"id": "1", "h2hw": "10", "h2hl": "4", "h2ht": "0", "pf": "1500", "pa": "1400", "vp": "20"},
+                {"id": "2", "h2hw": "8", "h2hl": "6", "h2ht": "0", "pf": "1450", "pa": "1480", "vp": "16"},
+            ]
+
+        def fantasy_schedule(self):
+            return (MFLFantasyGame(1, ("0001", "0002"), (101.0, 99.0)),)
+
+    class HistoryStore:
+        def __init__(self): self.saved = []
+        def connection_status(self): return {"schema_version": 3}
+        def save_historical_season(self, owner, **kwargs): self.saved.append((owner, kwargs))
+
+    store = HistoryStore()
+    monkeypatch.setenv("WP_DATABASE_URL", "postgresql://configured")
+    monkeypatch.setattr(web_app, "_client", lambda *args: CurrentClient())
+    monkeypatch.setattr(web_app, "_historical_client", lambda *args: HistoricalClient())
+    monkeypatch.setattr(web_app, "_persistent_store", lambda: store)
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", "history-session")
+
+    assert client.post("/data-status/history/import", data={
+        "league": league.id, "season": "2025", "csrf_token": "wrong",
+    }).status_code == 403
+    response = client.post("/data-status/history/import", data={
+        "league": league.id, "season": "2025", "csrf_token": "csrf",
+    }, follow_redirects=False)
+
+    assert response.status_code == 303
+    assert "history_imported=1" in response.headers["location"]
+    assert len(store.saved) == 1
+    owner, saved = store.saved[0]
+    assert owner == "account:history-owner"
+    assert saved["current_league_id"] == "88886"
+    assert saved["season"].season == 2025
+    assert len(saved["season"].franchises) == 2
+    assert len(saved["season"].matchup_teams) == 2
 
 
 def test_notification_center_and_first_run_guide(monkeypatch) -> None:

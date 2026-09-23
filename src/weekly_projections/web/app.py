@@ -6,6 +6,7 @@ import math
 import statistics
 import time
 import hashlib
+import re
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
 from itertools import zip_longest
@@ -32,13 +33,17 @@ from weekly_projections.mfl.client import (
     MFLClient,
     MFLConfig,
     MFLFantasyGame,
+    MFLHistoricalLeague,
     MFLLiveScoring,
     MFLLeague,
     MFLLineupSettings,
+    MFLPendingTrade,
+    MFLPendingWaiver,
     MFLPlayer,
     MFLRateLimitError,
     MFLTransaction,
 )
+from weekly_projections.history import build_historical_season
 from weekly_projections.lineup import (
     LineupRecommendation,
     assign_lineup_slots,
@@ -408,6 +413,20 @@ class BlockDraft:
 
 
 @dataclass
+class PendingTransactionAction:
+    league_id: str
+    franchise_id: str
+    kind: Literal["waiver", "trade"]
+    action: Literal["revoke", "accept", "reject"]
+    source: MFLPendingWaiver | MFLPendingTrade
+    title: str
+    detail: str
+    created_at: float = field(default_factory=time.monotonic)
+    status: str = "draft"
+    message: str = ""
+
+
+@dataclass
 class SideBet:
     id: str
     title: str
@@ -453,6 +472,7 @@ class BrowserSession:
     selected_week: int | None = None
     trades: dict[str, TradeDraft] = field(default_factory=dict)
     blocks: dict[str, BlockDraft] = field(default_factory=dict)
+    pending_actions: dict[str, PendingTransactionAction] = field(default_factory=dict)
     expires_at: float = field(default_factory=lambda: time.monotonic() + 8 * 60 * 60)
     read_cache: dict[str, tuple[float, object]] = field(default_factory=dict)
     cache_observed_at: dict[str, float] = field(default_factory=dict)
@@ -481,6 +501,7 @@ login_attempts: dict[str, list[float]] = {}
 login_attempts_lock = Lock()
 login_slots = BoundedSemaphore(4)
 trade_send_lock = Lock()
+pending_action_lock = Lock()
 social_send_lock = Lock()
 shared_read_cache: dict[str, tuple[float, object]] = {}
 shared_read_lock = RLock()
@@ -656,6 +677,20 @@ def _database_watchlists(owner_fingerprint: str, year: int) -> dict[str, set[str
     except Exception as error:
         log_error("watchlist_restore_failed", error)
         return {}
+
+
+def _database_history_summary(
+    current: BrowserSession, league_id: str,
+) -> tuple[dict[str, object], ...]:
+    if not current.owner_fingerprint or not os.environ.get("WP_DATABASE_URL", "").strip():
+        return ()
+    try:
+        return _persistent_store().load_historical_seasons(
+            current.owner_fingerprint, current_league_id=league_id,
+        )
+    except Exception as error:
+        log_error("history_summary_unavailable", error)
+        return ()
 
 
 def _persist_watchlist_player(
@@ -925,6 +960,20 @@ def _client(current: BrowserSession, league: MFLLeague) -> MFLClient:
     client._players = current.player_catalog
     # Short-lived, session-local read cache. Mutation previews and submissions
     # intentionally bypass it and re-read MFL before any write.
+    client._browser_read_cache = current.read_cache
+    return client
+
+
+def _historical_client(
+    current: BrowserSession, selected: MFLLeague, source: MFLHistoricalLeague,
+) -> MFLClient:
+    client = MFLClient(MFLConfig(
+        year=source.year,
+        league_id=source.league_id,
+        franchise_id=selected.franchise_id,
+        user_cookie=current.mfl_cookie,
+        base_url=source.api_base_url,
+    ))
     client._browser_read_cache = current.read_cache
     return client
 
@@ -1219,6 +1268,36 @@ def _record_operation(
     current.operations.append(OperationRecord(league_id, kind, title, status, message))
     if len(current.operations) > 100:
         del current.operations[:-100]
+
+
+def _clear_report_cache(current: BrowserSession, league_id: str, *labels: str) -> None:
+    for label in labels:
+        key = f"{current.year}:{league_id}:report:{label}"
+        current.read_cache.pop(key, None)
+        current.cache_observed_at.pop(key, None)
+
+
+def _pending_asset_label(asset: str, catalog: dict[str, MFLPlayer]) -> str:
+    if asset in catalog:
+        return catalog[asset].name
+    future = re.fullmatch(r"FP_(\d{1,4})_(\d{4})_(\d+)", asset)
+    current = re.fullmatch(r"DP_(\d+)_(\d+)", asset)
+    bid_money = re.fullmatch(r"BB_([\d.]+)", asset)
+    if future:
+        original, year, round_number = future.groups()
+        return f"{year} Round {int(round_number)} pick · original team {original.zfill(4)}"
+    if current:
+        round_number, pick_number = current.groups()
+        return f"Draft pick · Round {int(round_number) + 1}, Pick {int(pick_number) + 1}"
+    if bid_money:
+        return f"{bid_money.group(1)} FAAB"
+    return f"Asset {asset}"
+
+
+def _mfl_write_acknowledged(result: object) -> bool:
+    status = result.get("status", "") if isinstance(result, dict) else ""
+    status = status.get("$t", "") if isinstance(status, dict) else status
+    return str(status).strip().casefold() in {"ok", "success", "1"}
 
 
 def _rule_text(value) -> str:
@@ -2938,30 +3017,199 @@ def transactions_page(request: Request, league: str):
 
 
 @app.get("/transactions/pending", response_class=HTMLResponse)
-def pending_waiver_claims_page(request: Request, league: str):
+def pending_transactions_page(request: Request, league: str):
     current = _require_session(request)
     selected = _league(current, league)
     client = _client(current, selected)
-    claims = ()
+    claims: tuple[MFLPendingWaiver, ...] = ()
+    trades: tuple[MFLPendingTrade, ...] = ()
     catalog: dict[str, MFLPlayer] = {}
-    error = ""
+    team_names: dict[str, str] = {}
+    waiver_error = ""
+    trade_error = ""
     try:
         claims = _cached_session_read(
             current, selected.id, "pending-waivers", client.pending_waivers,
             ttl=30, stale_ttl=300,
         )
+    except MFLApiError as exc:
+        _log_provider_error_once(current, selected.id, "pending_waivers_unavailable", exc)
+        waiver_error = "MFL could not load your pending waiver claims. No claim was changed."
+    try:
+        trades = _cached_session_read(
+            current, selected.id, "pending-trades", client.pending_trades,
+            ttl=30, stale_ttl=300,
+        )
+        team_names = {
+            key.zfill(4): value for key, value in _cached_session_read(
+                current, selected.id, "franchise-names", client.franchise_names,
+                ttl=300, stale_ttl=3600,
+            ).items()
+        }
+    except MFLApiError as exc:
+        _log_provider_error_once(current, selected.id, "pending_trades_unavailable", exc)
+        trade_error = "MFL could not load your pending trade offers. No offer was changed."
+    try:
         catalog = _cached_session_read(
             current, "mfl-global", "players", client.players,
             ttl=86400, stale_ttl=_LEAGUE_STATIC_STALE_TTL, shared=True,
         )
     except MFLApiError as exc:
-        _log_provider_error_once(current, selected.id, "pending_waivers_unavailable", exc)
-        error = "MFL could not load your pending waiver claims. No claim was changed."
+        _log_provider_error_once(current, selected.id, "pending_assets_unavailable", exc)
+
+    own = selected.franchise_id.zfill(4)
+    trade_rows = []
+    for trade in trades:
+        outgoing = trade.offering_team == own
+        partner = trade.offered_to if outgoing else trade.offering_team
+        trade_rows.append({
+            "trade": trade,
+            "outgoing": outgoing,
+            "partner": partner,
+            "partner_name": team_names.get(partner, f"Franchise {partner or 'unknown'}"),
+            "give_labels": tuple(_pending_asset_label(asset, catalog) for asset in trade.will_give_up),
+            "receive_labels": tuple(_pending_asset_label(asset, catalog) for asset in trade.will_receive),
+        })
     return templates.TemplateResponse(request=request, name="tools.html", context={
         "session": current, "league": selected, "active_tool": "transactions",
-        "page": "pending-claims", "page_title": "Pending waiver claims",
-        "claims": claims, "catalog": catalog, "error": error,
+        "page": "pending-claims", "page_title": "Pending waivers & trades",
+        "claims": claims, "trade_rows": trade_rows, "catalog": catalog,
+        "error": "", "waiver_error": waiver_error, "trade_error": trade_error,
+        "activity_time": _activity_time,
     })
+
+
+@app.post("/transactions/pending/preview")
+def preview_pending_transaction_action(
+    request: Request,
+    league: str = Form(...),
+    kind: str = Form(...),
+    item_id: str = Form(..., max_length=100),
+    action: str = Form(...),
+    csrf_token: str = Form(...),
+):
+    current = _require_session(request)
+    _check_csrf(current, csrf_token)
+    selected = _league(current, league)
+    client = _client(current, selected)
+    own = selected.franchise_id.zfill(4)
+    source: MFLPendingWaiver | MFLPendingTrade
+    title = detail = ""
+    if kind == "waiver" and action == "revoke":
+        source = next((claim for claim in client.pending_waivers() if claim.id == item_id), None)
+        if source is None:
+            raise HTTPException(status_code=409, detail="This waiver claim is no longer pending. Refresh and try again.")
+        catalog = _cached_session_read(
+            current, "mfl-global", "players", client.players,
+            ttl=86400, stale_ttl=_LEAGUE_STATIC_STALE_TTL, shared=True,
+        )
+        adds = ", ".join(_pending_asset_label(asset, catalog) for asset in source.adds)
+        drops = ", ".join(_pending_asset_label(asset, catalog) for asset in source.drops) or "no drop"
+        title = f"Withdraw waiver claim for {adds or 'player'}"
+        detail = f"Round {source.round or 'unknown'} · drop {drops}"
+    elif kind == "trade" and action in {"accept", "reject", "revoke"}:
+        source = next((trade for trade in client.pending_trades() if trade.id == item_id), None)
+        if source is None:
+            raise HTTPException(status_code=409, detail="This trade offer is no longer pending. Refresh and try again.")
+        outgoing = source.offering_team == own
+        if action == "revoke" and not outgoing:
+            raise HTTPException(status_code=400, detail="Only your outgoing trade offers can be revoked.")
+        if action in {"accept", "reject"} and outgoing:
+            raise HTTPException(status_code=400, detail="Your outgoing trade cannot be accepted or rejected by you.")
+        names = {key.zfill(4): value for key, value in client.franchise_names().items()}
+        partner = source.offered_to if outgoing else source.offering_team
+        partner_name = names.get(partner, f"Franchise {partner or 'unknown'}")
+        verb = {"accept": "Accept", "reject": "Reject", "revoke": "Withdraw"}[action]
+        title = f"{verb} trade with {partner_name}"
+        detail = "Accepting changes both rosters. Rejecting or withdrawing closes only this offer."
+    else:
+        raise HTTPException(status_code=400, detail="Choose a valid pending transaction action.")
+
+    pending_id = secrets.token_urlsafe(24)
+    with pending_action_lock:
+        if len(current.pending_actions) >= 50:
+            oldest = next((key for key, draft in current.pending_actions.items() if draft.status != "sending"), None)
+            if oldest is None:
+                raise HTTPException(status_code=429, detail="Wait for the current transaction action to finish.")
+            current.pending_actions.pop(oldest)
+        current.pending_actions[pending_id] = PendingTransactionAction(
+            selected.id, selected.franchise_id, kind, action, source, title, detail,
+        )
+    return RedirectResponse(f"/transactions/pending/review/{pending_id}", status_code=303)
+
+
+@app.get("/transactions/pending/review/{pending_id}", response_class=HTMLResponse)
+def review_pending_transaction_action(request: Request, pending_id: str):
+    current = _require_session(request)
+    draft = current.pending_actions.get(pending_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="This pending-transaction review has expired.")
+    selected = _league(current, draft.league_id)
+    return templates.TemplateResponse(request=request, name="pending_action_review.html", context={
+        "session": current, "league": selected, "draft": draft, "pending_id": pending_id,
+    })
+
+
+@app.post("/transactions/pending/confirm/{pending_id}")
+def confirm_pending_transaction_action(
+    request: Request,
+    pending_id: str,
+    csrf_token: str = Form(...),
+    comments: str = Form(default="", max_length=500),
+):
+    current = _require_session(request)
+    _check_csrf(current, csrf_token)
+    with pending_action_lock:
+        draft = current.pending_actions.get(pending_id)
+        if draft is None:
+            raise HTTPException(status_code=404, detail="This pending-transaction review has expired.")
+        selected = _league(current, draft.league_id)
+        if draft.status != "draft":
+            return RedirectResponse(f"/transactions/pending/review/{pending_id}", status_code=303)
+        if selected.franchise_id != draft.franchise_id or time.monotonic() - draft.created_at > 1200:
+            draft.status = "failed"
+            draft.message = "This review expired. Refresh pending transactions before trying again."
+            return RedirectResponse(f"/transactions/pending/review/{pending_id}", status_code=303)
+        draft.status = "sending"
+
+    client = _client(current, selected)
+    try:
+        if draft.kind == "waiver" and isinstance(draft.source, MFLPendingWaiver):
+            result = client.revoke_pending_waiver(draft.source)
+        elif draft.kind == "trade" and isinstance(draft.source, MFLPendingTrade):
+            result = client.respond_to_trade(
+                trade_id=draft.source.id, response=draft.action, comments=comments,
+                expected=draft.source,
+            )
+        else:
+            raise ValueError("This pending-transaction review is invalid.")
+        if not _mfl_write_acknowledged(result):
+            raise MFLWriteUncertainError("MFL did not return a recognizable transaction receipt.")
+        draft.status = "completed"
+        draft.message = {
+            "accept": "MFL confirmed the trade was accepted.",
+            "reject": "MFL confirmed the trade was rejected.",
+            "revoke": "MFL confirmed the pending transaction was withdrawn.",
+        }[draft.action]
+        _clear_report_cache(current, selected.id, "pending-waivers", "pending-trades", "activity")
+    except MFLWriteUncertainError as exc:
+        draft.status = "uncertain"
+        draft.message = "MFL may have received this action. Check Pending Transactions on MFL before trying again."
+        log_error("pending_transaction_action_uncertain", exc)
+        _clear_report_cache(current, selected.id, "pending-waivers", "pending-trades")
+    except (MFLApiError, ValueError) as exc:
+        draft.status = "failed"
+        draft.message = str(exc)
+        log_error("pending_transaction_action_failed", exc)
+    _record_operation(
+        current,
+        league_id=selected.id,
+        kind=f"{draft.kind} {draft.action}",
+        title=draft.title,
+        status=draft.status,
+        message=draft.message,
+    )
+    return RedirectResponse(f"/transactions/pending/review/{pending_id}", status_code=303)
 
 
 @app.get("/watchlist", response_class=HTMLResponse)
@@ -3294,7 +3542,14 @@ def league_rules_page(request: Request, league: str):
 
 
 @app.get("/data-status", response_class=HTMLResponse)
-def data_status_page(request: Request, league: str, refreshed: int = 0):
+def data_status_page(
+    request: Request,
+    league: str,
+    refreshed: int = 0,
+    history_imported: int = 0,
+    history_failed: int = 0,
+    history_reference: str = "",
+):
     current = _require_session(request)
     selected = _league(current, league)
     now = time.monotonic()
@@ -3316,11 +3571,36 @@ def data_status_page(request: Request, league: str, refreshed: int = 0):
         })
     cache_rows.sort(key=lambda row: row["label"])
     cooldown = max(0, math.ceil(current.provider_cooldowns.get(selected.id, 0) - now))
+    database_status = _database_status()
+    history_sources: tuple[MFLHistoricalLeague, ...] = ()
+    history_source_error = ""
+    try:
+        details = _cached_session_read(
+            current, selected.id, "league-details", _client(current, selected).league_details,
+            ttl=_WEEKLY_STATIC_TTL, stale_ttl=_LEAGUE_STATIC_STALE_TTL,
+        )
+        history_sources = tuple(
+            source for source in details.history_leagues if source.year < current.year
+        )
+    except MFLApiError as error:
+        _log_provider_error_once(current, selected.id, "history_sources_unavailable", error)
+        history_source_error = "MFL could not load this league’s historical-season list right now."
+    history_rows = (
+        _database_history_summary(current, selected.id)
+        if int(database_status.get("schema_version") or 0) >= 3 else ()
+    )
     return templates.TemplateResponse(request=request, name="tools.html", context={
         "session": current, "league": selected, "active_tool": "data-status",
         "page": "data-status", "page_title": "Data status", "error": "",
         "cache_rows": cache_rows, "cooldown": cooldown, "refreshed": bool(refreshed),
-        "database_status": _database_status(),
+        "database_status": database_status,
+        "history_sources": history_sources,
+        "history_rows": history_rows,
+        "history_imported_years": {int(row["season"]) for row in history_rows},
+        "history_source_error": history_source_error,
+        "history_imported": max(0, history_imported),
+        "history_failed": max(0, history_failed),
+        "history_reference": history_reference[:32],
     })
 
 
@@ -3337,6 +3617,91 @@ def refresh_data_status(
             current.read_cache.pop(key, None)
             current.cache_observed_at.pop(key, None)
     return RedirectResponse(f"/data-status?league={selected.id}&refreshed=1", status_code=303)
+
+
+@app.post("/data-status/history/import")
+def import_historical_data(
+    request: Request,
+    league: str = Form(...),
+    season: str = Form("all"),
+    csrf_token: str = Form(...),
+):
+    current = _require_session(request)
+    _check_csrf(current, csrf_token)
+    selected = _league(current, league)
+    imported = 0
+    failed = 0
+    reference = ""
+    try:
+        if not current.owner_fingerprint or not os.environ.get("WP_DATABASE_URL", "").strip():
+            raise RuntimeError("Supabase PostgreSQL is not configured for this account")
+        store = _persistent_store()
+        if int(store.connection_status().get("schema_version") or 0) < 3:
+            raise RuntimeError("Supabase schema migration 3 is not installed")
+        current_client = _client(current, selected)
+        details = _cached_session_read(
+            current, selected.id, "league-details", current_client.league_details,
+            ttl=_WEEKLY_STATIC_TTL, stale_ttl=_LEAGUE_STATIC_STALE_TTL,
+        )
+        available = tuple(
+            source for source in details.history_leagues if source.year < current.year
+        )[:20]
+        if season != "all":
+            if not season.isdecimal():
+                raise ValueError("Choose a valid MFL historical season")
+            available = tuple(source for source in available if source.year == int(season))
+        if not available:
+            raise ValueError("MFL did not report the selected historical season")
+
+        for source_index, source in enumerate(available):
+            historical = _historical_client(current, selected, source)
+            try:
+                old_details = _cached_session_read(
+                    current, selected.id, f"history:{source.year}:league",
+                    historical.league_details, ttl=30 * 86400, stale_ttl=365 * 86400,
+                )
+                standings = _cached_session_read(
+                    current, selected.id, f"history:{source.year}:standings",
+                    historical.league_standings, ttl=30 * 86400, stale_ttl=365 * 86400,
+                )
+                schedule = _cached_session_read(
+                    current, selected.id, f"history:{source.year}:schedule",
+                    historical.fantasy_schedule, ttl=30 * 86400, stale_ttl=365 * 86400,
+                )
+                archive = build_historical_season(
+                    season=source.year,
+                    source_league_id=source.league_id,
+                    details=old_details,
+                    standings=standings,
+                    schedule=schedule,
+                )
+                store.save_historical_season(
+                    current.owner_fingerprint,
+                    current_league_id=selected.id,
+                    season=archive,
+                )
+                imported += 1
+            except MFLRateLimitError:
+                failed += len(available) - source_index
+                raise
+            except (MFLApiError, ValueError) as error:
+                failed += 1
+                diagnostic = RuntimeError(f"MFL historical season {source.year} import failed")
+                diagnostic.__cause__ = error
+                log_error("history_import_season_failed", diagnostic)
+    except Exception as error:
+        if failed == 0:
+            failed = 1
+        log_error("history_import_failed", error)
+        context = request_context.get()
+        reference = context[0] if context else ""
+    query = urlencode({
+        "league": selected.id,
+        "history_imported": imported,
+        "history_failed": failed,
+        **({"history_reference": reference} if reference else {}),
+    })
+    return RedirectResponse(f"/data-status?{query}#history-archive", status_code=303)
 
 
 @app.get("/guide", response_class=HTMLResponse)
