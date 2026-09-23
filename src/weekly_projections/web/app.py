@@ -67,7 +67,7 @@ from weekly_projections.insights import (
 )
 from weekly_projections.roster_planner import build_roster_plan, load_nfl_schedule
 from weekly_projections.waiver_optimizer import optimize_waiver_queue
-from weekly_projections.live_stats import weekly_boxscore, scoring_components
+from weekly_projections.live_stats import weekly_boxscore, weekly_touchdown_clips, scoring_components
 from weekly_projections.recommendations import PlayerRecommendation, build_player_board
 from weekly_projections.defense_streaming import rank_defense_streams, defense_waiver_pricing, TALENT_SOURCE_URL, TALENT_SOURCE_DATE
 from weekly_projections.trade_engine import suggest_trades, analyze_target_trade
@@ -5325,6 +5325,45 @@ def api_starter_scoring(request: Request, player_id: str, league: str, franchise
             result["difference"] = round(item.score - sum(c["points"] for c in result["components"]), 2)
     except (requests.RequestException, ValueError, KeyError, TypeError, AttributeError) as error:
         log_error("scoring_detail_stats_unavailable", error)
+    return result
+
+
+@app.get("/api/touchdowns/{player_id}")
+def api_touchdown_clips(request: Request, player_id: str, league: str, week: int):
+    """Return public ESPN touchdown links only when the user opens the clip card."""
+    current = _require_session(request)
+    selected = _league(current, league)
+    if not 1 <= week <= 18:
+        raise HTTPException(status_code=400, detail="Choose a valid week")
+    client = _client(current, selected)
+    try:
+        player = _cached_session_read(
+            current, selected.id, "players", client.players, ttl=3600, stale_ttl=86400,
+        ).get(player_id)
+    except MFLApiError as error:
+        _log_provider_error_once(current, selected.id, "touchdown_clip_catalog_unavailable", error)
+        raise HTTPException(status_code=503, detail="Player details are temporarily unavailable.") from error
+    if player is None:
+        raise HTTPException(status_code=404, detail="Player not found")
+    try:
+        result = weekly_touchdown_clips(player, current.year, week)
+    except (requests.RequestException, ValueError, KeyError, TypeError, AttributeError) as error:
+        log_error("touchdown_clips_unavailable", error)
+        raise HTTPException(
+            status_code=503,
+            detail="ESPN touchdown highlights are temporarily unavailable. Try again shortly.",
+        ) from error
+    if result is None:
+        return {
+            "player": player.name,
+            "plays": [],
+            "source": "ESPN",
+            "note": "No completed NFL game or touchdown data is available for this player and week.",
+        }
+    result["note"] = (
+        "Direct clips appear only when ESPN publishes a link for that scoring play. "
+        "Otherwise the card opens the official game highlights page. Availability can vary by region."
+    )
     return result
 
 

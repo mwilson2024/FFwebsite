@@ -172,6 +172,18 @@
 .starter-stat-content h3 { font-size:.875rem; margin:0 0 .65rem; color:#e2edff; }
 .starter-stat-content .stat-line { color:#d4e4fa; font-size:.875rem; line-height:1.6; margin:.45rem 0; }
 .starter-stat-content .stat-note { color:#a6bbd9; font-size:.8125rem; line-height:1.5; }
+.scoring-card-actions { display:flex; align-items:center; justify-content:flex-end; gap:.35rem; flex-wrap:wrap; }
+.touchdown-trigger { white-space:nowrap; }
+.touchdown-card { width:min(680px,calc(100vw - 1.5rem)); }
+.touchdown-card-content { display:grid; gap:.8rem; }
+.touchdown-card-item { display:grid; grid-template-columns:120px minmax(0,1fr); gap:1rem; padding:.85rem; border:1px solid var(--site-line,#3e5f7b); border-radius:12px; background:var(--site-raised,#0d3658); }
+.touchdown-card-item img { width:120px; aspect-ratio:16/9; object-fit:cover; border-radius:8px; background:#071a2d; }
+.touchdown-card-item h3 { margin:.25rem 0; font-size:1rem; line-height:1.35; color:var(--site-text,#fff); }
+.touchdown-card-item p { margin:.25rem 0 .65rem; line-height:1.45; color:var(--site-text,#e2edff); }
+.touchdown-card-item a { display:inline-flex; min-height:44px; align-items:center; font-weight:800; color:var(--site-link,#ffdf68); }
+.touchdown-card-item small { display:block; color:var(--site-muted,#a6bbd9); }
+.touchdown-card-meta { display:block; color:var(--site-accent,#ffcb05); font-size:.75rem; font-weight:900; letter-spacing:.06em; text-transform:uppercase; }
+.touchdown-source-note,.touchdown-empty { margin:.2rem 0; color:var(--site-muted,#a6bbd9); line-height:1.5; }
 .starter-stat-details summary:focus-visible,.team-points-breakdown summary:focus-visible { outline:2px solid #78dfd3; outline-offset:2px; border-radius:4px; }
 .matchup-bench { border-top:1px solid #25344c; }
 .matchup-bench summary,.other-matchups summary { cursor:pointer; padding:1rem 1.5rem; color:#aec2df; font-size:.875rem; }
@@ -227,6 +239,9 @@
   .matchup-player-row { grid-template-columns:minmax(0,1fr) 30px minmax(0,1fr); padding:.75rem .55rem; gap:.4rem; }
   .matchup-stat-row { padding:0 .55rem .4rem; gap:.7rem; }
   .starter-stat-content { padding:.55rem; }
+  .scoring-card-actions { justify-content:flex-start; }
+  .touchdown-card-item { grid-template-columns:1fr; }
+  .touchdown-card-item img { width:100%; }
   .starter-stat-details dl > div { flex-wrap:wrap; gap:.2rem; }
   .matchup-player-side { display:flex; flex-direction:column; align-items:stretch; gap:.3rem; }
   .matchup-player-row .player-identity { gap:.35rem; }

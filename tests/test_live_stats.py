@@ -6,7 +6,7 @@ import pytest
 import requests
 from fastapi.testclient import TestClient
 
-from weekly_projections.live_stats import parse_boxscore, scoring_components
+from weekly_projections.live_stats import parse_boxscore, parse_touchdown_clips, scoring_components
 from weekly_projections.mfl.client import MFLPlayer, MFLLeague, MFLRateLimitError
 from weekly_projections.web import app as web
 
@@ -28,6 +28,38 @@ def sample_rules():
     ]}}
 
 
+def sample_touchdowns():
+    return {
+        "header": {"week": 3, "season": {"year": 2026, "type": 2}},
+        "scoringPlays": [
+            {
+                "id": "play-1", "text": "Jahmyr Gibbs 4 Yd Rush (Jake Bates Kick)",
+                "type": {"text": "Rushing Touchdown", "abbreviation": "TD"},
+                "scoringType": {"name": "touchdown"},
+                "period": {"number": 4}, "clock": {"displayValue": "14:55"},
+                "team": {"abbreviation": "DET"},
+            },
+            {
+                "id": "play-2", "text": "Amon-Ra St. Brown 18 Yd pass from Jared Goff",
+                "type": {"text": "Passing Touchdown", "abbreviation": "TD"},
+                "scoringType": {"name": "touchdown"},
+                "period": {"number": 3}, "clock": {"displayValue": "5:13"},
+                "team": {"abbreviation": "DET"},
+            },
+            {
+                "id": "play-3", "text": "Jake Bates 45 Yd Field Goal",
+                "type": {"text": "Field Goal", "abbreviation": "FG"},
+                "period": {"number": 4}, "team": {"abbreviation": "DET"},
+            },
+        ],
+        "videos": [{
+            "playId": "play-1", "headline": "Jahmyr Gibbs scores a 4-yard touchdown",
+            "thumbnail": "https://a.espncdn.com/media/motion/clip.jpg",
+            "links": {"web": {"href": "https://www.espn.com/video/clip/_/id/123"}},
+        }],
+    }
+
+
 def test_stat_line_is_exact_player_week_season_and_game_state():
     player = MFLPlayer("p", "Player", "WR", "SEA", "123")
     data = sample_box()
@@ -41,6 +73,38 @@ def test_stat_line_is_exact_player_week_season_and_game_state():
     assert parse_boxscore(data, player, 2026, 1)["state"] == "Live"
     data["header"]["competitions"][0]["status"]["type"]["state"] = "pre"
     assert parse_boxscore(data, player, 2026, 1) is None
+
+
+def test_touchdown_cards_match_mfl_name_and_use_direct_or_game_highlight_link():
+    gibbs = parse_touchdown_clips(
+        sample_touchdowns(), MFLPlayer("p", "Gibbs, Jahmyr", "RB", "DET", "4429795"),
+        2026, 3, "401000001",
+    )
+    assert len(gibbs["plays"]) == 1
+    assert gibbs["plays"][0]["direct_clip"] is True
+    assert gibbs["plays"][0]["clip_url"] == "https://www.espn.com/video/clip/_/id/123"
+    assert gibbs["plays"][0]["period"] == 4
+
+    goff = parse_touchdown_clips(
+        sample_touchdowns(), MFLPlayer("q", "Goff, Jared", "QB", "DET", "1"),
+        2026, 3, "401000001",
+    )
+    assert [play["play_id"] for play in goff["plays"]] == ["play-2"]
+    assert goff["plays"][0]["direct_clip"] is False
+    assert goff["plays"][0]["clip_url"] == "https://www.espn.com/nfl/video?gameId=401000001"
+
+
+def test_touchdown_cards_reject_wrong_week_and_untrusted_media_urls():
+    payload = sample_touchdowns()
+    payload["videos"][0]["links"]["web"]["href"] = "https://attacker.example/clip"
+    payload["videos"][0]["thumbnail"] = "https://attacker.example/image.jpg"
+    result = parse_touchdown_clips(
+        payload, MFLPlayer("p", "Gibbs, Jahmyr", "RB", "DET", "4429795"),
+        2026, 3, "401000001",
+    )
+    assert result["plays"][0]["direct_clip"] is False
+    assert result["plays"][0]["thumbnail_url"] == ""
+    assert parse_touchdown_clips(payload, MFLPlayer("p", "Gibbs, Jahmyr"), 2026, 4, "401000001") is None
 
 
 def test_league_rules_include_receptions_yards_td_and_bonus_not_generic_ppr():
@@ -105,6 +169,25 @@ def test_unavailable_stats_preserve_mfl_score_and_upcoming_does_not_fetch(monkey
     data = client.get("/api/scoring/p?league=l&franchise=0001&week=1").json()
     assert data["official_points"] == 27.2
     assert "unavailable" in data["note"] and "private error" not in str(data)
+
+
+def test_touchdown_endpoint_is_lazy_and_returns_public_cards(monkeypatch):
+    player = MFLPlayer("p", "Gibbs, Jahmyr", "RB", "DET", "4429795")
+    fake = SimpleNamespace(players=lambda: {"p": player})
+    monkeypatch.setattr(web, "_client", lambda *args: fake)
+    monkeypatch.setattr(web, "weekly_touchdown_clips", lambda *args: {
+        "player": "Jahmyr Gibbs", "source": "ESPN", "plays": [{"play_id": "one"}],
+    })
+    monkeypatch.setattr(web, "sessions", {
+        "test": web.BrowserSession("fake", 2026, [MFLLeague("l", "0001", "League")], "csrf")
+    })
+    client = TestClient(web.app)
+    client.cookies.set("wp_session", "test")
+    response = client.get("/api/touchdowns/p?league=l&week=3")
+    assert response.status_code == 200
+    assert response.json()["plays"] == [{"play_id": "one"}]
+    assert "only when ESPN publishes" in response.json()["note"]
+    assert client.get("/api/touchdowns/p?league=l&week=19").status_code == 400
 
 
 def test_repeated_starter_details_share_live_snapshot_and_scoring_rules(monkeypatch):
@@ -172,6 +255,7 @@ def test_bench_excluded_from_totals_counts_state_and_detail_controls():
     context = {"paired_rows": [(starter, None, "QB"), (bench, None, "QB")], "head_to_head": matchup, "league": MFLLeague("l", "0001", "League"), "week": 1}
     html = web.templates.env.get_template("_matchup_rows.html").render(context)
     assert 'data-scoring-player="s"' in html
+    assert 'data-touchdown-player="s"' in html
     assert 'data-scoring-player="b"' not in html
 
 
@@ -212,4 +296,5 @@ def test_matchup_header_switches_all_leagues_and_separates_stats_from_points():
     assert trigger['data-stat-line'] == panel.select_one('.player-stat-line')['id']
     assert trigger['aria-controls'] == 'points-card'
     assert soup.select_one('dialog#points-card')
+    assert panel.select_one('.touchdown-trigger') is None
     assert panel.select_one('details') is None

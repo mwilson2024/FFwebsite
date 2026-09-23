@@ -138,6 +138,92 @@
     });
     if (statLine && panel.dataset.gameState !== 'upcoming') loadStats();
   });
+  const touchdownCard = document.querySelector('#touchdown-card');
+  let activeTouchdownButton = null;
+  touchdownCard?.addEventListener('click', event => {
+    if (event.target === touchdownCard) {
+      const rect = touchdownCard.getBoundingClientRect();
+      if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) touchdownCard.close();
+    }
+  });
+  document.querySelectorAll('[data-touchdown-player]').forEach(button => {
+    let loadedAt = 0;
+    let loading = false;
+    let cachedContent = null;
+    const render = (data) => {
+      const content = document.createElement('div');
+      const plays = Array.isArray(data.plays) ? data.plays : [];
+      if (!plays.length) {
+        const empty = document.createElement('p');
+        empty.className = 'touchdown-empty';
+        empty.textContent = data.note || 'No touchdown was found for this player and week.';
+        content.append(empty);
+        return content;
+      }
+      plays.forEach((play, index) => {
+        const article = document.createElement('article');
+        article.className = 'touchdown-card-item';
+        if (play.thumbnail_url) {
+          const image = document.createElement('img');
+          image.src = play.thumbnail_url;
+          image.alt = '';
+          image.loading = 'lazy';
+          image.addEventListener('error', () => image.remove());
+          article.append(image);
+        }
+        const body = document.createElement('div');
+        const meta = document.createElement('span');
+        meta.className = 'touchdown-card-meta';
+        const quarter = Number(play.period) > 0 ? `Q${Number(play.period)}` : 'Scoring play';
+        meta.textContent = `${quarter}${play.clock ? ` · ${play.clock}` : ''}${play.team ? ` · ${play.team}` : ''}`;
+        const title = document.createElement('h3');
+        title.textContent = play.title || `Touchdown ${index + 1}`;
+        const description = document.createElement('p');
+        description.textContent = play.description || '';
+        const link = document.createElement('a');
+        link.href = play.clip_url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        link.textContent = play.direct_clip ? 'Watch this touchdown on ESPN ↗' : 'Open ESPN game highlights ↗';
+        body.append(meta, title, description, link);
+        if (!play.direct_clip) {
+          const fallback = document.createElement('small');
+          fallback.textContent = 'ESPN has not published a direct clip link for this play.';
+          body.append(fallback);
+        }
+        article.append(body);
+        content.append(article);
+      });
+      const note = document.createElement('p');
+      note.className = 'touchdown-source-note';
+      note.textContent = data.note || 'Highlight availability is supplied by ESPN.';
+      content.append(note);
+      return content;
+    };
+    button.addEventListener('click', async () => {
+      if (!touchdownCard) return;
+      activeTouchdownButton = button;
+      touchdownCard.querySelector('#touchdown-card-title').textContent = `${button.dataset.playerName} · Touchdowns`;
+      const host = touchdownCard.querySelector('#touchdown-card-content');
+      host.replaceChildren(cachedContent ? cachedContent.cloneNode(true) : document.createTextNode('Finding ESPN scoring plays…'));
+      if (!touchdownCard.open) touchdownCard.showModal();
+      if (loading || (cachedContent && Date.now() - loadedAt < 60000)) return;
+      loading = true;
+      try {
+        const query = new URLSearchParams({league:button.dataset.league, week:button.dataset.week});
+        const response = await fetch(`/api/touchdowns/${encodeURIComponent(button.dataset.touchdownPlayer)}?${query}`, {signal:AbortSignal.timeout(15000)});
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || 'Touchdown highlights are unavailable.');
+        cachedContent = render(data);
+        loadedAt = Date.now();
+        if (activeTouchdownButton === button && touchdownCard.open) host.replaceChildren(cachedContent.cloneNode(true));
+      } catch (error) {
+        if (activeTouchdownButton === button) host.textContent = error.name === 'TimeoutError' ? 'ESPN took too long to respond. Close and reopen to retry.' : error.message;
+      } finally {
+        loading = false;
+      }
+    });
+  });
   document.querySelectorAll('[data-kickoff]').forEach((time) => {
     time.textContent = new Intl.DateTimeFormat(undefined, {weekday:'short', hour:'numeric', minute:'2-digit', timeZoneName:'short'}).format(new Date(Number(time.dataset.kickoff) * 1000));
   });
