@@ -168,6 +168,29 @@ def log_access(request_id: str, request: object, status: int) -> None:
         pass
 
 
+def log_event(event: str, **metrics: int | float | bool | str) -> None:
+    """Write a privacy-bounded operational event to the hosted/local log stream."""
+    if not re.fullmatch(r"[a-z0-9_]{1,80}", event):
+        return
+    record: dict[str, object] = {"event": event}
+    for key, value in metrics.items():
+        if not re.fullmatch(r"[a-z0-9_]{1,64}", key):
+            continue
+        if isinstance(value, bool):
+            record[key] = value
+        elif isinstance(value, (int, float)):
+            record[key] = round(value, 3) if isinstance(value, float) else value
+        elif isinstance(value, str) and not _SENSITIVE_WORD.search(value):
+            record[key] = value[:160]
+    try:
+        initialize_log()
+        with _lock:
+            if _logger.handlers:
+                _logger.info(json.dumps(record))
+    except (OSError, TypeError, ValueError):
+        pass
+
+
 def log_error(event: str, error: BaseException | None = None, *, status: int | None = None) -> None:
     context = request_context.get()
     record: dict = {"event": event}

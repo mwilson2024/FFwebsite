@@ -15,7 +15,7 @@ from weekly_projections.mfl.client import MFLLeague
 from weekly_projections.mfl.client import MFLRateLimitError
 from weekly_projections.history import HistoricalFranchise, HistoricalMatchupTeam, HistoricalSeason
 from weekly_projections.web import app as web
-from weekly_projections.web.session_store import EncryptedSessionStore
+from weekly_projections.web.session_store import EncryptedSessionStore, _database_pool_size
 
 
 class LoginClient:
@@ -55,6 +55,7 @@ class FakePostgresConnection:
         self.watchlists = set()
         self.league_themes = {}
         self.player_market_snapshots = {}
+        self.provider_cache = {}
         self.statements = []
 
     def __enter__(self):
@@ -119,10 +120,32 @@ class FakePostgresConnection:
                 json.loads(params[3]), datetime.now(timezone.utc),
             )
             return FakePostgresResult()
-        if sql.startswith("SELECT snapshot.payload"):
+        if sql.startswith("SELECT snapshot.payload, snapshot.captured_at FROM"):
             return FakePostgresResult(
                 self.player_market_snapshots.get((int(params[1]), str(params[2])))
             )
+        if sql.startswith("INSERT INTO fantasy_hq.provider_cache"):
+            now = datetime.now(timezone.utc)
+            self.provider_cache[
+                (params[0], int(params[1]), str(params[2]), str(params[3]))
+            ] = (
+                json.loads(params[4]), now,
+                datetime.fromtimestamp(now.timestamp() + int(params[5]), timezone.utc),
+            )
+            return FakePostgresResult()
+        if sql.startswith("SELECT payload, fetched_at, fresh_until FROM fantasy_hq.provider_cache"):
+            return FakePostgresResult(
+                self.provider_cache.get(
+                    (params[0], int(params[1]), str(params[2]), str(params[3]))
+                )
+            )
+        if sql.startswith("DELETE FROM fantasy_hq.provider_cache"):
+            self.provider_cache.pop(
+                (params[0], int(params[1]), str(params[2]), str(params[3])), None,
+            )
+            return FakePostgresResult()
+        if sql.startswith("WITH expired AS"):
+            return FakePostgresResult([(1,), (1,)])
         if sql.startswith("DELETE FROM fantasy_hq.remembered_session") and params and len(params) == 1:
             if isinstance(params[0], bytes):
                 self.sessions.pop(params[0], None)
@@ -173,6 +196,32 @@ def test_player_market_snapshot_migration_is_private_and_bounded() -> None:
     assert "octet_length(payload::text) <= 5242880" in migration
     assert "enable row level security" in migration
     assert "revoke all on fantasy_hq.player_market_snapshot from anon, authenticated" in migration
+
+
+def test_league_report_snapshot_migration_reuses_private_provider_cache() -> None:
+    migration = (
+        Path(__file__).resolve().parents[1]
+        / "supabase" / "migrations" / "007_league_report_snapshots.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "create table if not exists fantasy_hq.provider_cache" in migration
+    assert "primary key (scope_hash, season, league_id, report_key)" in migration
+    assert "jsonb_typeof(payload) = 'object'" in migration
+    assert "octet_length(payload::text) <= 10485760" in migration
+    assert "enable row level security" in migration
+    assert "revoke all on fantasy_hq.provider_cache from anon, authenticated" in migration
+    assert "create table if not exists fantasy_hq.league_report_snapshot" not in migration
+
+
+def test_provider_cache_maintenance_migration_adds_cleanup_index() -> None:
+    migration = (
+        Path(__file__).resolve().parents[1]
+        / "supabase" / "migrations" / "008_provider_cache_maintenance.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "provider_cache_stale_until_idx" in migration
+    assert "on fantasy_hq.provider_cache (stale_until)" in migration
+    assert "values (8, 'Provider cache maintenance index')" in migration
 
 
 def test_remembered_session_is_encrypted_tamper_evident_and_revocable(monkeypatch, tmp_path):
@@ -266,6 +315,37 @@ def test_postgres_store_uses_private_schema_encryption_and_tls(monkeypatch):
     assert restored_snapshot is not None
     assert restored_snapshot["payload"] == snapshot
     assert isinstance(restored_snapshot["captured_at"], int)
+    report = {"version": 1, "report_type": "standings", "value": [{"id": "0001"}]}
+    store.save_league_report_snapshot(
+        "account:owner-hash", year=2026, league_id="12345",
+        report_type="standings", payload=report, ttl_seconds=3600,
+    )
+    restored_report = store.load_league_report_snapshot(
+        "account:owner-hash", year=2026, league_id="12345",
+        report_type="standings", stale_seconds=86400,
+    )
+    assert restored_report is not None
+    assert restored_report["payload"] == report
+    assert restored_report["expires_at"] >= restored_report["captured_at"] + 3599
+    report_select = next(
+        sql for sql, _ in reversed(database.statements)
+        if sql.startswith("SELECT payload, fetched_at, fresh_until FROM fantasy_hq.provider_cache")
+    )
+    assert "stale_until >= now()" in report_select
+    assert "now() -" not in report_select
+    store.delete_league_report_snapshot(
+        "account:owner-hash", year=2026, league_id="12345", report_type="standings",
+    )
+    assert store.load_league_report_snapshot(
+        "account:owner-hash", year=2026, league_id="12345", report_type="standings",
+    ) is None
+    assert store.prune_expired_provider_cache() == 2
+    prune_sql, prune_params = next(
+        (sql, params) for sql, params in reversed(database.statements)
+        if sql.startswith("WITH expired AS")
+    )
+    assert "ORDER BY stale_until LIMIT %s" in prune_sql
+    assert prune_params == (7 * 86400, 500)
     assert all("account:owner-hash" not in repr(params) for _, params in database.statements)
 
     store.revoke(token)
@@ -287,6 +367,17 @@ def test_postgres_store_rejects_non_tls_urls(monkeypatch):
             ),
             connection_factory=lambda url: FakePostgresConnection(),
         )
+
+
+def test_database_pool_size_is_small_and_bounded(monkeypatch):
+    monkeypatch.delenv("WP_DATABASE_POOL_SIZE", raising=False)
+    assert _database_pool_size() == 4
+    monkeypatch.setenv("WP_DATABASE_POOL_SIZE", "100")
+    assert _database_pool_size() == 8
+    monkeypatch.setenv("WP_DATABASE_POOL_SIZE", "0")
+    assert _database_pool_size() == 1
+    monkeypatch.setenv("WP_DATABASE_POOL_SIZE", "invalid")
+    assert _database_pool_size() == 4
 
 
 def test_postgres_store_replaces_one_historical_season_transactionally(monkeypatch):
@@ -487,6 +578,7 @@ def test_stable_report_cache_windows_and_status_labels(monkeypatch):
     monkeypatch.setattr(web, "_seconds_until_daily_refresh", lambda now=None: 12_345)
 
     assert web._report_cache_ttl("franchise-names", 300) == 7 * 86400
+    assert web._report_cache_ttl("players", 300) == 86400
     assert web._report_cache_ttl("nfl-schedule:3", 300) == 7 * 86400
     assert web._report_cache_ttl("projections:3", 300) == 12 * 3600
     assert web._report_cache_ttl("reference-projections:3:combined", 300) == 12 * 3600
@@ -494,6 +586,7 @@ def test_stable_report_cache_windows_and_status_labels(monkeypatch):
     assert web._report_cache_ttl("player-scores:ytd", 300) == 12_345
     assert web._report_cache_ttl("live-scoring:3", 30) == 30
     assert web._report_cache_is_stable("franchise-names") is True
+    assert web._report_cache_is_stable("players") is False
     assert web._report_cache_is_stable("projections:3") is True
     assert web._report_cache_is_stable("player-scores:ytd") is True
     assert web._report_cache_is_stable("live-scoring:3") is False

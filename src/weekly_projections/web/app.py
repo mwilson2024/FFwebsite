@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import secrets
 import os
 import math
@@ -9,6 +10,7 @@ import hashlib
 import json
 import re
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from itertools import zip_longest
 from pathlib import Path
@@ -34,10 +36,13 @@ from weekly_projections.mfl.client import (
     MFLClient,
     MFLConfig,
     MFLFantasyGame,
+    MFLFranchise,
     MFLHistoricalLeague,
+    MFLLeagueDetails,
     MFLLiveScoring,
     MFLLeague,
     MFLLineupSettings,
+    MFLLineupRule,
     MFLPendingTrade,
     MFLPendingWaiver,
     MFLPlayer,
@@ -73,13 +78,19 @@ from weekly_projections.recommendations import PlayerRecommendation, build_playe
 from weekly_projections.defense_streaming import rank_defense_streams, defense_waiver_pricing, TALENT_SOURCE_URL, TALENT_SOURCE_DATE
 from weekly_projections.trade_engine import suggest_trades, analyze_target_trade
 from weekly_projections.league_intelligence import (
+    LeagueRecap,
+    ProjectedPlayoffGame,
+    ProjectedPlayoffRound,
+    TeamIntelligence,
     build_projected_playoff_rounds,
     build_playoff_seeds,
     build_power_rankings,
     build_recap,
     waiver_trends,
 )
-from weekly_projections.web.diagnostics import client_ip, initialize_log, log_access, log_error, request_context
+from weekly_projections.web.diagnostics import (
+    client_ip, initialize_log, log_access, log_error, log_event, request_context,
+)
 from weekly_projections.web.session_store import EncryptedSessionStore
 
 
@@ -97,6 +108,10 @@ _PROJECTIONS_TTL = 12 * 3600
 _APP_TIME_ZONE = ZoneInfo(os.getenv("WP_TIME_ZONE", "America/New_York"))
 _LEAGUE_STATIC_STALE_TTL = 7 * 86400
 _SHARED_READ_CACHE_LIMIT = 512
+_GLOBAL_REPORT_SCOPE = "public-provider-data-v1"
+_LEAGUE_INTELLIGENCE_VERSION = 1
+_CACHE_REFRESH_WORKERS = 1
+_CACHE_REFRESH_LIMIT = 64
 _ACTIVITY_LOOKBACK_DAYS = 14
 _THEMES = {"michigan", "lions", "aurora", "tigers", "redwings", "pistons"}
 _RANKING_PREFERENCES = {
@@ -108,6 +123,52 @@ _RANKING_PREFERENCES = {
     "combined": "Combined MFL + ESPN + FantasyPros + CBS + ML ranks",
 }
 templates.env.globals["ranking_preferences"] = _RANKING_PREFERENCES
+
+
+@dataclass
+class CacheTelemetry:
+    counters: dict[str, int] = field(default_factory=dict)
+    duration_ms: dict[str, float] = field(default_factory=dict)
+    lock: Lock = field(default_factory=Lock)
+
+    def record(self, name: str, *, amount: int = 1, elapsed_ms: float = 0.0) -> None:
+        with self.lock:
+            self.counters[name] = self.counters.get(name, 0) + max(0, int(amount))
+            if elapsed_ms > 0:
+                self.duration_ms[name] = self.duration_ms.get(name, 0.0) + elapsed_ms
+
+    def snapshot(self) -> dict[str, object]:
+        with self.lock:
+            counters = dict(self.counters)
+            durations = dict(self.duration_ms)
+        cache_hits = sum(counters.get(name, 0) for name in (
+            "memory_hit", "shared_hit", "database_hit", "stale_hit",
+        ))
+        provider_reads = counters.get("provider_read", 0)
+        total = cache_hits + provider_reads
+        return {
+            **counters,
+            "cache_hits": cache_hits,
+            "requests": total,
+            "hit_rate": round(cache_hits * 100 / total, 1) if total else None,
+            "database_avg_ms": round(
+                durations.get("database_lookup", 0.0) / max(1, counters.get("database_lookup", 0)), 1,
+            ),
+            "provider_avg_ms": round(
+                durations.get("provider_read", 0.0) / max(1, provider_reads), 1,
+            ),
+        }
+
+
+cache_telemetry = CacheTelemetry()
+_cache_refresh_executor = ThreadPoolExecutor(
+    max_workers=_CACHE_REFRESH_WORKERS, thread_name_prefix="cache-refresh",
+)
+_cache_refresh_pending: set[str] = set()
+_cache_refresh_lock = Lock()
+_cache_maintenance_due = 0.0
+_cache_maintenance_lock = Lock()
+atexit.register(lambda: _cache_refresh_executor.shutdown(wait=False, cancel_futures=True))
 
 
 def _default_ranking_preference() -> str:
@@ -848,6 +909,624 @@ def _save_database_player_market_snapshot(
     return revision, payload
 
 
+def _persistent_report_identity(label: str) -> tuple[str, str] | None:
+    """Map allow-listed display reports to bounded database cache keys."""
+    if label in {
+        "details", "standings", "schedule", "franchise-names",
+        "league-rosters", "lineup-settings", "players",
+    }:
+        return label, ""
+    for prefix in (
+        "nfl-schedule:", "projections:", "player-scores:",
+        "reference-projections:", "league-intelligence:",
+    ):
+        if label.startswith(prefix):
+            report_key = label[len(prefix):]
+            if report_key and len(report_key) <= 128:
+                return prefix[:-1], report_key
+    return None
+
+
+def _global_report(label: str) -> bool:
+    """Only public, league-independent provider reports may cross account boundaries."""
+    return label == "players" or label.startswith("nfl-schedule:")
+
+
+def _persistent_report_location(
+    current: BrowserSession, league_id: str, label: str,
+) -> tuple[str, str] | None:
+    if _global_report(label):
+        return _GLOBAL_REPORT_SCOPE, "0"
+    if not current.owner_fingerprint:
+        return None
+    return current.owner_fingerprint, league_id
+
+
+def _serialize_report_snapshot(label: str, value: object) -> dict | None:
+    identity = _persistent_report_identity(label)
+    if not identity:
+        return None
+    report_type, _ = identity
+    if report_type == "details" and isinstance(value, MFLLeagueDetails):
+        data = {
+            "name": value.name,
+            "divisions": [list(item) for item in value.divisions],
+            "franchises": {
+                franchise_id: {
+                    "id": franchise.id,
+                    "name": franchise.name,
+                    "division_id": franchise.division_id,
+                    "logo_url": franchise.logo_url,
+                    "faab_balance": franchise.faab_balance,
+                    "waiver_order": franchise.waiver_order,
+                }
+                for franchise_id, franchise in value.franchises.items()
+            },
+            "start_week": value.start_week,
+            "end_week": value.end_week,
+            "last_regular_season_week": value.last_regular_season_week,
+            "faab_limit": value.faab_limit,
+            "history_years": list(value.history_years),
+            "history_leagues": [
+                {"year": item.year, "league_id": item.league_id, "url": item.url}
+                for item in value.history_leagues
+            ],
+        }
+    elif report_type == "schedule" and isinstance(value, (tuple, list)):
+        data = [
+            {"week": item.week, "team_ids": list(item.team_ids), "scores": list(item.scores)}
+            for item in value if isinstance(item, MFLFantasyGame)
+        ]
+    elif report_type == "lineup-settings" and isinstance(value, MFLLineupSettings):
+        data = {
+            "starter_count": value.starter_count,
+            "rules": [
+                {"name": rule.name, "minimum": rule.minimum, "maximum": rule.maximum}
+                for rule in value.rules
+            ],
+        }
+    elif report_type == "league-rosters" and isinstance(value, dict):
+        data = {
+            str(franchise_id): sorted(str(player_id) for player_id in player_ids)
+            for franchise_id, player_ids in value.items()
+            if isinstance(player_ids, (set, tuple, list))
+        }
+    elif report_type == "standings" and isinstance(value, list):
+        data = value
+    elif report_type == "players" and isinstance(value, dict):
+        data = {
+            str(player_id): {
+                "id": player.id,
+                "name": player.name,
+                "position": player.position,
+                "team": player.team,
+                "espn_id": player.espn_id,
+                "jersey": player.jersey,
+                "college": player.college,
+                "height": player.height,
+                "weight": player.weight,
+                "draft_year": player.draft_year,
+            }
+            for player_id, player in value.items()
+            if isinstance(player, MFLPlayer)
+        }
+    elif report_type == "nfl-schedule" and isinstance(value, (tuple, list)) and len(value) == 2:
+        kickoffs, games = value
+        if not isinstance(kickoffs, dict) or not isinstance(games, dict):
+            return None
+        data = {"kickoffs": kickoffs, "games": games}
+    elif report_type == "reference-projections" and isinstance(value, ProjectionBlend):
+        data = {
+            field_name: getattr(value, field_name)
+            for field_name in (
+                "scores", "mfl_scores", "ml_scores", "ml_matched", "generated_at",
+                "espn_ranks", "espn_matched", "espn_source",
+                "fantasypros_ranks", "fantasypros_matched", "fantasypros_source",
+                "cbs_ranks", "cbs_matched", "cbs_source",
+                "combined_ranks", "combined_matched", "combined_source",
+            )
+        }
+    elif report_type == "league-intelligence" and isinstance(value, dict):
+        rankings = value.get("rankings")
+        recap = value.get("recap")
+        rounds = value.get("playoff_rounds")
+        if not isinstance(rankings, (tuple, list)) or not isinstance(recap, LeagueRecap) \
+                or not isinstance(rounds, (tuple, list)):
+            return None
+        data = {
+            "rankings": [
+                {
+                    field_name: getattr(row, field_name)
+                    for field_name in (
+                        "franchise_id", "name", "wins", "losses", "ties",
+                        "points_for", "points_against", "expected_wins", "recent_form",
+                        "form_weeks", "power_score", "rank",
+                    )
+                }
+                for row in rankings if isinstance(row, TeamIntelligence)
+            ],
+            "recap": {
+                "week": recap.week, "headline": recap.headline, "story": recap.story,
+                "awards": [list(item) for item in recap.awards],
+            },
+            "playoff_seeds": list(value.get("playoff_seeds") or ()),
+            "playoff_rounds": [
+                {
+                    "name": playoff_round.name,
+                    "games": [
+                        {
+                            "week": item.game.week,
+                            "team_ids": list(item.game.team_ids),
+                            "scores": list(item.game.scores),
+                            "probability": list(item.probability) if item.probability else None,
+                            "seeds": list(item.seeds),
+                            "projected_advancement": item.projected_advancement,
+                        }
+                        for item in playoff_round.games
+                    ],
+                }
+                for playoff_round in rounds if isinstance(playoff_round, ProjectedPlayoffRound)
+            ],
+            "last_results_week": value.get("last_results_week"),
+            "last_week_results": [
+                {
+                    "week": row.get("week"),
+                    "teams": [dict(team) for team in row.get("teams", ()) if isinstance(team, dict)],
+                }
+                for row in (value.get("last_week_results") or []) if isinstance(row, dict)
+            ],
+        }
+    elif report_type in {"franchise-names", "projections", "player-scores"} \
+            and isinstance(value, dict):
+        data = value
+    else:
+        return None
+    return {"version": 1, "report_type": report_type, "value": data}
+
+
+def _deserialize_report_snapshot(label: str, payload: dict) -> object | None:
+    """Restore only known report shapes from private JSON storage."""
+    identity = _persistent_report_identity(label)
+    if not identity or payload.get("version") != 1 or payload.get("report_type") != identity[0]:
+        return None
+    report_type, _ = identity
+    value = payload.get("value")
+    try:
+        if report_type == "details" and isinstance(value, dict):
+            raw_franchises = value.get("franchises")
+            if not isinstance(raw_franchises, dict) or len(raw_franchises) > 256:
+                return None
+            franchises = {
+                str(franchise_id): MFLFranchise(
+                    id=str(row.get("id") or franchise_id),
+                    name=str(row.get("name") or "")[:160],
+                    division_id=str(row.get("division_id") or "")[:64],
+                    logo_url=str(row.get("logo_url") or "")[:2048],
+                    faab_balance=(float(row["faab_balance"]) if row.get("faab_balance") is not None else None),
+                    waiver_order=(int(row["waiver_order"]) if row.get("waiver_order") is not None else None),
+                )
+                for franchise_id, row in raw_franchises.items()
+                if isinstance(row, dict)
+            }
+            divisions = tuple(
+                (str(row[0])[:64], str(row[1])[:160])
+                for row in value.get("divisions", [])
+                if isinstance(row, list) and len(row) == 2
+            )
+            history_leagues = tuple(
+                MFLHistoricalLeague(
+                    int(row["year"]), str(row["league_id"]), str(row.get("url") or "")[:2048],
+                )
+                for row in value.get("history_leagues", [])
+                if isinstance(row, dict) and str(row.get("league_id", "")).isdecimal()
+            )
+            return MFLLeagueDetails(
+                divisions=divisions,
+                franchises=franchises,
+                name=str(value.get("name") or "")[:160],
+                start_week=int(value.get("start_week", 1)),
+                end_week=int(value.get("end_week", 18)),
+                last_regular_season_week=int(value.get("last_regular_season_week", 14)),
+                faab_limit=(float(value["faab_limit"]) if value.get("faab_limit") is not None else None),
+                history_years=tuple(int(year) for year in value.get("history_years", [])),
+                history_leagues=history_leagues,
+            )
+        if report_type == "schedule" and isinstance(value, list) and len(value) <= 1_000:
+            return tuple(
+                MFLFantasyGame(
+                    int(row["week"]),
+                    tuple(str(team_id) for team_id in row["team_ids"]),
+                    tuple(float(score) if score is not None else None for score in row["scores"]),
+                )
+                for row in value
+                if isinstance(row, dict)
+                and isinstance(row.get("team_ids"), list)
+                and isinstance(row.get("scores"), list)
+            )
+        if report_type == "lineup-settings" and isinstance(value, dict):
+            rules = value.get("rules")
+            if not isinstance(rules, list) or len(rules) > 64:
+                return None
+            return MFLLineupSettings(
+                starter_count=int(value["starter_count"]),
+                rules=tuple(
+                    MFLLineupRule(str(row["name"]), int(row["minimum"]), int(row["maximum"]))
+                    for row in rules if isinstance(row, dict)
+                ),
+            )
+        if report_type == "league-rosters" and isinstance(value, dict) and len(value) <= 256:
+            return {
+                str(franchise_id): {str(player_id) for player_id in player_ids}
+                for franchise_id, player_ids in value.items()
+                if isinstance(player_ids, list) and len(player_ids) <= 256
+            }
+        if report_type == "standings" and isinstance(value, list) and len(value) <= 256:
+            return [row for row in value if isinstance(row, dict)]
+        if report_type == "franchise-names" and isinstance(value, dict) and len(value) <= 256:
+            return {str(key): str(item)[:160] for key, item in value.items()}
+        if report_type == "players" and isinstance(value, dict) and len(value) <= 20_000:
+            players = {
+                str(player_id): MFLPlayer.from_dict(row)
+                for player_id, row in value.items()
+                if isinstance(row, dict) and str(row.get("id") or player_id)
+            }
+            return players if players else None
+        if report_type == "nfl-schedule" and isinstance(value, dict):
+            raw_kickoffs, raw_games = value.get("kickoffs"), value.get("games")
+            if not isinstance(raw_kickoffs, dict) or not isinstance(raw_games, dict) \
+                    or len(raw_kickoffs) > 64 or len(raw_games) > 64:
+                return None
+            kickoffs = {str(team)[:8]: int(kickoff) for team, kickoff in raw_kickoffs.items()}
+            games = {
+                str(team)[:8]: {
+                    "opponent": str(row.get("opponent") or "")[:32],
+                    "opponent_team": str(row.get("opponent_team") or "")[:8],
+                    "kickoff": int(row.get("kickoff") or 0),
+                    "final": bool(row.get("final", False)),
+                }
+                for team, row in raw_games.items() if isinstance(row, dict)
+            }
+            return kickoffs, games
+        if report_type == "reference-projections" and isinstance(value, dict):
+            def score_map(name: str, *, optional: bool = False) -> dict[str, float] | None:
+                rows = value.get(name)
+                if rows is None and optional:
+                    return None
+                if not isinstance(rows, dict) or len(rows) > 20_000:
+                    return {}
+                return {str(key): float(item) for key, item in rows.items()}
+
+            return ProjectionBlend(
+                scores=score_map("scores"), mfl_scores=score_map("mfl_scores"),
+                ml_scores=score_map("ml_scores"), ml_matched=int(value.get("ml_matched") or 0),
+                generated_at=(str(value["generated_at"])[:160] if value.get("generated_at") else None),
+                espn_ranks=score_map("espn_ranks", optional=True), espn_matched=int(value.get("espn_matched") or 0),
+                espn_source=(str(value["espn_source"])[:256] if value.get("espn_source") else None),
+                fantasypros_ranks=score_map("fantasypros_ranks", optional=True),
+                fantasypros_matched=int(value.get("fantasypros_matched") or 0),
+                fantasypros_source=(str(value["fantasypros_source"])[:256] if value.get("fantasypros_source") else None),
+                cbs_ranks=score_map("cbs_ranks", optional=True), cbs_matched=int(value.get("cbs_matched") or 0),
+                cbs_source=(str(value["cbs_source"])[:256] if value.get("cbs_source") else None),
+                combined_ranks=score_map("combined_ranks", optional=True),
+                combined_matched=int(value.get("combined_matched") or 0),
+                combined_source=(str(value["combined_source"])[:256] if value.get("combined_source") else None),
+            )
+        if report_type == "league-intelligence" and isinstance(value, dict):
+            raw_rankings = value.get("rankings")
+            raw_rounds = value.get("playoff_rounds")
+            raw_recap = value.get("recap")
+            raw_results = value.get("last_week_results")
+            if not isinstance(raw_rankings, list) or len(raw_rankings) > 256 \
+                    or not isinstance(raw_rounds, list) or len(raw_rounds) > 8 \
+                    or not isinstance(raw_recap, dict) \
+                    or not isinstance(raw_results, list) or len(raw_results) > 64:
+                return None
+            rankings = tuple(
+                TeamIntelligence(
+                    franchise_id=str(row["franchise_id"])[:64],
+                    name=str(row["name"])[:160], wins=float(row["wins"]),
+                    losses=float(row["losses"]), ties=float(row["ties"]),
+                    points_for=float(row["points_for"]),
+                    points_against=float(row["points_against"]),
+                    expected_wins=float(row["expected_wins"]),
+                    recent_form=float(row["recent_form"]),
+                    form_weeks=int(row["form_weeks"]),
+                    power_score=float(row["power_score"]), rank=int(row["rank"]),
+                )
+                for row in raw_rankings if isinstance(row, dict)
+            )
+            recap = LeagueRecap(
+                int(raw_recap["week"]) if raw_recap.get("week") is not None else None,
+                str(raw_recap.get("headline") or "")[:240],
+                str(raw_recap.get("story") or "")[:2000],
+                tuple(
+                    (str(item[0])[:160], str(item[1])[:240])
+                    for item in raw_recap.get("awards", [])
+                    if isinstance(item, list) and len(item) == 2
+                ),
+            )
+            rounds = []
+            for raw_round in raw_rounds:
+                if not isinstance(raw_round, dict) or not isinstance(raw_round.get("games"), list) \
+                        or len(raw_round["games"]) > 16:
+                    return None
+                games = []
+                for row in raw_round["games"]:
+                    if not isinstance(row, dict):
+                        continue
+                    probability = row.get("probability")
+                    seeds = row.get("seeds")
+                    team_ids = row.get("team_ids")
+                    scores = row.get("scores")
+                    if not isinstance(team_ids, list) or len(team_ids) != 2 \
+                            or not isinstance(scores, list) or len(scores) != 2 \
+                            or not isinstance(seeds, list) or len(seeds) != 2:
+                        return None
+                    games.append(ProjectedPlayoffGame(
+                        game=MFLFantasyGame(
+                            int(row["week"]), tuple(str(item) for item in team_ids),
+                            tuple(float(item) if item is not None else None for item in scores),
+                        ),
+                        probability=(tuple(int(item) for item in probability) if isinstance(probability, list) and len(probability) == 2 else None),
+                        seeds=tuple(int(item) for item in seeds),
+                        projected_advancement=bool(row.get("projected_advancement", False)),
+                    ))
+                rounds.append(ProjectedPlayoffRound(str(raw_round.get("name") or "")[:80], tuple(games)))
+            seeds = value.get("playoff_seeds")
+            if not isinstance(seeds, list) or len(seeds) > 32:
+                return None
+            last_week_results = []
+            for row in raw_results:
+                if not isinstance(row, dict) or not isinstance(row.get("teams"), list) \
+                        or len(row["teams"]) > 32:
+                    return None
+                last_week_results.append({
+                    "week": int(row["week"]),
+                    "teams": tuple(
+                        {
+                            "id": str(team.get("id") or "")[:64],
+                            "name": str(team.get("name") or "")[:160],
+                            "logo_url": str(team.get("logo_url") or "")[:2048],
+                            "score": float(team["score"]) if team.get("score") is not None else None,
+                            "winner": bool(team.get("winner", False)),
+                        }
+                        for team in row["teams"] if isinstance(team, dict)
+                    ),
+                })
+            return {
+                "rankings": rankings,
+                "recap": recap,
+                "playoff_seeds": tuple(str(item) for item in seeds),
+                "playoff_rounds": tuple(rounds),
+                "last_results_week": (
+                    int(value["last_results_week"])
+                    if value.get("last_results_week") is not None else None
+                ),
+                "last_week_results": last_week_results,
+            }
+        if report_type in {"projections", "player-scores"} and isinstance(value, dict) \
+                and len(value) <= 10_000:
+            return {str(key): float(item) for key, item in value.items()}
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+    return None
+
+
+def _load_database_report_snapshot(
+    current: BrowserSession, league_id: str, label: str, stale_ttl: int,
+) -> dict[str, object] | None:
+    identity = _persistent_report_identity(label)
+    location = _persistent_report_location(current, league_id, label)
+    if not identity or not location or not os.environ.get("WP_DATABASE_URL", "").strip():
+        return None
+    _schedule_database_maintenance()
+    storage_scope, storage_league_id = location
+    try:
+        stored = _persistent_store().load_league_report_snapshot(
+            storage_scope,
+            year=current.year,
+            league_id=storage_league_id,
+            report_type=identity[0],
+            report_key=identity[1],
+            stale_seconds=stale_ttl,
+        )
+    except Exception as error:
+        _log_provider_error_once(current, league_id, "league_report_snapshot_load_failed", error, window=1800)
+        return None
+    if not stored or not isinstance(stored.get("payload"), dict):
+        return None
+    value = _deserialize_report_snapshot(label, stored["payload"])
+    if value is None:
+        return None
+    if label == "players" and isinstance(value, dict):
+        current.player_catalog = value
+    return {
+        "value": value,
+        "captured_at": int(stored.get("captured_at") or 0),
+        "expires_at": int(stored.get("expires_at") or 0),
+    }
+
+
+def _save_database_report_snapshot(
+    current: BrowserSession, league_id: str, label: str, value: object,
+    ttl: int, stale_ttl: int,
+) -> None:
+    identity = _persistent_report_identity(label)
+    payload = _serialize_report_snapshot(label, value)
+    location = _persistent_report_location(current, league_id, label)
+    if not identity or payload is None or not location \
+            or not os.environ.get("WP_DATABASE_URL", "").strip():
+        return
+    storage_scope, storage_league_id = location
+    try:
+        _persistent_store().save_league_report_snapshot(
+            storage_scope,
+            year=current.year,
+            league_id=storage_league_id,
+            report_type=identity[0],
+            report_key=identity[1],
+            payload=payload,
+            ttl_seconds=ttl,
+            stale_seconds=stale_ttl,
+        )
+    except Exception as error:
+        _log_provider_error_once(current, league_id, "league_report_snapshot_save_failed", error, window=1800)
+
+
+def _delete_database_report_snapshot(
+    current: BrowserSession, league_id: str, label: str,
+) -> None:
+    identity = _persistent_report_identity(label)
+    location = _persistent_report_location(current, league_id, label)
+    if not identity or not location or not os.environ.get("WP_DATABASE_URL", "").strip():
+        return
+    storage_scope, storage_league_id = location
+    try:
+        _persistent_store().delete_league_report_snapshot(
+            storage_scope,
+            year=current.year,
+            league_id=storage_league_id,
+            report_type=identity[0],
+            report_key=identity[1],
+        )
+    except Exception as error:
+        _log_provider_error_once(current, league_id, "league_report_snapshot_delete_failed", error, window=1800)
+
+
+def _store_shared_read(shared_key: str, entry: tuple[float, object]) -> None:
+    """Keep the process cache bounded even when a background refresh writes it."""
+    if not shared_key:
+        return
+    now = time.monotonic()
+    with shared_read_lock:
+        expired = [key for key, item in shared_read_cache.items() if item[0] <= now]
+        for key in expired:
+            shared_read_cache.pop(key, None)
+        if len(shared_read_cache) >= _SHARED_READ_CACHE_LIMIT \
+                and shared_key not in shared_read_cache:
+            oldest = min(shared_read_cache, key=lambda key: shared_read_cache[key][0])
+            shared_read_cache.pop(oldest, None)
+        shared_read_cache[shared_key] = entry
+
+
+def _schedule_database_maintenance() -> None:
+    """Run one bounded cache-prune batch at most every six hours per process."""
+    global _cache_maintenance_due
+    if not os.environ.get("WP_DATABASE_URL", "").strip():
+        return
+    now = time.monotonic()
+    with _cache_maintenance_lock:
+        if _cache_maintenance_due > now:
+            return
+        _cache_maintenance_due = now + 6 * 3600
+
+    def maintain() -> None:
+        started = time.perf_counter()
+        try:
+            store = _persistent_store()
+            prune = getattr(store, "prune_expired_provider_cache", None)
+            removed = int(prune() if callable(prune) else 0)
+            elapsed = (time.perf_counter() - started) * 1000
+            cache_telemetry.record("maintenance_run", elapsed_ms=elapsed)
+            cache_telemetry.record("maintenance_rows", amount=removed)
+            log_event(
+                "cache_maintenance", removed_rows=removed,
+                duration_ms=elapsed,
+            )
+        except Exception as error:
+            cache_telemetry.record("maintenance_error")
+            log_error("cache_maintenance_failed", error)
+
+    try:
+        _cache_refresh_executor.submit(maintain)
+    except RuntimeError:
+        with _cache_maintenance_lock:
+            _cache_maintenance_due = 0.0
+
+
+def _schedule_report_refresh(
+    current: BrowserSession,
+    league_id: str,
+    label: str,
+    loader,
+    *,
+    ttl: int,
+    stale_ttl: int,
+    shared: bool,
+    shared_key: str,
+    cache_key: str,
+) -> bool:
+    """Coalesce a safe display-report refresh and return without blocking the page."""
+    if not os.environ.get("WP_DATABASE_URL", "").strip() \
+            or not _persistent_report_identity(label) \
+            or not _persistent_report_location(current, league_id, label):
+        return False
+    scope = current.owner_fingerprint or _GLOBAL_REPORT_SCOPE
+    refresh_key = hashlib.sha256(
+        f"{scope}:{current.year}:{league_id}:{label}".encode("utf-8")
+    ).hexdigest()
+    with _cache_refresh_lock:
+        if refresh_key in _cache_refresh_pending:
+            cache_telemetry.record("background_coalesced")
+            return True
+        if len(_cache_refresh_pending) >= _CACHE_REFRESH_LIMIT:
+            cache_telemetry.record("background_rejected")
+            return False
+        _cache_refresh_pending.add(refresh_key)
+
+    def refresh() -> None:
+        started = time.perf_counter()
+        try:
+            if current.provider_cooldowns.get(league_id, 0) > time.monotonic():
+                cache_telemetry.record("background_cooldown")
+                return
+            value = loader()
+            entry = (time.monotonic() + max(1, ttl), value)
+            with current.read_lock:
+                current.read_cache[cache_key] = entry
+                current.cache_observed_at[cache_key] = time.monotonic()
+            if shared and shared_key:
+                _store_shared_read(shared_key, entry)
+            _save_database_report_snapshot(
+                current, league_id, label, value, ttl, stale_ttl,
+            )
+            current.provider_cooldowns.pop(league_id, None)
+            elapsed = (time.perf_counter() - started) * 1000
+            cache_telemetry.record("background_completed", elapsed_ms=elapsed)
+            log_event(
+                "cache_background_refresh",
+                report_type=_persistent_report_identity(label)[0],
+                duration_ms=elapsed,
+            )
+        except MFLRateLimitError as error:
+            current.provider_cooldowns[league_id] = time.monotonic() + error.retry_after
+            cache_telemetry.record("background_rate_limited")
+            _log_provider_error_once(
+                current, league_id, "cache_background_refresh_rate_limited", error,
+                window=error.retry_after,
+            )
+        except MFLApiError as error:
+            cache_telemetry.record("background_provider_error")
+            _log_provider_error_once(
+                current, league_id, "cache_background_refresh_failed", error, window=1800,
+            )
+        except Exception as error:
+            cache_telemetry.record("background_error")
+            log_error("cache_background_refresh_failed", error)
+        finally:
+            with _cache_refresh_lock:
+                _cache_refresh_pending.discard(refresh_key)
+
+    try:
+        _cache_refresh_executor.submit(refresh)
+    except RuntimeError:
+        with _cache_refresh_lock:
+            _cache_refresh_pending.discard(refresh_key)
+        return False
+    cache_telemetry.record("background_queued")
+    return True
+
+
 def _database_history_summary(
     current: BrowserSession, league_id: str,
 ) -> tuple[dict[str, object], ...]:
@@ -1174,12 +1853,21 @@ def _cached_session_read(
     """
     ttl = _report_cache_ttl(label, ttl)
     shared = shared or _report_cache_is_stable(label)
-    cache_key = f"{current.year}:{league_id}:report:{label}"
+    cache_league_id = "mfl-global" if _global_report(label) else league_id
+    cache_key = f"{current.year}:{cache_league_id}:report:{label}"
+
+    def remember(value):
+        if label == "players" and isinstance(value, dict):
+            current.player_catalog = value
+        return value
+
     with current.read_lock:
         now = time.monotonic()
+        wall_now = int(time.time())
         cached = current.read_cache.get(cache_key)
         if cached and cached[0] > now:
-            return cached[1]
+            cache_telemetry.record("memory_hit")
+            return remember(cached[1])
         shared_key = ""
         if shared:
             owner_scope = hashlib.sha256(current.mfl_cookie.encode("utf-8")).hexdigest()
@@ -1190,43 +1878,91 @@ def _cached_session_read(
                 current.read_cache[cache_key] = shared_cached
                 cached = shared_cached
                 if shared_cached[0] > now:
-                    return shared_cached[1]
+                    cache_telemetry.record("shared_hit")
+                    return remember(shared_cached[1])
         stale = cached if cached and cached[0] + max(0, stale_ttl) > now else None
+        persistent_stale = None
+        if not stale and _persistent_report_identity(label):
+            database_started = time.perf_counter()
+            stored = _load_database_report_snapshot(current, league_id, label, stale_ttl)
+            cache_telemetry.record(
+                "database_lookup",
+                elapsed_ms=(time.perf_counter() - database_started) * 1000,
+            )
+            if stored:
+                value = stored["value"]
+                expires_at = int(stored["expires_at"])
+                if expires_at > wall_now:
+                    cache_telemetry.record("database_hit")
+                    remaining = max(1, min(ttl, expires_at - wall_now))
+                    entry = (time.monotonic() + remaining, value)
+                    current.read_cache[cache_key] = entry
+                    current.cache_observed_at[cache_key] = time.monotonic()
+                    if shared and shared_key:
+                        _store_shared_read(shared_key, entry)
+                    return remember(value)
+                persistent_stale = value
         cooldown_until = current.provider_cooldowns.get(league_id, 0)
         if cooldown_until > now:
             if stale:
-                return stale[1]
+                cache_telemetry.record("stale_hit")
+                return remember(stale[1])
+            if persistent_stale is not None:
+                cache_telemetry.record("stale_hit")
+                return remember(persistent_stale)
             remaining = max(1, math.ceil(cooldown_until - now))
             raise MFLRateLimitError(
                 f"MFL reads are paused for {remaining} seconds after a rate limit. "
                 "Cached reports are reused where available.",
                 retry_after=remaining,
             )
+        stale_value = stale[1] if stale else persistent_stale
+        if stale_value is not None and _schedule_report_refresh(
+            current, league_id, label, loader,
+            ttl=ttl, stale_ttl=stale_ttl, shared=shared,
+            shared_key=shared_key, cache_key=cache_key,
+        ):
+            cache_telemetry.record("stale_hit")
+            return remember(stale_value)
+        provider_started = time.perf_counter()
         try:
             value = loader()
         except MFLRateLimitError as error:
+            cache_telemetry.record(
+                "provider_rate_limited",
+                elapsed_ms=(time.perf_counter() - provider_started) * 1000,
+            )
             current.provider_cooldowns[league_id] = now + error.retry_after
             if stale:
-                return stale[1]
+                cache_telemetry.record("stale_hit")
+                return remember(stale[1])
+            if persistent_stale is not None:
+                cache_telemetry.record("stale_hit")
+                return remember(persistent_stale)
             raise
         except MFLApiError:
+            cache_telemetry.record(
+                "provider_error",
+                elapsed_ms=(time.perf_counter() - provider_started) * 1000,
+            )
             if stale:
-                return stale[1]
+                cache_telemetry.record("stale_hit")
+                return remember(stale[1])
+            if persistent_stale is not None:
+                cache_telemetry.record("stale_hit")
+                return remember(persistent_stale)
             raise
+        cache_telemetry.record(
+            "provider_read", elapsed_ms=(time.perf_counter() - provider_started) * 1000,
+        )
         current.provider_cooldowns.pop(league_id, None)
         entry = (time.monotonic() + max(1, ttl), value)
         current.read_cache[cache_key] = entry
         current.cache_observed_at[cache_key] = time.monotonic()
         if shared and shared_key:
-            with shared_read_lock:
-                expired = [key for key, item in shared_read_cache.items() if item[0] <= now]
-                for key in expired:
-                    shared_read_cache.pop(key, None)
-                if len(shared_read_cache) >= _SHARED_READ_CACHE_LIMIT:
-                    oldest = min(shared_read_cache, key=lambda key: shared_read_cache[key][0])
-                    shared_read_cache.pop(oldest, None)
-                shared_read_cache[shared_key] = entry
-        return value
+            _store_shared_read(shared_key, entry)
+        _save_database_report_snapshot(current, league_id, label, value, ttl, stale_ttl)
+        return remember(value)
 
 
 def _seconds_until_daily_refresh(now: datetime | None = None) -> int:
@@ -1271,6 +2007,8 @@ def _home_matchup_week(current_week: int, view: str = "", now: datetime | None =
 
 def _report_cache_ttl(label: str, requested_ttl: int) -> int:
     """Apply conservative refresh ceilings to stable read-only reports."""
+    if label == "players":
+        return 86400
     if label == "franchise-names" or label.startswith("nfl-schedule:"):
         return _WEEKLY_STATIC_TTL
     if label.startswith(("projections:", "reference-projections:")):
@@ -1301,6 +2039,12 @@ def _cache_status_metadata(raw_label: str) -> dict[str, str]:
             "label": "Franchise names",
             "detail": "The display names of every fantasy team in this league.",
             "cadence": "Checked weekly",
+        }
+    if raw_label == "players":
+        return {
+            "label": "MFL player catalog",
+            "detail": "Public player identities, positions and NFL teams shared across connected leagues.",
+            "cadence": "Checked daily",
         }
     if raw_label.startswith("nfl-schedule:"):
         week = raw_label.rsplit(":", 1)[-1]
@@ -1335,6 +2079,12 @@ def _cache_status_metadata(raw_label: str) -> dict[str, str]:
             "label": f"Reference projections · Week {week}".strip(),
             "detail": "Separately labeled ESPN and ML ranking context.",
             "cadence": "Checked at most twice daily",
+        }
+    if raw_label.startswith("league-intelligence:"):
+        return {
+            "label": "League intelligence",
+            "detail": "Power rankings, luck, recap, last results and projected playoff bracket computed from official league reports.",
+            "cadence": "Rebuilt when standings, schedule or scoring week changes",
         }
     return {
         "label": raw_label.replace("-", " ").replace(":", " · "),
@@ -1452,6 +2202,7 @@ def _clear_report_cache(current: BrowserSession, league_id: str, *labels: str) -
         key = f"{current.year}:{league_id}:report:{label}"
         current.read_cache.pop(key, None)
         current.cache_observed_at.pop(key, None)
+        _delete_database_report_snapshot(current, league_id, label)
 
 
 def _pending_asset_label(asset: str, catalog: dict[str, MFLPlayer]) -> str:
@@ -1520,6 +2271,7 @@ def _invalidate_player_board(current: BrowserSession, league_id: str) -> None:
             and any(token in key for token in report_tokens)
         ):
             current.read_cache.pop(key, None)
+    _delete_database_report_snapshot(current, league_id, "league-rosters")
 
 
 def _standings_groups(rows: list[dict], details) -> list[dict]:
@@ -1544,6 +2296,100 @@ def _standings_groups(rows: list[dict], details) -> list[dict]:
 def _activity_time(timestamp: int | None) -> str:
     if timestamp is None:
         return "Time unavailable"
+
+
+def _league_intelligence_cache_key(
+    details: MFLLeagueDetails,
+    standings: list[dict],
+    schedule: tuple[MFLFantasyGame, ...],
+    current_week: int,
+) -> str:
+    """Fingerprint only the authoritative inputs used by deterministic intelligence."""
+    payload = {
+        "version": _LEAGUE_INTELLIGENCE_VERSION,
+        "current_week": current_week,
+        "last_regular_season_week": details.last_regular_season_week,
+        "divisions": list(details.divisions),
+        "franchises": {
+            team_id: {
+                "name": team.name,
+                "division_id": team.division_id,
+                "logo_url": team.logo_url,
+            }
+            for team_id, team in sorted(details.franchises.items())
+        },
+        "standings": standings,
+        "schedule": [
+            {
+                "week": game.week,
+                "team_ids": list(game.team_ids),
+                "scores": list(game.scores),
+            }
+            for game in schedule
+        ],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:32]
+
+
+def _build_league_intelligence_snapshot(
+    details: MFLLeagueDetails,
+    standings: list[dict],
+    schedule: tuple[MFLFantasyGame, ...],
+    current_week: int,
+) -> dict[str, object]:
+    """Compute the stable League HQ sections from official league inputs."""
+    names = {team_id: team.name for team_id, team in details.franchises.items()}
+    regular_schedule = tuple(
+        game for game in schedule if game.week <= details.last_regular_season_week
+    )
+    completed_games = [
+        game for game in regular_schedule
+        if game.week < current_week and len(game.team_ids) >= 2
+        and len(game.scores) == len(game.team_ids)
+        and all(score is not None for score in game.scores)
+    ]
+    last_results_week = max((game.week for game in completed_games), default=None)
+    last_week_results = []
+    if last_results_week is not None:
+        for game in completed_games:
+            if game.week != last_results_week:
+                continue
+            high_score = max(score for score in game.scores if score is not None)
+            last_week_results.append({
+                "week": game.week,
+                "teams": tuple({
+                    "id": team_id,
+                    "name": names.get(team_id, f"Team {team_id}"),
+                    "logo_url": details.franchises.get(team_id).logo_url
+                    if details.franchises.get(team_id) else "",
+                    "score": score,
+                    "winner": score == high_score and sum(
+                        candidate == high_score for candidate in game.scores
+                    ) == 1,
+                } for team_id, score in zip(game.team_ids, game.scores)),
+            })
+    rankings = build_power_rankings(regular_schedule, names, current_week=current_week)
+    rank_by_team = {row.franchise_id: row for row in rankings}
+    division_by_team = {
+        team_id: team.division_id for team_id, team in details.franchises.items()
+    }
+    seeds = build_playoff_seeds(
+        standings, division_by_team,
+        (division_id for division_id, _ in details.divisions), field_size=8,
+    )
+    playoff_rounds = build_projected_playoff_rounds(
+        seeds, rank_by_team,
+        first_playoff_week=details.last_regular_season_week + 1,
+    )
+    return {
+        "rankings": rankings,
+        "recap": build_recap(regular_schedule, names, current_week=current_week),
+        "playoff_seeds": seeds,
+        "playoff_rounds": playoff_rounds,
+        "last_results_week": last_results_week,
+        "last_week_results": last_week_results,
+    }
     try:
         value = datetime.fromtimestamp(timestamp)
         if os.name != "nt":
@@ -1626,46 +2472,25 @@ def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
         ), {},
     )
     _remember_catalog(current, client)
-    regular_schedule = tuple(game for game in schedule if game.week <= details.last_regular_season_week)
-    completed_games = [
-        game for game in regular_schedule
-        if game.week < current_week and len(game.team_ids) >= 2
-        and len(game.scores) == len(game.team_ids)
-        and all(score is not None for score in game.scores)
-    ]
-    last_results_week = max((game.week for game in completed_games), default=None)
-    last_week_results = []
-    if last_results_week is not None:
-        for game in completed_games:
-            if game.week != last_results_week:
-                continue
-            high_score = max(score for score in game.scores if score is not None)
-            last_week_results.append({
-                "week": game.week,
-                "teams": tuple({
-                    "id": team_id,
-                    "name": names.get(team_id, f"Team {team_id}"),
-                    "logo_url": details.franchises.get(team_id).logo_url
-                    if details.franchises.get(team_id) else "",
-                    "score": score,
-                    "winner": score == high_score and sum(
-                        candidate == high_score for candidate in game.scores
-                    ) == 1,
-                } for team_id, score in zip(game.team_ids, game.scores)),
-            })
-    rankings = build_power_rankings(regular_schedule, names, current_week=current_week)
+    intelligence_label = "league-intelligence:" + _league_intelligence_cache_key(
+        details, standings, schedule, current_week,
+    )
+    intelligence = _cached_session_read(
+        current,
+        selected.id,
+        intelligence_label,
+        lambda: _build_league_intelligence_snapshot(
+            details, standings, schedule, current_week,
+        ),
+        ttl=daily_ttl,
+        stale_ttl=_LEAGUE_STATIC_STALE_TTL,
+        shared=True,
+    )
+    rankings = intelligence["rankings"]
     rank_by_team = {row.franchise_id: row for row in rankings}
-    recap = build_recap(regular_schedule, names, current_week=current_week)
     trends = waiver_trends(activity)
-    division_by_team = {team_id: team.division_id for team_id, team in details.franchises.items()}
-    seeds = build_playoff_seeds(
-        standings, division_by_team, (division_id for division_id, _ in details.divisions), field_size=8,
-    )
-    playoff_rounds = build_projected_playoff_rounds(
-        seeds,
-        rank_by_team,
-        first_playoff_week=details.last_regular_season_week + 1,
-    )
+    seeds = intelligence["playoff_seeds"]
+    playoff_rounds = intelligence["playoff_rounds"]
     playoff_games = list(playoff_rounds[0].games) if playoff_rounds else []
     result = {
         "details": details,
@@ -1675,15 +2500,15 @@ def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
         "standings": standings,
         "groups": _standings_groups(standings, details),
         "schedule": schedule,
-        "last_results_week": last_results_week,
-        "last_week_results": last_week_results,
+        "last_results_week": intelligence["last_results_week"],
+        "last_week_results": intelligence["last_week_results"],
         "activity": activity,
         "message_threads": message_threads,
         "chat_messages": chat_messages,
         "catalog": catalog,
         "rankings": rankings,
         "rank_by_team": rank_by_team,
-        "recap": recap,
+        "recap": intelligence["recap"],
         "trends": trends[:12],
         "playoff_games": playoff_games,
         "playoff_rounds": playoff_rounds,
@@ -3808,6 +4633,16 @@ def data_status_page(
         _database_history_summary(current, selected.id)
         if int(database_status.get("schema_version") or 0) >= 3 else ()
     )
+    cache_metrics = cache_telemetry.snapshot()
+    log_event(
+        "cache_status",
+        hit_rate=float(cache_metrics.get("hit_rate") or 0),
+        cache_hits=int(cache_metrics.get("cache_hits") or 0),
+        provider_reads=int(cache_metrics.get("provider_read") or 0),
+        database_hits=int(cache_metrics.get("database_hit") or 0),
+        stale_hits=int(cache_metrics.get("stale_hit") or 0),
+        background_completed=int(cache_metrics.get("background_completed") or 0),
+    )
     return templates.TemplateResponse(request=request, name="tools.html", context={
         "session": current, "league": selected, "active_tool": "data-status",
         "page": "data-status", "page_title": "Data status", "error": "",
@@ -3820,6 +4655,7 @@ def data_status_page(
         "history_imported": max(0, history_imported),
         "history_failed": max(0, history_failed),
         "history_reference": history_reference[:32],
+        "cache_metrics": cache_metrics,
     })
 
 
@@ -3833,8 +4669,13 @@ def refresh_data_status(
     prefix = f"{current.year}:{selected.id}:"
     for key in tuple(current.read_cache):
         if key.startswith(prefix):
+            label = key.split(":report:", 1)[-1]
+            _delete_database_report_snapshot(current, selected.id, label)
             current.read_cache.pop(key, None)
             current.cache_observed_at.pop(key, None)
+            owner_scope = hashlib.sha256(current.mfl_cookie.encode("utf-8")).hexdigest()
+            with shared_read_lock:
+                shared_read_cache.pop(f"{owner_scope}:{key}", None)
     return RedirectResponse(f"/data-status?league={selected.id}&refreshed=1", status_code=303)
 
 

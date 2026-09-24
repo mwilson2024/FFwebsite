@@ -3,11 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import secrets
 import sqlite3
 import time
+import atexit
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING, Any, Callable
 from urllib.parse import parse_qs, urlsplit
 
@@ -19,6 +22,8 @@ if TYPE_CHECKING:
 
 DEFAULT_REMEMBER_DAYS = 30
 MAX_REMEMBER_DAYS = 30
+_POSTGRES_POOLS: dict[str, Any] = {}
+_POSTGRES_POOLS_LOCK = Lock()
 
 
 def _private_directory() -> Path:
@@ -78,16 +83,49 @@ def _validated_database_url(value: str) -> str:
     return value
 
 
+def _database_pool_size() -> int:
+    try:
+        configured = int(os.environ.get("WP_DATABASE_POOL_SIZE", "4"))
+    except ValueError:
+        configured = 4
+    return max(1, min(8, configured))
+
+
+def _close_postgres_pools() -> None:
+    with _POSTGRES_POOLS_LOCK:
+        pools = list(_POSTGRES_POOLS.values())
+        _POSTGRES_POOLS.clear()
+    for pool in pools:
+        try:
+            pool.close()
+        except Exception:
+            pass
+
+
+atexit.register(_close_postgres_pools)
+
+
 def _postgres_connection(database_url: str):
     try:
-        import psycopg
+        from psycopg_pool import ConnectionPool
     except ImportError as error:  # pragma: no cover - exercised only by a misconfigured deployment
-        raise RuntimeError("PostgreSQL storage requires the psycopg package") from error
-    return psycopg.connect(
-        database_url,
-        connect_timeout=5,
-        application_name="weekly-projections-ml",
-    )
+        raise RuntimeError("PostgreSQL storage requires the psycopg pool package") from error
+    with _POSTGRES_POOLS_LOCK:
+        pool = _POSTGRES_POOLS.get(database_url)
+        if pool is None:
+            pool = ConnectionPool(
+                conninfo=database_url,
+                min_size=1,
+                max_size=_database_pool_size(),
+                timeout=5,
+                kwargs={
+                    "connect_timeout": 5,
+                    "application_name": "weekly-projections-ml",
+                },
+                open=True,
+            )
+            _POSTGRES_POOLS[database_url] = pool
+    return pool.connection(timeout=5)
 
 
 class EncryptedSessionStore:
@@ -537,6 +575,149 @@ class EncryptedSessionStore:
         if not isinstance(payload, dict):
             return None
         return {"payload": payload, "captured_at": self._epoch(row[1])}
+
+    @staticmethod
+    def _report_identity(report_type: str, report_key: str) -> tuple[str, str]:
+        normalized_type = str(report_type).strip().casefold()
+        normalized_key = str(report_key).strip()
+        if not re.fullmatch(r"[a-z0-9-]{1,64}", normalized_type):
+            raise ValueError("Report type is invalid")
+        if len(normalized_key) > 128 or any(ord(character) < 32 for character in normalized_key):
+            raise ValueError("Report key is invalid")
+        return normalized_type, normalized_key
+
+    def save_league_report_snapshot(
+        self,
+        owner_fingerprint: str,
+        *,
+        year: int,
+        league_id: str,
+        report_type: str,
+        report_key: str = "",
+        payload: dict[str, Any],
+        ttl_seconds: int,
+        stale_seconds: int = 0,
+    ) -> None:
+        """Atomically store a bounded, display-only league report."""
+        if not self.database_url:
+            return
+        if not owner_fingerprint or not str(league_id).isdecimal() or not 2020 <= int(year) <= 2100:
+            raise ValueError("A valid owner, MFL league, and season are required")
+        normalized_type, normalized_key = self._report_identity(report_type, report_key)
+        if not isinstance(payload, dict):
+            raise ValueError("League report snapshot payload must be an object")
+        encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+        if len(encoded.encode("utf-8")) > 10 * 1024 * 1024:
+            raise ValueError("League report snapshot exceeds the storage limit")
+        ttl = max(30, min(30 * 86400, int(ttl_seconds)))
+        stale = max(0, min(90 * 86400, int(stale_seconds)))
+        storage_key = normalized_type + (f":{normalized_key}" if normalized_key else "")
+        with self._connect_postgres() as connection:
+            connection.execute(
+                "INSERT INTO fantasy_hq.provider_cache "
+                "(scope_hash, season, league_id, report_key, payload, fetched_at, "
+                "fresh_until, stale_until, schema_version) "
+                "VALUES (%s, %s, %s, %s, %s::jsonb, now(), "
+                "now() + (%s * interval '1 second'), "
+                "now() + (%s * interval '1 second'), 1) "
+                "ON CONFLICT (scope_hash, season, league_id, report_key) DO UPDATE SET "
+                "payload = excluded.payload, fetched_at = now(), "
+                "fresh_until = excluded.fresh_until, stale_until = excluded.stale_until, "
+                "schema_version = excluded.schema_version",
+                (
+                    self._digest_bytes(owner_fingerprint), int(year), str(league_id),
+                    storage_key, encoded, ttl, ttl + stale,
+                ),
+            )
+
+    def load_league_report_snapshot(
+        self,
+        owner_fingerprint: str,
+        *,
+        year: int,
+        league_id: str,
+        report_type: str,
+        report_key: str = "",
+        stale_seconds: int = 0,
+    ) -> dict[str, Any] | None:
+        """Load a fresh report or one still inside its bounded stale window."""
+        if not self.database_url or not owner_fingerprint:
+            return None
+        if not str(league_id).isdecimal() or not 2020 <= int(year) <= 2100:
+            return None
+        normalized_type, normalized_key = self._report_identity(report_type, report_key)
+        storage_key = normalized_type + (f":{normalized_key}" if normalized_key else "")
+        with self._connect_postgres() as connection:
+            row = connection.execute(
+                "SELECT payload, fetched_at, fresh_until "
+                "FROM fantasy_hq.provider_cache "
+                "WHERE scope_hash = %s AND season = %s AND league_id = %s "
+                "AND report_key = %s AND schema_version = 1 "
+                "AND stale_until >= now()",
+                (
+                    self._digest_bytes(owner_fingerprint), int(year), str(league_id),
+                    storage_key,
+                ),
+            ).fetchone()
+        if not row:
+            return None
+        payload = row[0]
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError:
+                return None
+        if not isinstance(payload, dict):
+            return None
+        return {
+            "payload": payload,
+            "captured_at": self._epoch(row[1]),
+            "expires_at": self._epoch(row[2]),
+        }
+
+    def delete_league_report_snapshot(
+        self,
+        owner_fingerprint: str,
+        *,
+        year: int,
+        league_id: str,
+        report_type: str,
+        report_key: str = "",
+    ) -> None:
+        if not self.database_url or not owner_fingerprint:
+            return
+        normalized_type, normalized_key = self._report_identity(report_type, report_key)
+        storage_key = normalized_type + (f":{normalized_key}" if normalized_key else "")
+        with self._connect_postgres() as connection:
+            connection.execute(
+                "DELETE FROM fantasy_hq.provider_cache "
+                "WHERE scope_hash = %s AND season = %s AND league_id = %s "
+                "AND report_key = %s",
+                (
+                    self._digest_bytes(owner_fingerprint), int(year), str(league_id),
+                    storage_key,
+                ),
+            )
+
+    def prune_expired_provider_cache(
+        self, *, retention_seconds: int = 7 * 86400, batch_size: int = 500,
+    ) -> int:
+        """Delete one bounded batch of snapshots past their stale fallback window."""
+        if not self.database_url:
+            return 0
+        retention = max(86400, min(90 * 86400, int(retention_seconds)))
+        limit = max(1, min(2_000, int(batch_size)))
+        with self._connect_postgres() as connection:
+            rows = connection.execute(
+                "WITH expired AS ("
+                "SELECT ctid FROM fantasy_hq.provider_cache "
+                "WHERE stale_until < now() - (%s * interval '1 second') "
+                "ORDER BY stale_until LIMIT %s"
+                ") DELETE FROM fantasy_hq.provider_cache AS cache "
+                "USING expired WHERE cache.ctid = expired.ctid RETURNING 1",
+                (retention, limit),
+            ).fetchall()
+        return len(rows)
 
     def save_historical_season(
         self,

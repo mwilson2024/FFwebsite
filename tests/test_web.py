@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
+import time
 
 from fastapi.testclient import TestClient
 import pytest
@@ -871,6 +873,20 @@ def test_operations_schedule_rules_status_and_guide_pages_render(monkeypatch) ->
     assert "Supabase connected" in data_status.text
     assert "fantasy_hq · migration 2" in data_status.text
     assert "Connection details, passwords, tokens" in data_status.text
+    assert "Cache performance" in data_status.text
+    assert "cache_background_refresh" in data_status.text
+    deleted_reports = []
+    monkeypatch.setattr(
+        web_app, "_delete_database_report_snapshot",
+        lambda session, league_id, label: deleted_reports.append((league_id, label)),
+    )
+    refreshed = client.post(
+        "/data-status/refresh",
+        data={"league": "88882", "csrf_token": "csrf"},
+        follow_redirects=False,
+    )
+    assert refreshed.status_code == 303
+    assert any(league_id == "88882" for league_id, _ in deleted_reports)
     guide = client.get("/guide?league=88882")
     assert guide.status_code == 200 and "Four moves to get set" in guide.text
 
@@ -1316,6 +1332,293 @@ def test_player_market_snapshot_round_trip_keeps_only_display_state() -> None:
     assert board[0].projection is None
     assert "projection" not in payload["players"][0]
     assert "reason" not in payload["players"][0]
+
+
+def test_persistent_report_codecs_restore_domain_shapes() -> None:
+    details = MFLLeagueDetails(
+        (("01", "North"),),
+        {"0001": MFLFranchise("0001", "One", "01", faab_balance=87.0, waiver_order=2)},
+        name="League", history_years=(2025,),
+        history_leagues=(MFLHistoricalLeague(2025, "54321", "https://www1.myfantasyleague.com"),),
+    )
+    schedule = (MFLFantasyGame(3, ("0001", "0002"), (101.5, 99.0)),)
+    settings = MFLLineupSettings(2, (MFLLineupRule("QB", 1, 1), MFLLineupRule("RB", 1, 2)))
+    standings = [
+        {"id": "0001", "h2hw": "1", "h2hl": "0", "h2ht": "0", "pf": "101.5"},
+        {"id": "0002", "h2hw": "0", "h2hl": "1", "h2ht": "0", "pf": "99.0"},
+    ]
+    intelligence = web_app._build_league_intelligence_snapshot(
+        details, standings, schedule, 4,
+    )
+    values = {
+        "details": details,
+        "schedule": schedule,
+        "lineup-settings": settings,
+        "league-rosters": {"0001": {"101", "102"}},
+        "standings": [{"id": "0001", "h2hw": "2"}],
+        "franchise-names": {"0001": "One"},
+        "projections:3": {"101": 14.25},
+        "player-scores:ytd": {"101": 42.5},
+        "players": {"101": MFLPlayer("101", "Player One", "RB", "DET", "999")},
+        "nfl-schedule:3": (
+            {"DET": 1_800_000_000},
+            {"DET": {"opponent": "vs GB", "opponent_team": "GB", "kickoff": 1_800_000_000, "final": False}},
+        ),
+        "reference-projections:3:combined": ProjectionBlend(
+            scores={"101": 12.5}, mfl_scores={"101": 11.0}, ml_scores={"101": 13.0},
+            ml_matched=1, combined_ranks={"101": 2.0}, combined_matched=1,
+            combined_source="Combined positional consensus",
+        ),
+        "league-intelligence:test-fingerprint": intelligence,
+    }
+
+    restored = {
+        label: web_app._deserialize_report_snapshot(
+            label, json.loads(json.dumps(web_app._serialize_report_snapshot(label, value))),
+        )
+        for label, value in values.items()
+    }
+
+    assert restored["details"] == details
+    assert restored["schedule"] == schedule
+    assert restored["lineup-settings"] == settings
+    assert restored["league-rosters"] == {"0001": {"101", "102"}}
+    assert restored["standings"] == values["standings"]
+    assert restored["projections:3"] == {"101": 14.25}
+    assert restored["players"] == values["players"]
+    assert restored["nfl-schedule:3"] == values["nfl-schedule:3"]
+    assert restored["reference-projections:3:combined"] == values["reference-projections:3:combined"]
+    assert restored["league-intelligence:test-fingerprint"] == intelligence
+
+
+def test_league_intelligence_fingerprint_changes_with_authoritative_inputs() -> None:
+    details = MFLLeagueDetails(
+        (("01", "North"),),
+        {
+            "0001": MFLFranchise("0001", "One", "01"),
+            "0002": MFLFranchise("0002", "Two", "01"),
+        },
+    )
+    standings = [
+        {"id": "0001", "h2hw": "1", "h2hl": "0", "pf": "101.5"},
+        {"id": "0002", "h2hw": "0", "h2hl": "1", "pf": "99.0"},
+    ]
+    first_schedule = (MFLFantasyGame(1, ("0001", "0002"), (101.5, 99.0)),)
+    corrected_schedule = (MFLFantasyGame(1, ("0001", "0002"), (100.5, 100.0)),)
+
+    first = web_app._league_intelligence_cache_key(details, standings, first_schedule, 2)
+
+    assert first == web_app._league_intelligence_cache_key(
+        details, standings, first_schedule, 2,
+    )
+    assert first != web_app._league_intelligence_cache_key(
+        details, standings, corrected_schedule, 2,
+    )
+    assert first != web_app._league_intelligence_cache_key(
+        details, standings, first_schedule, 3,
+    )
+
+
+def test_league_intelligence_snapshot_restores_before_recomputation(monkeypatch) -> None:
+    current = web_app.BrowserSession(
+        "cookie", 2026, [MFLLeague("11111", "0001", "One")], "csrf",
+        owner_fingerprint="account:intelligence-owner",
+    )
+    details = MFLLeagueDetails(
+        (("01", "North"),),
+        {
+            "0001": MFLFranchise("0001", "One", "01"),
+            "0002": MFLFranchise("0002", "Two", "01"),
+        },
+    )
+    standings = [
+        {"id": "0001", "h2hw": "1", "h2hl": "0", "pf": "101.5"},
+        {"id": "0002", "h2hw": "0", "h2hl": "1", "pf": "99.0"},
+    ]
+    schedule = (MFLFantasyGame(1, ("0001", "0002"), (101.5, 99.0)),)
+    snapshot = web_app._build_league_intelligence_snapshot(details, standings, schedule, 2)
+    label = "league-intelligence:" + web_app._league_intelligence_cache_key(
+        details, standings, schedule, 2,
+    )
+    payload = json.loads(json.dumps(web_app._serialize_report_snapshot(label, snapshot)))
+
+    class SnapshotStore:
+        def load_league_report_snapshot(self, owner, **kwargs):
+            assert owner == "account:intelligence-owner"
+            assert kwargs["report_type"] == "league-intelligence"
+            return {
+                "payload": payload,
+                "captured_at": int(time.time()) - 10,
+                "expires_at": int(time.time()) + 600,
+            }
+
+    monkeypatch.setenv("WP_DATABASE_URL", "postgresql://configured")
+    monkeypatch.setattr(web_app, "_persistent_store", lambda: SnapshotStore())
+
+    restored = web_app._cached_session_read(
+        current, "11111", label,
+        lambda: pytest.fail("Fresh derived intelligence should not be recomputed"),
+        ttl=3600, stale_ttl=86400,
+    )
+
+    assert restored == snapshot
+
+
+def test_persistent_report_cache_reads_database_before_mfl(monkeypatch) -> None:
+    current = web_app.BrowserSession(
+        "cookie", 2026, [MFLLeague("11111", "0001", "One")], "csrf",
+        owner_fingerprint="account:cache-owner",
+    )
+    payload = web_app._serialize_report_snapshot(
+        "standings", [{"id": "0001", "h2hw": "3"}],
+    )
+
+    class SnapshotStore:
+        def load_league_report_snapshot(self, owner, **kwargs):
+            assert owner == "account:cache-owner"
+            assert kwargs["report_type"] == "standings"
+            return {
+                "payload": payload,
+                "captured_at": int(time.time()) - 10,
+                "expires_at": int(time.time()) + 600,
+            }
+
+    monkeypatch.setenv("WP_DATABASE_URL", "postgresql://configured")
+    monkeypatch.setattr(web_app, "_persistent_store", lambda: SnapshotStore())
+
+    result = web_app._cached_session_read(
+        current, "11111", "standings",
+        lambda: pytest.fail("A fresh database snapshot should avoid an MFL read"),
+        ttl=3600, stale_ttl=86400,
+    )
+
+    assert result == [{"id": "0001", "h2hw": "3"}]
+
+
+def test_persistent_report_cache_saves_successful_mfl_read(monkeypatch) -> None:
+    current = web_app.BrowserSession(
+        "cookie", 2026, [MFLLeague("11111", "0001", "One")], "csrf",
+        owner_fingerprint="account:cache-owner",
+    )
+    saved = []
+
+    class SnapshotStore:
+        def load_league_report_snapshot(self, owner, **kwargs):
+            return None
+
+        def save_league_report_snapshot(self, owner, **kwargs):
+            saved.append((owner, kwargs))
+
+    monkeypatch.setenv("WP_DATABASE_URL", "postgresql://configured")
+    monkeypatch.setattr(web_app, "_persistent_store", lambda: SnapshotStore())
+
+    result = web_app._cached_session_read(
+        current, "11111", "standings", lambda: [{"id": "0001"}],
+        ttl=3600, stale_ttl=86400,
+    )
+
+    assert result == [{"id": "0001"}]
+    assert saved[0][0] == "account:cache-owner"
+    assert saved[0][1]["report_type"] == "standings"
+    assert saved[0][1]["ttl_seconds"] == 3600
+    assert saved[0][1]["stale_seconds"] == 86400
+
+
+def test_stale_persistent_report_returns_immediately_and_queues_refresh(monkeypatch) -> None:
+    current = web_app.BrowserSession(
+        "cookie", 2026, [MFLLeague("11111", "0001", "One")], "csrf",
+        owner_fingerprint="account:cache-owner",
+    )
+    key = "2026:11111:report:standings"
+    current.read_cache[key] = (time.monotonic() - 1, [{"id": "0001", "h2hw": "3"}])
+    scheduled = []
+
+    monkeypatch.setattr(
+        web_app, "_schedule_report_refresh",
+        lambda *args, **kwargs: scheduled.append((args[2], kwargs["ttl"])) or True,
+    )
+
+    restored = web_app._cached_session_read(
+        current, "11111", "standings",
+        lambda: pytest.fail("The page must not wait for a stale report refresh"),
+        ttl=3600, stale_ttl=86400,
+    )
+
+    assert restored == [{"id": "0001", "h2hw": "3"}]
+    assert scheduled == [("standings", 3600)]
+
+
+def test_cache_telemetry_reports_hit_rate_and_latency() -> None:
+    telemetry = web_app.CacheTelemetry()
+    telemetry.record("memory_hit", amount=3)
+    telemetry.record("database_hit")
+    telemetry.record("database_lookup", elapsed_ms=12.0)
+    telemetry.record("provider_read", amount=2, elapsed_ms=40.0)
+
+    snapshot = telemetry.snapshot()
+
+    assert snapshot["cache_hits"] == 4
+    assert snapshot["requests"] == 6
+    assert snapshot["hit_rate"] == 66.7
+    assert snapshot["database_avg_ms"] == 12.0
+    assert snapshot["provider_avg_ms"] == 20.0
+
+
+def test_public_player_catalog_uses_global_database_scope(monkeypatch) -> None:
+    current = web_app.BrowserSession(
+        "private-cookie", 2026, [MFLLeague("11111", "0001", "One")], "csrf",
+        owner_fingerprint="account:private-owner",
+    )
+    catalog = {"101": MFLPlayer("101", "Player One", "RB", "DET")}
+    payload = web_app._serialize_report_snapshot("players", catalog)
+    observed = []
+
+    class SnapshotStore:
+        def load_league_report_snapshot(self, scope, **kwargs):
+            observed.append((scope, kwargs["league_id"], kwargs["report_type"]))
+            return {
+                "payload": payload,
+                "captured_at": int(time.time()) - 10,
+                "expires_at": int(time.time()) + 600,
+            }
+
+    monkeypatch.setenv("WP_DATABASE_URL", "postgresql://configured")
+    monkeypatch.setattr(web_app, "_persistent_store", lambda: SnapshotStore())
+    web_app.shared_read_cache.clear()
+
+    restored = web_app._cached_session_read(
+        current, "11111", "players",
+        lambda: pytest.fail("The shared player catalog should come from PostgreSQL"),
+        ttl=3600, stale_ttl=86400,
+    )
+
+    assert restored == catalog
+    assert current.player_catalog == catalog
+    assert observed == [(web_app._GLOBAL_REPORT_SCOPE, "0", "players")]
+
+
+def test_public_player_catalog_process_cache_remains_account_scoped(monkeypatch) -> None:
+    monkeypatch.delenv("WP_DATABASE_URL", raising=False)
+    web_app.shared_read_cache.clear()
+    first = web_app.BrowserSession(
+        "cookie-one", 2026, [MFLLeague("11111", "0001", "One")], "csrf-one",
+        owner_fingerprint="account:one",
+    )
+    second = web_app.BrowserSession(
+        "cookie-two", 2026, [MFLLeague("22222", "0002", "Two")], "csrf-two",
+        owner_fingerprint="account:two",
+    )
+    catalog = {"101": MFLPlayer("101", "Player One", "RB", "DET")}
+    calls = []
+
+    assert web_app._cached_session_read(
+        first, "11111", "players", lambda: calls.append("provider") or catalog,
+    ) == catalog
+    assert web_app._cached_session_read(
+        second, "22222", "players", lambda: calls.append("second-provider") or {},
+    ) == {}
+    assert calls == ["provider", "second-provider"]
+    assert second.player_catalog == {}
 
 
 def test_player_market_loader_reuses_brief_session_cache(monkeypatch) -> None:

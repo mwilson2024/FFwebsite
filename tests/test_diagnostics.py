@@ -27,6 +27,25 @@ def test_access_log_is_stdout_only_and_contains_safe_ip(monkeypatch):
     assert "query" not in text and "cookie" not in text
 
 
+def test_operational_event_log_keeps_metrics_and_drops_sensitive_strings(monkeypatch):
+    stream = io.StringIO()
+    logger = logging.Logger("isolated-operational")
+    logger.setLevel(logging.INFO)
+    logger.addHandler(logging.StreamHandler(stream))
+    monkeypatch.setattr(diagnostics, "_logger", logger)
+
+    diagnostics.log_event(
+        "cache_status", cache_hits=12, hit_rate=80.125,
+        report_type="standings", unsafe="postgresql://user:password@example.test/db",
+    )
+
+    text = stream.getvalue()
+    assert '"event": "cache_status"' in text
+    assert '"cache_hits": 12' in text and '"hit_rate": 80.125' in text
+    assert '"report_type": "standings"' in text
+    assert "postgresql" not in text and "password" not in text
+
+
 def test_error_log_does_not_capture_credentials_or_query_values(monkeypatch, tmp_path):
     logger = logging.Logger("isolated-test")
     monkeypatch.setattr(diagnostics, "_logger", logger)

@@ -91,7 +91,7 @@ WP_SESSION_SECRET=<your generated Fernet key>
 ## Supabase PostgreSQL on Azure App Service
 
 The application can use the free Supabase PostgreSQL project instead of the
-SQLite remembered-session file. The database must contain schema migrations 1–6 in
+SQLite remembered-session file. The database must contain schema migrations 1–7 in
 the private `fantasy_hq` schema. When `WP_DATABASE_URL` is absent, local and
 existing Railway deployments continue to use SQLite without any behavior change.
 
@@ -168,6 +168,60 @@ immediately after an Azure restart, then refresh ownership, availability, locks,
 projections, and recommendations from MFL in the background. Cached rows are
 browse-only: add/drop controls remain disabled until the refresh succeeds, and
 the normal live submission checks still run before every transaction.
+
+Apply [`supabase/migrations/007_league_report_snapshots.sql`](supabase/migrations/007_league_report_snapshots.sql)
+to activate the existing private `provider_cache` table as persistent read-through
+caching for league details, standings,
+the fantasy schedule, franchise names, all-team rosters, lineup settings, MFL
+weekly projections, and official player scoring summaries. Fresh snapshots are
+served immediately after an Azure restart. An expired snapshot is used only as
+a bounded fallback when MFL is unavailable or rate-limited; successful MFL reads
+replace it atomically. These reports are display-only and never bypass the live
+ownership, availability, lineup-lock, kickoff-lock, pending-action, or submission
+checks required for an MFL write.
+
+Apply [`supabase/migrations/008_provider_cache_maintenance.sql`](supabase/migrations/008_provider_cache_maintenance.sql)
+after migration 007. It adds the `stale_until` index used by the bounded cleanup
+job. The web process removes at most 500 long-expired snapshots once every six
+hours, keeping the free Supabase project small without a separate worker or cron
+service.
+
+The same private cache also stores two league-independent public feeds: the
+detailed MFL player catalog and each week's NFL kickoff/opponent schedule. Those
+rows use a fixed application scope rather than an MFL account scope, so the first
+connected user refreshes them and every league can reuse the result. No roster,
+standings, scoring, preference, credential, or transaction data crosses account
+or league boundaries. The player catalog is refreshed daily; the stable schedule
+is refreshed weekly, while live-scoring game-state checks remain separate.
+Third-party reference-ranking blends are cached for 12 hours inside their owning
+account and league because they incorporate that league's MFL-scored projection.
+
+League HQ's deterministic intelligence is also precomputed into a versioned
+private snapshot: last-week results, power/luck rankings, the weekly recap, and
+the locally projected playoff bracket. Its cache key is a hash of the official
+standings, fantasy schedule, division setup, team metadata, and current scoring
+week. A changed input therefore creates a new result automatically instead of
+serving an older calculation. Transaction trends, league chat, and message-board
+posts retain their shorter refresh windows and are not folded into this daily
+snapshot.
+
+Azure uses a small application-side PostgreSQL pool on top of Supabase's shared
+session pooler so repeated cache reads do not create a new TLS connection each
+time. The default maximum is four connections, suitable for the required single
+Uvicorn worker. `WP_DATABASE_POOL_SIZE` may be set from `1` through `8`, but the
+default should be retained unless Supabase connection metrics show a reason to
+change it. The PostgreSQL dependency includes the `binary` and `pool` extras in
+`requirements.txt`.
+
+When a persisted display report has expired but remains inside its safe fallback
+window, the page returns that snapshot immediately and refreshes it on one bounded
+background executor. Identical refreshes are coalesced and the queue is capped,
+so a busy page cannot fan out into duplicate MFL requests. Live transaction
+validation, score polling, lineup locks, and every MFL write remain outside this
+path. **Data status → Cache performance** shows per-process hit, latency,
+background-refresh, and cleanup counters. Azure Log stream receives the same
+privacy-bounded summaries as `cache_status`, `cache_background_refresh`, and
+`cache_maintenance` events; counters reset when the app restarts or redeploys.
 
 Database connection failures are written to standard output as the structured
 event `database_status_unavailable`. In Azure, enable **Monitoring → App Service
