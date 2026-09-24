@@ -484,8 +484,142 @@
   updateReviewState();
   if (filterPanel && window.matchMedia("(max-width: 760px)").matches && !search?.value) filterPanel.open = false;
 
+  const marketWorkspace = document.querySelector("[data-player-market-enrichment]");
+  const replaceMetric = (cell, value, secondary = "", className = "") => {
+    if (!cell) return;
+    cell.replaceChildren();
+    if (value === null || value === undefined || value === "") {
+      const missing = document.createElement("span");
+      missing.className = "no-data";
+      missing.textContent = "—";
+      cell.append(missing);
+      return;
+    }
+    const primary = document.createElement("strong");
+    primary.className = className;
+    primary.textContent = value;
+    cell.append(primary);
+    if (secondary) {
+      const note = document.createElement("small");
+      note.textContent = secondary;
+      cell.append(note);
+    }
+  };
+  const numberOr = (value, fallback) => value === null || value === undefined ? fallback : Number(value);
+  const enrichMarket = async () => {
+    const url = marketWorkspace?.dataset.playerMarketEnrichment;
+    if (!url || !rows.length) return;
+    try {
+      const response = await fetch(url, { headers: { "Accept": "application/json" } });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "Player intelligence is unavailable.");
+      rows.forEach((row) => {
+        const player = data.players?.[row.dataset.playerId];
+        if (!player) return;
+        row.dataset.projected = player.projection === null ? "missing" : "projected";
+        row.dataset.projection = String(numberOr(player.projection, -9999));
+        row.dataset.espnRank = String(numberOr(player.espn_rank, 9999));
+        row.dataset.combinedRank = String(numberOr(player.combined_rank, 9999));
+        row.dataset.ytd = String(numberOr(player.ytd, -9999));
+        row.dataset.avg = String(numberOr(player.average, -9999));
+        row.dataset.median = String(numberOr(player.median, -9999));
+        row.dataset.matchup = String(numberOr(player.matchup?.rank, 9999));
+        row.dataset.edge = String(numberOr(player.roster_delta, -9999));
+
+        const projectionDetail = ["MFL league"];
+        if (player.combined_rank !== null) projectionDetail.push(`Combined ${Number(player.combined_rank).toFixed(1)} ${row.dataset.position} rank`);
+        if (player.espn_rank !== null) projectionDetail.push(`ESPN #${Number(player.espn_rank).toFixed(1)}`);
+        if (player.ml_projection !== null) projectionDetail.push(`ML ${Number(player.ml_projection).toFixed(1)}`);
+        replaceMetric(row.querySelector(".projection-cell"), player.projection === null ? null : Number(player.projection).toFixed(1), projectionDetail.join(" · "));
+        replaceMetric(row.querySelector(".ytd-cell"), player.ytd === null ? null : Number(player.ytd).toFixed(1));
+        replaceMetric(row.querySelector(".avg-cell"), player.average === null ? null : Number(player.average).toFixed(1));
+        replaceMetric(row.querySelector(".median-cell"), player.median === null ? null : Number(player.median).toFixed(1), player.median === null ? "" : `Last ${player.median_window}`);
+        const matchupCell = row.querySelector(".matchup-cell");
+        matchupCell?.replaceChildren();
+        if (matchupCell && player.matchup) {
+          const badge = document.createElement("span");
+          badge.className = `opponent-strength ${player.matchup.tone || "neutral"}`;
+          badge.textContent = `${player.matchup.opponent} · #${player.matchup.rank} ${String(player.matchup.label || "").toLowerCase()}`;
+          const detail = document.createElement("small");
+          detail.textContent = `${Number(player.matchup.points_allowed).toFixed(1)} ${player.matchup.position} pts allowed`;
+          matchupCell.append(badge, detail);
+        } else if (matchupCell) {
+          const missing = document.createElement("span");
+          missing.className = "no-data";
+          missing.textContent = "—";
+          matchupCell.append(missing);
+        }
+        const delta = player.roster_delta;
+        replaceMetric(
+          row.querySelector(".edge-cell"),
+          delta === null ? null : `${delta > 0 ? "+" : ""}${Number(delta).toFixed(1)}`,
+          player.suggested_drop ? `vs ${player.suggested_drop}` : "",
+          delta >= 0.5 ? "positive" : delta < 0 ? "negative" : "",
+        );
+        const recommendationCell = row.querySelector(".recommendation-cell");
+        if (recommendationCell) {
+          recommendationCell.replaceChildren();
+          const label = document.createElement("span");
+          label.className = `recommendation ${player.recommendation_tone || "muted"}`;
+          label.textContent = player.recommendation;
+          const reason = document.createElement("small");
+          reason.className = "recommendation-reason";
+          reason.textContent = player.reason;
+          recommendationCell.append(label, reason);
+        }
+      });
+      const summaryTargets = {
+        "market-player-count": data.summary.player_count,
+        "market-available-count": data.summary.available_count,
+        "market-rostered-count": data.summary.rostered_count,
+        "market-projected-count": data.summary.projected_count,
+        "market-locked-count": data.summary.locked_count,
+      };
+      Object.entries(summaryTargets).forEach(([id, value]) => {
+        const target = document.getElementById(id);
+        if (target) target.textContent = value;
+      });
+      const source = document.getElementById("market-projection-source");
+      const ml = document.getElementById("market-ml-matched");
+      const combined = document.getElementById("market-combined-matched");
+      const copy = document.getElementById("market-enrichment-copy");
+      if (source) source.textContent = data.projection.source;
+      if (ml) ml.textContent = `${data.projection.ml_matched} players`;
+      if (combined) combined.textContent = `${data.projection.combined_matched} players`;
+      if (copy) copy.textContent = `${data.projection.ranking_label} leads the default sort. MFL remains authoritative for league scoring, locks, ownership, and moves.`;
+      const lockedDrops = new Set(data.roster_locked || []);
+      dropSelect?.querySelectorAll("[data-drop-player]").forEach((option) => {
+        const locked = lockedDrops.has(option.dataset.dropPlayer);
+        option.disabled = locked;
+        option.textContent = `${option.dataset.dropLabel}${locked ? " · LOCKED" : ""}`;
+        if (locked && option.selected) dropSelect.value = "";
+      });
+      const lockStatus = document.getElementById("drop-lock-status");
+      if (lockStatus) lockStatus.textContent = "Started games stay locked and cannot be dropped.";
+      const waiver = document.getElementById("market-waiver-enrichment");
+      const defense = document.getElementById("market-defense-enrichment");
+      if (waiver) waiver.innerHTML = data.waiver_html;
+      if (defense) defense.innerHTML = data.defense_html;
+      applyFilters();
+      applySort();
+    } catch (error) {
+      const source = document.getElementById("market-projection-source");
+      const copy = document.getElementById("market-enrichment-copy");
+      if (source) source.textContent = "Extra data unavailable";
+      if (copy) copy.textContent = `${error.message} The player pool remains available; drops stay disabled until the kickoff lock check succeeds.`;
+      ["market-waiver-enrichment", "market-defense-enrichment"].forEach((id) => {
+        const target = document.getElementById(id);
+        if (target) target.textContent = "Advisory details could not be loaded. The player pool remains usable.";
+      });
+    }
+  };
+  if (marketWorkspace?.dataset.playerMarketEnrichment) {
+    if ("requestIdleCallback" in window) window.requestIdleCallback(enrichMarket, { timeout: 1200 });
+    else window.setTimeout(enrichMarket, 0);
+  }
+
   const moveBuilder = document.querySelector("#move-builder");
-  document.querySelectorAll("[data-stream-pick]").forEach((button) => button.addEventListener("click", () => {
+  const useDefenseSuggestion = (button) => {
     const radio = [...document.querySelectorAll('input[name="add_id"]')].find((input) => input.value === button.dataset.streamPick);
     if (!radio || radio.disabled) return;
     radio.click(); // Preserve normal availability/move-mode validation and review.
@@ -498,8 +632,8 @@
     }
     moveBuilder?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
     dropSelect?.focus({ preventScroll: true });
-  }));
-  document.querySelectorAll("[data-queue-add]").forEach((button) => button.addEventListener("click", () => {
+  };
+  const useQueueSuggestion = (button) => {
     const radio = [...document.querySelectorAll('input[name="add_id"]')].find((input) => input.value === button.dataset.queueAdd);
     const dropOption = dropSelect?.querySelector(`option[value="${CSS.escape(button.dataset.queueDrop || "")}"]:not(:disabled)`);
     if (!radio || radio.disabled || !dropOption) return;
@@ -514,7 +648,16 @@
     updateReviewState();
     moveBuilder?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
     modeSelect?.focus({ preventScroll: true });
-  }));
+  };
+  document.addEventListener("click", (event) => {
+    const streamButton = event.target.closest?.("[data-stream-pick]");
+    if (streamButton) {
+      useDefenseSuggestion(streamButton);
+      return;
+    }
+    const queueButton = event.target.closest?.("[data-queue-add]");
+    if (queueButton) useQueueSuggestion(queueButton);
+  });
   if (moveBuilder && moveShortcut && "IntersectionObserver" in window) {
     new IntersectionObserver(([entry]) => {
       moveBuilderVisible = entry.isIntersecting;

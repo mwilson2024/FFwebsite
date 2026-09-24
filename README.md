@@ -91,7 +91,7 @@ WP_SESSION_SECRET=<your generated Fernet key>
 ## Supabase PostgreSQL on Azure App Service
 
 The application can use the free Supabase PostgreSQL project instead of the
-SQLite remembered-session file. The database must contain schema migrations 1–4 in
+SQLite remembered-session file. The database must contain schema migrations 1–5 in
 the private `fantasy_hq` schema. When `WP_DATABASE_URL` is absent, local and
 existing Railway deployments continue to use SQLite without any behavior change.
 
@@ -151,6 +151,15 @@ to add private per-league theme overrides. In the theme control, choose **All
 leagues** to keep one account theme or **This league only** to let each league use
 its own theme. The overrides follow the same MFL login across devices and remain
 server-only; the browser never receives database credentials.
+
+When the Supabase Data API is disabled, apply
+[`supabase/migrations/005_quiet_disabled_data_api.sql`](supabase/migrations/005_quiet_disabled_data_api.sql).
+It implements Supabase's documented empty-schema workaround so the still-running
+PostgREST service stops logging `pg_pgrst_no_exposed_schemas` failures. The schema
+is intentionally empty and does not expose `fantasy_hq`. If the Data API is later
+re-enabled, reset the manual override first with
+`alter role authenticator reset pgrst.db_schemas;` and reload PostgREST with
+`notify pgrst, 'reload config';` so the dashboard can manage exposed schemas again.
 
 Database connection failures are written to standard output as the structured
 event `database_status_unavailable`. In Azure, enable **Monitoring → App Service
@@ -292,6 +301,10 @@ commit `.env`, the key, or MFL login details.
 - Lineup and transaction changes always have a review step before submission.
 - Ownership, free-agent availability, administrative locks, and kickoff locks are
   checked again before player-move submissions.
+- The player market renders its authoritative player pool and ownership first.
+  Projections, rankings, season totals, matchup context, waiver optimization, and
+  defense streaming load in a second same-page request. Drop controls remain
+  disabled until that request completes the kickoff-lock check.
 - Live scoring automatically polls only while an NFL game is in progress.
 - Current-week scores refresh every 30 seconds only while an NFL game clock is
   active. Between games, the last score is retained until the next kickoff; after

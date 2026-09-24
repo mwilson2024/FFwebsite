@@ -12,32 +12,33 @@
   <link rel="stylesheet" href="/static/lions.css?v=1">
   <link rel="stylesheet" href="/static/rosters.css?v=3">
   <script src="/static/diagnostics.js" defer></script>
-  <script src="/static/app.js?v=20260922-waiver-claim" defer></script>
+  <script src="/static/app.js?v=20260924-progressive-market" defer></script>
   {% include '_theme_assets.html' %}
 </head>
 <body>
   {% set active_tool = 'moves' %}{% include '_league_header.html' %}
   <main class="move-shell">
-    <section class="move-workspace waiver-workspace">
+    <section class="move-workspace waiver-workspace" data-player-market-enrichment="/api/player-market/enrichment?league={{ league.id|urlencode }}">
       {% include '_roster_tabs.html' %}
       <div class="page-heading waiver-heading">
         <div><p class="eyebrow">WEEK {{ week or '—' }} · PLAYERS</p><h1>League player market</h1></div>
         <div class="board-summary" aria-label="Player board summary">
-          <span><strong>{{ player_count }}</strong> players</span>
-          <span><strong>{{ available_count }}</strong> available</span>
-          <span><strong>{{ rostered_count }}</strong> rostered</span>
-          <span><strong>{{ projected_count }}</strong> projected</span>
-          <span><strong>{{ locked_count }}</strong> locked</span>
+          <span><strong id="market-player-count">{{ player_count }}</strong> players</span>
+          <span><strong id="market-available-count">{{ available_count }}</strong> available</span>
+          <span><strong id="market-rostered-count">{{ rostered_count }}</strong> rostered</span>
+          <span><strong id="market-projected-count">{% if enrichment_pending %}…{% else %}{{ projected_count }}{% endif %}</strong> projected</span>
+          <span><strong id="market-locked-count">{{ locked_count }}</strong> locked</span>
         </div>
       </div>
       {% if error %}<div class="error" role="alert">{{ error }}{% include '_error_reference.html' %}</div>{% endif %}
 
-      <section class="lineup-intelligence waiver-intelligence">
-        <span><small>Projection source</small><strong>{{ projection_source }}</strong></span>
-        <span><small>ML matches</small><strong>{{ ml_matched }} players</strong></span>
-        <span><small>Combined coverage</small><strong>{{ combined_matched }} players</strong></span>
+      <section class="lineup-intelligence waiver-intelligence" id="market-enrichment-status" aria-live="polite">
+        <span><small>Player pool</small><strong>{{ player_count }} ready</strong></span>
+        <span><small>Projection source</small><strong id="market-projection-source">{% if enrichment_pending %}Loading in background…{% else %}{{ projection_source }}{% endif %}</strong></span>
+        <span><small>ML matches</small><strong id="market-ml-matched">{% if enrichment_pending %}Loading…{% else %}{{ ml_matched }} players{% endif %}</strong></span>
+        <span><small>Combined coverage</small><strong id="market-combined-matched">{% if enrichment_pending %}Loading…{% else %}{{ combined_matched }} players{% endif %}</strong></span>
         <span><small>Primary player ranking</small><strong>{{ ranking_label }}</strong></span>
-        <p>{{ ranking_label }} leads the default sort. MFL remains authoritative for league scoring, locks, ownership, and moves. Change this anytime in Settings.</p>
+        <p id="market-enrichment-copy">{% if enrichment_pending %}Players, ownership, and add/claim availability are ready now. Rankings, projections, matchup context, and waiver intelligence are loading without blocking the page.{% else %}{{ ranking_label }} leads the default sort. MFL remains authoritative for league scoring, locks, ownership, and moves. Change this anytime in Settings.{% endif %}</p>
       </section>
 
       <div class="market-jump-grid"><a class="defense-stream-link" href="/transactions/pending?league={{ league.id }}"><span><strong>Pending claims</strong><small>Review or withdraw MFL waivers</small></span><span aria-hidden="true">→</span></a><a class="defense-stream-link" href="#waiver-optimizer"><span><strong>Build my waiver queue</strong><small>Order claims and budget FAAB</small></span><span aria-hidden="true">↓</span></a><a class="defense-stream-link" href="#defense-streaming"><span><strong>Streaming a defense?</strong><small>Compare talent, matchup and waiver price</small></span><span aria-hidden="true">↓</span></a></div>
@@ -73,17 +74,17 @@
               <tbody>
               {% for item in recommendations %}
                 {% set strength = opponent_strength.get(item.player.id) %}
-                <tr class="waiver-row {% if item.availability.locked %}is-waiver-only{% endif %} {% if item.is_rostered %}is-rostered{% endif %}" data-player-row data-search="{{ item.player.name|lower }} {{ item.player.team|lower }} {{ item.player.position|lower }} {{ item.fantasy_team_name|lower }}" data-position="{{ board_positions.get(item.player.id, item.player.position) }}" data-nfl-team="{{ item.player.team }}" data-status="{{ item.market_status }}" data-fantasy-team="{{ item.fantasy_team_id or 'none' }}" data-projected="{% if item.projection is not none %}projected{% else %}missing{% endif %}" data-projection="{{ item.projection if item.projection is not none else -9999 }}" data-espn-rank="{{ espn_ranks.get(item.player.id, 9999) }}" data-combined-rank="{{ combined_ranks.get(item.player.id, 9999) }}" data-ytd="{{ ytd_scores.get(item.player.id, -9999) }}" data-avg="{{ avg_scores.get(item.player.id, -9999) }}" data-median="{{ median_scores.get(item.player.id, -9999) }}" data-matchup="{{ strength.rank if strength else 9999 }}" data-edge="{{ item.roster_delta if item.roster_delta is not none else -9999 }}" data-name="{{ item.player.name|lower }}" data-original-order="{{ loop.index0 }}">
+                <tr class="waiver-row {% if item.availability.locked %}is-waiver-only{% endif %} {% if item.is_rostered %}is-rostered{% endif %}" data-player-row data-player-id="{{ item.player.id }}" data-search="{{ item.player.name|lower }} {{ item.player.team|lower }} {{ item.player.position|lower }} {{ item.fantasy_team_name|lower }}" data-position="{{ board_positions.get(item.player.id, item.player.position) }}" data-nfl-team="{{ item.player.team }}" data-status="{{ item.market_status }}" data-fantasy-team="{{ item.fantasy_team_id or 'none' }}" data-projected="{% if item.projection is not none %}projected{% else %}missing{% endif %}" data-projection="{{ item.projection if item.projection is not none else -9999 }}" data-espn-rank="{{ espn_ranks.get(item.player.id, 9999) }}" data-combined-rank="{{ combined_ranks.get(item.player.id, 9999) }}" data-ytd="{{ ytd_scores.get(item.player.id, -9999) }}" data-avg="{{ avg_scores.get(item.player.id, -9999) }}" data-median="{{ median_scores.get(item.player.id, -9999) }}" data-matchup="{{ strength.rank if strength else 9999 }}" data-edge="{{ item.roster_delta if item.roster_delta is not none else -9999 }}" data-name="{{ item.player.name|lower }}" data-original-order="{{ loop.index0 }}">
                   <td class="select-cell">{% if not item.is_rostered %}<input type="radio" name="add_id" value="{{ item.player.id }}" aria-label="Add or claim {{ item.player.name }}" data-player-name="{{ item.player.name }}" data-market-status="{{ item.market_status }}" data-waiver-only="{{ 'true' if item.market_status in ['waiver','locked'] else 'false' }}" {% if not item.is_claimable %}disabled{% endif %}>{% else %}<span class="not-addable" title="Rostered players cannot be added">—</span>{% endif %}</td>
                   <td>{% set player = item.player %}{% include '_player_identity.html' %}</td>
                   <td>{% if item.is_rostered %}<span class="availability-badge rostered">{{ item.fantasy_team_name }}</span><small class="ownership-note">{% if item.market_status == 'mine' %}Your roster{% else %}Rostered · trade only{% endif %}</small>{% else %}<span class="availability-badge {{ item.market_status }}">{% if item.availability.locked %}<span aria-hidden="true">⌁</span>{% endif %} {{ item.availability.label }}</span>{% endif %}</td>
-                  <td class="number-cell">{% if item.projection is not none %}<strong>{{ '%.1f'|format(item.projection) }}</strong>{% else %}<span class="no-data">—</span>{% endif %}<small>MFL league{% if combined_ranks.get(item.player.id) is not none %} · Combined {{ '%.1f'|format(combined_ranks[item.player.id]) }} {{ item.player.position }} rank{% endif %}{% if espn_ranks.get(item.player.id) is not none %} · ESPN #{{ '%.1f'|format(espn_ranks[item.player.id]) }}{% endif %}{% if ml_projections.get(item.player.id) is not none %} · ML {{ '%.1f'|format(ml_projections[item.player.id]) }}{% endif %}</small></td>
-                  <td class="number-cell season-cell">{% if ytd_scores.get(item.player.id) is not none %}<strong>{{ '%.1f'|format(ytd_scores[item.player.id]) }}</strong>{% else %}<span class="no-data">—</span>{% endif %}</td>
-                  <td class="number-cell season-cell">{% if avg_scores.get(item.player.id) is not none %}<strong>{{ '%.1f'|format(avg_scores[item.player.id]) }}</strong>{% else %}<span class="no-data">—</span>{% endif %}</td>
-                  <td class="number-cell season-cell">{% if median_scores.get(item.player.id) is not none %}<strong>{{ '%.1f'|format(median_scores[item.player.id]) }}</strong><small>Last {{ median_window }}</small>{% else %}<span class="no-data">—</span>{% endif %}</td>
-                  <td class="matchup-cell">{% if strength %}<span class="opponent-strength {{ strength.tone }}"><b>{{ strength.opponent }}</b> · #{{ strength.rank }} {{ strength.label|lower }}</span><small>{{ '%.1f'|format(strength.points_allowed) }} {{ strength.position }} pts allowed</small>{% else %}<span class="no-data">—</span>{% endif %}</td>
-                  <td class="number-cell">{% if item.roster_delta is not none %}<strong class="{% if item.roster_delta >= 0.5 %}positive{% elif item.roster_delta < 0 %}negative{% endif %}">{% if item.roster_delta > 0 %}+{% endif %}{{ '%.1f'|format(item.roster_delta) }}</strong><small>{% if item.suggested_drop %}vs {{ item.suggested_drop.name }}{% endif %}</small>{% else %}<span class="no-data">—</span>{% endif %}</td>
-                  <td><span class="recommendation {{ item.recommendation_tone }}">{{ item.recommendation }}</span><small class="recommendation-reason">{{ item.reason }}</small></td>
+                  <td class="number-cell projection-cell">{% if enrichment_pending %}<span class="no-data">Loading…</span>{% elif item.projection is not none %}<strong>{{ '%.1f'|format(item.projection) }}</strong>{% else %}<span class="no-data">—</span>{% endif %}{% if not enrichment_pending %}<small>MFL league{% if combined_ranks.get(item.player.id) is not none %} · Combined {{ '%.1f'|format(combined_ranks[item.player.id]) }} {{ item.player.position }} rank{% endif %}{% if espn_ranks.get(item.player.id) is not none %} · ESPN #{{ '%.1f'|format(espn_ranks[item.player.id]) }}{% endif %}{% if ml_projections.get(item.player.id) is not none %} · ML {{ '%.1f'|format(ml_projections[item.player.id]) }}{% endif %}</small>{% endif %}</td>
+                  <td class="number-cell season-cell ytd-cell">{% if enrichment_pending %}<span class="no-data">…</span>{% elif ytd_scores.get(item.player.id) is not none %}<strong>{{ '%.1f'|format(ytd_scores[item.player.id]) }}</strong>{% else %}<span class="no-data">—</span>{% endif %}</td>
+                  <td class="number-cell season-cell avg-cell">{% if enrichment_pending %}<span class="no-data">…</span>{% elif avg_scores.get(item.player.id) is not none %}<strong>{{ '%.1f'|format(avg_scores[item.player.id]) }}</strong>{% else %}<span class="no-data">—</span>{% endif %}</td>
+                  <td class="number-cell season-cell median-cell">{% if enrichment_pending %}<span class="no-data">…</span>{% elif median_scores.get(item.player.id) is not none %}<strong>{{ '%.1f'|format(median_scores[item.player.id]) }}</strong><small>Last {{ median_window }}</small>{% else %}<span class="no-data">—</span>{% endif %}</td>
+                  <td class="matchup-cell">{% if enrichment_pending %}<span class="no-data">Loading…</span>{% elif strength %}<span class="opponent-strength {{ strength.tone }}"><b>{{ strength.opponent }}</b> · #{{ strength.rank }} {{ strength.label|lower }}</span><small>{{ '%.1f'|format(strength.points_allowed) }} {{ strength.position }} pts allowed</small>{% else %}<span class="no-data">—</span>{% endif %}</td>
+                  <td class="number-cell edge-cell">{% if enrichment_pending %}<span class="no-data">…</span>{% elif item.roster_delta is not none %}<strong class="{% if item.roster_delta >= 0.5 %}positive{% elif item.roster_delta < 0 %}negative{% endif %}">{% if item.roster_delta > 0 %}+{% endif %}{{ '%.1f'|format(item.roster_delta) }}</strong><small>{% if item.suggested_drop %}vs {{ item.suggested_drop.name }}{% endif %}</small>{% else %}<span class="no-data">—</span>{% endif %}</td>
+                  <td class="recommendation-cell">{% if enrichment_pending %}<span class="recommendation muted">Loading intelligence…</span>{% else %}<span class="recommendation {{ item.recommendation_tone }}">{{ item.recommendation }}</span><small class="recommendation-reason">{{ item.reason }}</small>{% endif %}</td>
                 </tr>
               {% endfor %}
               </tbody>
@@ -96,16 +97,16 @@
         <a class="mobile-move-shortcut" id="jump-to-move" href="#move-builder" hidden>Build selected move <span aria-hidden="true">→</span></a>
         <section class="move-builder" id="move-builder" aria-labelledby="move-builder-heading">
           <div class="builder-title"><p class="eyebrow" id="move-builder-heading">BUILD THE MOVE</p><strong id="selected-player">Choose a free agent or waiver target above</strong></div>
-          <label>Drop from your roster<select name="drop_id" required><option value="">Choose the player to drop</option>{% for player in roster %}<option value="{{ player.id }}" {% if player.id in roster_locked %}disabled{% endif %}>{{ player.position }} · {{ player.name }} · {{ player.team }}{% if player.id in roster_locked %} · LOCKED{% endif %}</option>{% endfor %}</select><small>Started games stay locked and cannot be dropped.</small></label>
+          <label>Drop from your roster<select name="drop_id" required><option value="">Choose the player to drop</option>{% for player in roster %}<option value="{{ player.id }}" data-drop-player="{{ player.id }}" data-drop-label="{{ player.position }} · {{ player.name }} · {{ player.team }}" {% if enrichment_pending or player.id in roster_locked %}disabled{% endif %}>{{ player.position }} · {{ player.name }} · {{ player.team }}{% if player.id in roster_locked %} · LOCKED{% endif %}</option>{% endfor %}</select><small id="drop-lock-status">{% if enrichment_pending %}Checking kickoff locks in the background before enabling drops…{% else %}Started games stay locked and cannot be dropped.{% endif %}</small></label>
           <label>Transaction type<select name="mode" id="move-mode"><option value="fcfs">FCFS · add immediately</option><option value="waiver">Priority waiver claim</option><option value="blind-bid">Blind-bid waiver · FAAB</option></select><small>Choose the transaction period currently open in MFL.</small></label>
           <label class="conditional-field" data-mode-field="bid" hidden>FAAB bid<input name="bid" type="number" min="0" inputmode="numeric" placeholder="Bid amount"><small>MFL validates your balance and league minimum.</small></label>
           <label class="conditional-field" data-mode-field="round" hidden>Claim round<input name="round_number" type="number" min="1" value="1" inputmode="numeric" placeholder="Round number"><small>Defaults to Round 1. Change it only when your league uses another MFL waiver round.</small></label>
           <label class="conditional-field replace-claims" data-mode-field="replace" hidden><span><input name="replace_existing" type="checkbox" value="1"> Replace existing claims in this round</span><small>Leave off to append. Turning this on replaces claims already saved in the same MFL round.</small></label>
           <button type="submit" class="review-button" id="review-move" disabled>Review move <span>→</span></button>
         </section>
-        {% include '_waiver_optimizer.html' %}
+        <div id="market-waiver-enrichment" aria-live="polite">{% if enrichment_pending %}<section class="waiver-optimizer"><p class="empty-state">Player pool ready. Building the waiver queue in the background…</p></section>{% else %}{% include '_waiver_optimizer.html' %}{% endif %}</div>
       </form>
-      {% include '_defense_streaming.html' %}
+      <div id="market-defense-enrichment" aria-live="polite">{% if enrichment_pending %}<section class="defense-streaming"><p class="empty-state">Defense streaming intelligence is loading in the background…</p></section>{% else %}{% include '_defense_streaming.html' %}{% endif %}</div>
     </section>
   </main>
   {% include '_player_card.html' %}

@@ -150,16 +150,19 @@ def test_move_page_renders_budget_safe_waiver_queue(monkeypatch) -> None:
 
     monkeypatch.setattr(web_app, "_client", lambda *args: QueueClient())
     monkeypatch.setattr(web_app, "_remember_catalog", lambda *args: None)
-    monkeypatch.setattr(web_app, "_load_player_board", lambda *args: (
+    monkeypatch.setattr(web_app, "_load_player_board", lambda *args, **kwargs: (
         2, [drop], board, ProjectionBlend(scores={"add":15}, mfl_scores={}, ml_scores={}, ml_matched=0), set(),
     ))
     client = TestClient(web_app.app)
     client.cookies.set("wp_session", "queue-session")
     response = client.get("/moves?league=11111")
     assert response.status_code == 200
-    assert "Waiver queue optimizer" in response.text
-    assert 'data-queue-add="add"' in response.text
-    assert "suggested across queue" in response.text
+    assert "Player pool ready. Building the waiver queue in the background" in response.text
+    enriched = client.get("/api/player-market/enrichment?league=11111")
+    assert enriched.status_code == 200
+    assert "Waiver queue optimizer" in enriched.json()["waiver_html"]
+    assert 'data-queue-add="add"' in enriched.json()["waiver_html"]
+    assert "suggested across queue" in enriched.json()["waiver_html"]
 
 
 def test_market_default_tracks_wednesday_run_and_never_opens_empty_view() -> None:
@@ -372,12 +375,16 @@ def test_move_page_shows_full_board_projections_and_locks(monkeypatch) -> None:
 
     assert response.status_code == 200
     assert "Recommended Add" in response.text
-    assert "14.5" in response.text
-    assert "ESPN #8.5" in response.text
-    assert "Combined 2.0 WR rank" in response.text
+    assert "Loading in background" in response.text
+    enriched = client.get("/api/player-market/enrichment?league=11111")
+    assert enriched.status_code == 200
+    payload = enriched.json()
+    assert payload["players"]["a1"]["projection"] == 14.5
+    assert payload["players"]["a1"]["espn_rank"] == 8.5
+    assert payload["players"]["a1"]["combined_rank"] == 2.0
     assert '<option value="combined-rank"' in response.text
     assert '<option value="espn-rank" selected>ESPN weekly rank</option>' in response.text
-    assert "Strong target" in response.text
+    assert payload["players"]["a1"]["recommendation"] == "Strong target"
     assert "Locked Prospect" in response.text
     assert "Waiver claim only" in response.text
     assert 'value="a2"' in response.text
@@ -386,8 +393,11 @@ def test_move_page_shows_full_board_projections_and_locks(monkeypatch) -> None:
     assert 'data-waiver-only="true"' in locked_control
     assert "YTD" in response.text
     assert "Avg" in response.text
-    assert "MFL league scoring" in response.text
-    assert "Roster Bench · BUF · LOCKED" in response.text
+    assert payload["projection"]["source"] == "MFL league scoring · FantasySharks"
+    assert 'data-drop-player="r1"' in response.text
+    drop_control = response.text.split('data-drop-player="r1"', 1)[1].split(">", 1)[0]
+    assert "disabled" in drop_control
+    assert payload["roster_locked"] == ["r1"]
     assert "Other Team Star" in response.text
     assert "Division Rival" in response.text
     assert 'id="nfl-team-filter"' in response.text
@@ -400,7 +410,8 @@ def test_move_page_shows_full_board_projections_and_locks(monkeypatch) -> None:
     assert "Blind-bid waiver · FAAB" in response.text
     assert 'name="replace_existing"' in response.text
     assert 'name="round_number" type="number" min="1" value="1"' in response.text
-    assert response.text.index('id="move-builder"') < response.text.index('id="waiver-optimizer"')
+    assert response.text.index('id="move-builder"') < response.text.index('id="market-waiver-enrichment"')
+    assert 'id="waiver-optimizer"' in payload["waiver_html"]
 
 
 @pytest.mark.parametrize("pricing_unavailable", [False, True])
@@ -437,13 +448,16 @@ def test_defense_streaming_cards_use_loaded_data_and_existing_move_builder(monke
     web_app.sessions[session_id].player_catalog = {item.player.id: item.player for item in board}
     monkeypatch.setattr(web_app, "_client", lambda *args: fake)
     monkeypatch.setattr(web_app, "_remember_catalog", lambda *args: None)
-    monkeypatch.setattr(web_app, "_load_player_board", lambda *args: (
+    monkeypatch.setattr(web_app, "_load_player_board", lambda *args, **kwargs: (
         2, [board[1].player], board, ProjectionBlend(scores={}, mfl_scores={}, ml_scores={}, ml_matched=0), set()))
     client = TestClient(web_app.app)
     client.cookies.set("wp_session", session_id)
     response = client.get("/moves?league=11111")
     assert response.status_code == 200
-    panel = response.text.split('<details class="defense-streaming"', 1)[1].split('<form method="post"', 1)[0]
+    assert "Defense streaming intelligence is loading in the background" in response.text
+    enriched = client.get("/api/player-market/enrichment?league=11111")
+    assert enriched.status_code == 200
+    panel = enriched.json()["defense_html"]
     assert "Your defense" in panel and "Available streaming targets" in panel
     assert 'data-stream-pick="HST"' in panel
     assert 'data-stream-pick="DET"' not in panel
@@ -457,7 +471,7 @@ def test_defense_streaming_cards_use_loaded_data_and_existing_move_builder(monke
         assert "No verified recent defense prices" in panel
     else:
         assert "3 FAAB" in panel
-        assert client.get("/moves?league=11111").status_code == 200
+        assert client.get("/api/player-market/enrichment?league=11111").status_code == 200
         assert reads == {"details": 1, "activity": 1}
         assert f"2026:11111:report:activity" in web_app.sessions[session_id].read_cache
     assert "20260919-waiver-optimizer" in response.text
@@ -1182,6 +1196,50 @@ def test_player_market_loader_merges_all_rosters_and_free_agents(monkeypatch) ->
     assert set(rows) == {"mine", "free", "def", "other"}
     assert rows["other"].fantasy_team_name == "Other Team"
     assert rows["def"].is_claimable is True
+
+
+def test_player_market_pool_only_skips_slow_enrichment_reads(monkeypatch) -> None:
+    player = MFLPlayer("free", "Free Player", "RB", "DET")
+    calls = {"week": 0, "schedule": 0, "projections": 0, "reference": 0, "scores": 0}
+
+    class PoolClient:
+        config = MFLConfig(2026, "11111", "0001", user_cookie="test")
+        session = None
+
+        def roster_ids(self): return set()
+        def free_agents(self): return {player.id: MFLAvailability(player.id)}
+        def trade_rosters(self): return {"0001": set()}
+        def league_details(self):
+            return MFLLeagueDetails((), {"0001": MFLFranchise("0001", "My Team")})
+        def players(self): return {player.id: player}
+        def current_week(self):
+            calls["week"] += 1
+            return 2
+        def nfl_team_kickoffs(self, *, week):
+            calls["schedule"] += 1
+            return {}
+        def projected_scores(self, **kwargs):
+            calls["projections"] += 1
+            return {player.id: 10.0}
+
+    monkeypatch.setattr(
+        web_app,
+        "_load_reference_projection_blend",
+        lambda *args, **kwargs: calls.__setitem__("reference", calls["reference"] + 1),
+    )
+    monkeypatch.setattr(
+        web_app,
+        "_load_player_score_summaries",
+        lambda *args, **kwargs: calls.__setitem__("scores", calls["scores"] + 1),
+    )
+
+    week, _, board, blend, locked = web_app._load_player_board(PoolClient(), pool_only=True)
+
+    assert week is None
+    assert [item.player.id for item in board] == ["free"]
+    assert blend.scores == {}
+    assert locked == set()
+    assert calls == {"week": 0, "schedule": 0, "projections": 0, "reference": 0, "scores": 0}
 
 
 def test_player_market_loader_reuses_brief_session_cache(monkeypatch) -> None:

@@ -1360,6 +1360,7 @@ def _scoring_rule_groups(rules: dict) -> list[dict]:
 def _invalidate_player_board(current: BrowserSession, league_id: str) -> None:
     prefixes = (
         f"{current.year}:{league_id}:player-board",
+        f"{current.year}:{league_id}:player-pool",
         f"{current.year}:{league_id}:home-player-board",
     )
     report_tokens = (":report:free-agents", ":report:league-rosters", ":report:roster:")
@@ -1806,6 +1807,7 @@ def _load_player_board(
     *,
     include_reference: bool = True,
     include_score_context: bool = True,
+    pool_only: bool = False,
 ) -> tuple[
     int | None,
     list[MFLPlayer],
@@ -1816,7 +1818,9 @@ def _load_player_board(
     cache = getattr(client, "_browser_read_cache", None)
     ranking_cache = current.ranking_preference if current and include_reference else "no-reference"
     board_label = (
-        f"player-board:{ranking_cache}"
+        "player-pool"
+        if pool_only
+        else f"player-board:{ranking_cache}"
         if include_reference and include_score_context
         else "home-player-board"
     )
@@ -1826,12 +1830,12 @@ def _load_player_board(
         cached = cache.get(cache_key)
         if cached and cached[0] > now:
             cached_week, _, cached_board, _, _ = cached[1]
-            if include_score_context:
+            if include_score_context and not pool_only:
                 _load_player_score_summaries(client, current, cached_week)
-            if len(cached) >= 4:
+            if len(cached) >= 4 and not pool_only:
                 client.week_games = cached[2]
                 client.opponent_strength = cached[3]
-            else:
+            elif not pool_only:
                 _attach_opponent_strength(
                     client,
                     current,
@@ -1884,10 +1888,16 @@ def _load_player_board(
     availability = {
         player_id: state for player_id, state in availability.items() if player_id in visible_ids
     }
-    week = _cached_current_week(current, client)
+    week = (
+        current.selected_week
+        if pool_only and current is not None
+        else None
+        if pool_only
+        else _cached_current_week(current, client)
+    )
     roster_locked: set[str] = set()
     bye_teams: set[str] = set()
-    if week is not None:
+    if week is not None and not pool_only:
         try:
             def load_week_schedule():
                 loaded_kickoffs = client.nfl_team_kickoffs(week=week)
@@ -1924,25 +1934,30 @@ def _load_player_board(
         except MFLApiError:
             pass
     projections: dict[str, float] = {}
-    try:
-        # One league-wide request is both more complete and gentler on MFL's
-        # rate limit than separate free-agent and roster projection requests.
-        projections = read(
-            f"projections:{week}", lambda: client.projected_scores(week=week),
-            ttl=300, stale_ttl=86400,
-        )
-    except MFLApiError:
-        # The player market is still useful before weekly projections publish.
-        projections = {}
+    if not pool_only:
+        try:
+            # One league-wide request is both more complete and gentler on MFL's
+            # rate limit than separate free-agent and roster projection requests.
+            projections = read(
+                f"projections:{week}", lambda: client.projected_scores(week=week),
+                ttl=300, stale_ttl=86400,
+            )
+        except MFLApiError:
+            # The player market is still useful before weekly projections publish.
+            projections = {}
     all_players = list({player.id: player for player in (*available_players, *rostered_players)}.values())
     reference_players = [player for player in catalog.values() if _include_on_player_board(player)]
-    blend = _load_reference_projection_blend(
-        client,
-        current,
-        reference_players,
-        week=week,
-        mfl_scores=projections,
-        include_reference=include_reference,
+    blend = (
+        ProjectionBlend(scores={}, mfl_scores={}, ml_scores={}, ml_matched=0)
+        if pool_only
+        else _load_reference_projection_blend(
+            client,
+            current,
+            reference_players,
+            week=week,
+            mfl_scores=projections,
+            include_reference=include_reference,
+        )
     )
     recommendations = build_player_board(
         available_players=available_players,
@@ -1955,7 +1970,7 @@ def _load_player_board(
         projections=blend.scores,
         bye_teams=bye_teams,
     )
-    if include_score_context:
+    if include_score_context and not pool_only:
         _load_player_score_summaries(client, current, week)
         _attach_opponent_strength(client, current, all_players)
     else:
@@ -1972,8 +1987,8 @@ def _load_player_board(
         cache[cache_key] = (
             time.monotonic() + 300,
             result,
-            dict(getattr(client, "week_games", {})),
-            dict(getattr(client, "opponent_strength", {})),
+            dict(getattr(client, "week_games", {})) if not pool_only else {},
+            dict(getattr(client, "opponent_strength", {})) if not pool_only else {},
         )
     return result
 
@@ -4405,31 +4420,14 @@ def rosters_page(request: Request, league: str, team: str = "", view: str = "tea
     )
 
 
-@app.get("/moves", response_class=HTMLResponse)
-def moves(request: Request, league: str, q: str = "", error: str = ""):
-    current = _session(request)
-    if not current:
-        return RedirectResponse("/", status_code=303)
-    selected = _league(current, league)
-    client = _client(current, selected)
-    api_error: str | None = error[:300] or None
-    roster: list[MFLPlayer] = []
-    recommendations: list[PlayerRecommendation] = []
-    blend = ProjectionBlend(scores={}, mfl_scores={}, ml_scores={}, ml_matched=0)
-    roster_locked: set[str] = set()
-    week: int | None = None
-    query = q.strip()[:80]
-    try:
-        week, roster, recommendations, blend, roster_locked = _load_player_board(client, current)
-        _remember_catalog(current, client)
-    except MFLApiError as caught:
-        log_error("player_board_failed", caught)
-        api_error = str(caught)
-    positions = sorted(
-        {_board_position(item.player) for item in recommendations if item.player.position},
-        key=lambda value: (value not in {"QB", "RB", "WR", "TE", "PK", "DEF"}, value),
-    )
-    nfl_teams = sorted({item.player.team for item in recommendations if item.player.team})
+def _market_enrichment_context(
+    current: BrowserSession,
+    selected: MFLLeague,
+    client: MFLClient,
+) -> dict:
+    """Load the slower advisory layers after the usable player pool is visible."""
+    week, roster, recommendations, blend, roster_locked = _load_player_board(client, current)
+    _remember_catalog(current, client)
     defense_streams = rank_defense_streams(
         recommendations,
         year=current.year,
@@ -4469,6 +4467,47 @@ def moves(request: Request, league: str, q: str = "", error: str = ""):
         catalog=current.player_catalog or {},
         locked_drop_ids=roster_locked,
     )
+    return {
+        "week": week,
+        "roster": roster,
+        "recommendations": recommendations,
+        "blend": blend,
+        "roster_locked": roster_locked,
+        "defense_targets": [row for row in defense_streams if not row.item.is_rostered][:6],
+        "owned_defenses": [row for row in defense_streams if row.item.market_status == "mine"],
+        "defense_pricing": defense_pricing,
+        "defense_pricing_error": pricing_error,
+        "waiver_queue": waiver_queue,
+    }
+
+
+@app.get("/moves", response_class=HTMLResponse)
+def moves(request: Request, league: str, q: str = "", error: str = ""):
+    current = _session(request)
+    if not current:
+        return RedirectResponse("/", status_code=303)
+    selected = _league(current, league)
+    client = _client(current, selected)
+    api_error: str | None = error[:300] or None
+    roster: list[MFLPlayer] = []
+    recommendations: list[PlayerRecommendation] = []
+    blend = ProjectionBlend(scores={}, mfl_scores={}, ml_scores={}, ml_matched=0)
+    roster_locked: set[str] = set()
+    week: int | None = None
+    query = q.strip()[:80]
+    try:
+        week, roster, recommendations, blend, roster_locked = _load_player_board(
+            client, current, pool_only=True,
+        )
+        _remember_catalog(current, client)
+    except MFLApiError as caught:
+        log_error("player_board_failed", caught)
+        api_error = str(caught)
+    positions = sorted(
+        {_board_position(item.player) for item in recommendations if item.player.position},
+        key=lambda value: (value not in {"QB", "RB", "WR", "TE", "PK", "DEF"}, value),
+    )
+    nfl_teams = sorted({item.player.team for item in recommendations if item.player.team})
     fantasy_teams = sorted(
         {
             (item.fantasy_team_id, item.fantasy_team_name)
@@ -4488,13 +4527,13 @@ def moves(request: Request, league: str, q: str = "", error: str = ""):
             "recommendations": recommendations,
             "positions": positions,
             "board_positions": {item.player.id: _board_position(item.player) for item in recommendations},
-            "defense_targets": [row for row in defense_streams if not row.item.is_rostered][:6],
-            "owned_defenses": [row for row in defense_streams if row.item.market_status == "mine"],
+            "defense_targets": [],
+            "owned_defenses": [],
             "talent_source_url": TALENT_SOURCE_URL,
             "talent_source_date": TALENT_SOURCE_DATE,
-            "defense_pricing": defense_pricing,
-            "defense_pricing_error": pricing_error,
-            "waiver_queue": waiver_queue,
+            "defense_pricing": None,
+            "defense_pricing_error": None,
+            "waiver_queue": None,
             "nfl_teams": nfl_teams,
             "fantasy_teams": fantasy_teams,
             "week": week,
@@ -4531,6 +4570,7 @@ def moves(request: Request, league: str, q: str = "", error: str = ""):
             "default_market_filter": default_market_filter,
             "default_market_count": default_market_count,
             "default_market_label": default_market_label,
+            "enrichment_pending": bool(recommendations),
         },
     )
 
@@ -5620,6 +5660,98 @@ class StageMoveRequest(BaseModel):
     bid: int | None = None
     round: int | None = None
     replace_existing: bool = False
+
+
+@app.get("/api/player-market/enrichment")
+def api_player_market_enrichment(request: Request, league: str):
+    """Return advisory player-market data without delaying the initial pool."""
+    current = _require_session(request)
+    selected = _league(current, league)
+    client = _client(current, selected)
+    try:
+        context = _market_enrichment_context(current, selected, client)
+    except MFLApiError as error:
+        _log_provider_error_once(
+            current,
+            selected.id,
+            "player_market_enrichment_failed",
+            error,
+            window=error.retry_after if isinstance(error, MFLRateLimitError) else 120,
+        )
+        return JSONResponse(
+            {
+                "detail": (
+                    "The player pool is ready, but projections and recommendations "
+                    "could not be refreshed right now."
+                ),
+                "reference": request.state.error_reference,
+            },
+            status_code=503,
+        )
+
+    recommendations = context["recommendations"]
+    blend = context["blend"]
+    ytd_scores = getattr(client, "player_ytd_scores", {})
+    avg_scores = getattr(client, "player_avg_scores", {})
+    median_scores = getattr(client, "player_median_scores", {})
+    median_window = getattr(client, "player_median_window", 0)
+    opponent_strength = getattr(client, "opponent_strength", {})
+    players = {}
+    for item in recommendations:
+        strength = opponent_strength.get(item.player.id)
+        players[item.player.id] = {
+            "projection": item.projection,
+            "ml_projection": blend.ml_scores.get(item.player.id),
+            "espn_rank": (blend.espn_ranks or {}).get(item.player.id),
+            "combined_rank": (blend.combined_ranks or {}).get(item.player.id),
+            "ytd": ytd_scores.get(item.player.id),
+            "average": avg_scores.get(item.player.id),
+            "median": median_scores.get(item.player.id),
+            "median_window": median_window,
+            "matchup": strength,
+            "roster_delta": item.roster_delta,
+            "suggested_drop": item.suggested_drop.name if item.suggested_drop else "",
+            "recommendation": item.recommendation,
+            "recommendation_tone": item.recommendation_tone,
+            "reason": item.reason,
+        }
+
+    fragment_context = {
+        "request": request,
+        "week": context["week"],
+        "waiver_queue": context["waiver_queue"],
+        "defense_targets": context["defense_targets"],
+        "owned_defenses": context["owned_defenses"],
+        "defense_pricing": context["defense_pricing"],
+        "defense_pricing_error": context["defense_pricing_error"],
+        "talent_source_url": TALENT_SOURCE_URL,
+        "talent_source_date": TALENT_SOURCE_DATE,
+    }
+    return {
+        "league_id": selected.id,
+        "week": context["week"],
+        "players": players,
+        "summary": {
+            "player_count": len(recommendations),
+            "available_count": sum(not item.is_rostered for item in recommendations),
+            "rostered_count": sum(item.is_rostered for item in recommendations),
+            "projected_count": sum(item.projection is not None for item in recommendations),
+            "locked_count": sum(item.availability.locked for item in recommendations),
+        },
+        "projection": {
+            "source": blend.source_label,
+            "ml_matched": blend.ml_matched,
+            "combined_matched": blend.combined_matched,
+            "ranking_label": _RANKING_PREFERENCES[current.ranking_preference],
+        },
+        "roster_locked": sorted(context["roster_locked"]),
+        "waiver_html": templates.env.get_template("_waiver_optimizer.html").render(
+            **fragment_context,
+        ),
+        "defense_html": templates.env.get_template("_defense_streaming.html").render(
+            **fragment_context,
+        ),
+    }
 
 
 @app.get("/api/free-agents")

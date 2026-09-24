@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from cryptography.fernet import Fernet
@@ -136,6 +137,18 @@ class HistoryPostgresConnection(FakePostgresConnection):
 def _store(monkeypatch, tmp_path) -> EncryptedSessionStore:
     monkeypatch.setenv("WP_SESSION_SECRET", Fernet.generate_key().decode("ascii"))
     return EncryptedSessionStore(tmp_path / "sessions.sqlite3")
+
+
+def test_disabled_data_api_workaround_uses_empty_documented_schema() -> None:
+    migration = (
+        Path(__file__).resolve().parents[1]
+        / "supabase" / "migrations" / "005_quiet_disabled_data_api.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "create schema if not exists pgrst_no_exposed_schemas" in migration
+    assert "alter role authenticator set pgrst.db_schemas = 'pgrst_no_exposed_schemas'" in migration
+    assert "notify pgrst, 'reload config'" in migration
+    assert "create schema if not exists pg_pgrst_no_exposed_schemas" not in migration
 
 
 def test_remembered_session_is_encrypted_tamper_evident_and_revocable(monkeypatch, tmp_path):
