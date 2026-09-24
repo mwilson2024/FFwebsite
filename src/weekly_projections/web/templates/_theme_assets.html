@@ -1,12 +1,15 @@
 <meta name="theme-color" content="#00274c">
-<meta name="wp-account-theme" content="{{ session.theme if session is defined else '' }}">
+<meta name="wp-account-theme" content="{{ session.theme_for(league.id if league is defined else '') if session is defined else '' }}">
+<meta name="wp-theme-scope" content="{{ session.theme_scope if session is defined else 'global' }}">
+<meta name="wp-theme-league" content="{{ league.id if league is defined else '' }}">
+<meta name="wp-theme-season" content="{{ session.year if session is defined else '' }}">
 <meta name="csrf-token" content="{{ session.csrf_token if session is defined else '' }}">
 <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/static/app-icon-192.png">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="stylesheet" href="/static/michigan.css?v=2">
-<link rel="stylesheet" href="/static/interface.css?v=20260921-rankings">
+<link rel="stylesheet" href="/static/interface.css?v=20260924-league-themes">
 <link rel="stylesheet" href="/static/themes.css?v=6">
-<script src="/static/theme.js?v=5"></script>
+<script src="/static/theme.js?v=20260924-league-themes"></script>
 <script src="/static/interface.js?v=4" defer></script>
 <script src="/static/pwa.js?v=20260919" defer></script>

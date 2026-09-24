@@ -388,6 +388,49 @@ class EncryptedSessionStore:
     def save_ranking_preference(self, owner_fingerprint: str, ranking_preference: str) -> None:
         self.save_preferences(owner_fingerprint, ranking_preference=ranking_preference)
 
+    def load_league_themes(self, owner_fingerprint: str, *, year: int) -> dict[str, str]:
+        """Load the user's private per-league theme overrides for one season."""
+        if not self.database_url or not owner_fingerprint:
+            return {}
+        with self._connect_postgres() as connection:
+            rows = connection.execute(
+                "SELECT league_theme.league_id, league_theme.theme "
+                "FROM fantasy_hq.app_user AS app_user "
+                "JOIN fantasy_hq.league_theme AS league_theme ON league_theme.user_id = app_user.id "
+                "WHERE app_user.owner_fingerprint_hash = %s AND league_theme.season = %s "
+                "ORDER BY league_theme.league_id",
+                (self._digest_bytes(owner_fingerprint), int(year)),
+            ).fetchall()
+        return {str(league_id): str(theme) for league_id, theme in rows}
+
+    def save_league_theme(
+        self, owner_fingerprint: str, *, year: int, league_id: str, theme: str,
+    ) -> None:
+        if not self.database_url:
+            return
+        if not str(league_id).isdecimal() or not 2020 <= int(year) <= 2100:
+            raise ValueError("A valid MFL league and season are required")
+        with self._connect_postgres() as connection:
+            user_id = self._postgres_user_id(connection, owner_fingerprint)
+            connection.execute(
+                "INSERT INTO fantasy_hq.league_theme "
+                "(user_id, season, league_id, theme, updated_at) "
+                "VALUES (%s, %s, %s, %s, now()) "
+                "ON CONFLICT (user_id, season, league_id) DO UPDATE SET "
+                "theme = excluded.theme, updated_at = now()",
+                (user_id, int(year), str(league_id), str(theme)[:32]),
+            )
+
+    def clear_league_themes(self, owner_fingerprint: str, *, year: int) -> None:
+        if not self.database_url or not owner_fingerprint:
+            return
+        with self._connect_postgres() as connection:
+            user_id = self._postgres_user_id(connection, owner_fingerprint)
+            connection.execute(
+                "DELETE FROM fantasy_hq.league_theme WHERE user_id = %s AND season = %s",
+                (user_id, int(year)),
+            )
+
     def load_watchlists(self, owner_fingerprint: str, year: int) -> dict[str, set[str]]:
         if not self.database_url or not owner_fingerprint:
             return {}

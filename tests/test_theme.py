@@ -14,7 +14,8 @@ def test_all_pages_load_their_requested_theme_last():
         soup = BeautifulSoup(source, 'html.parser')
         assert soup.select('link[rel="stylesheet"]')[-1]['href'] == '/static/themes.css?v=6', page.name
         assert len(soup.select('meta[name="theme-color"]')) == 1
-        assert soup.select_one('script[src="/static/theme.js?v=5"]')
+        assert soup.select_one('script[src="/static/theme.js?v=20260924-league-themes"]')
+        assert soup.select_one('meta[name="wp-theme-scope"]')
 
 
 def test_theme_primary_text_pairs_have_accessible_contrast():
@@ -99,7 +100,7 @@ def test_league_switcher_uses_one_control_height_on_every_page():
     assert '.header-league-picker .league-switch-button' in css
     assert 'height:44px; min-height:44px;' in css
     assert '.league-topbar .brand-mark { display:grid; width:44px; height:44px; }' in css
-    assert '/static/interface.css?v=20260921-rankings' in assets
+    assert '/static/interface.css?v=20260924-league-themes' in assets
     assert '<span class="sr-only">Switch league</span>' in header
 
 

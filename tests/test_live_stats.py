@@ -255,7 +255,7 @@ def test_bench_excluded_from_totals_counts_state_and_detail_controls():
     context = {"paired_rows": [(starter, None, "QB"), (bench, None, "QB")], "head_to_head": matchup, "league": MFLLeague("l", "0001", "League"), "week": 1}
     html = web.templates.env.get_template("_matchup_rows.html").render(context)
     assert 'data-scoring-player="s"' in html
-    assert 'data-touchdown-player="s"' in html
+    assert 'data-touchdown-player' not in html
     assert 'data-scoring-player="b"' not in html
 
 
@@ -297,4 +297,5 @@ def test_matchup_header_switches_all_leagues_and_separates_stats_from_points():
     assert trigger['aria-controls'] == 'points-card'
     assert soup.select_one('dialog#points-card')
     assert panel.select_one('.touchdown-trigger') is None
+    assert soup.select_one('dialog#touchdown-card') is None
     assert panel.select_one('details') is None

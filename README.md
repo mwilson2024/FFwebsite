@@ -91,7 +91,7 @@ WP_SESSION_SECRET=<your generated Fernet key>
 ## Supabase PostgreSQL on Azure App Service
 
 The application can use the free Supabase PostgreSQL project instead of the
-SQLite remembered-session file. The database must contain schema migrations 1–3 in
+SQLite remembered-session file. The database must contain schema migrations 1–4 in
 the private `fantasy_hq` schema. When `WP_DATABASE_URL` is absent, local and
 existing Railway deployments continue to use SQLite without any behavior change.
 
@@ -139,6 +139,18 @@ weekly matchup results. Each season is replaced transactionally, so rerunning an
 import refreshes corrected MFL data without duplicating rows. The archive tables
 stay in the private `fantasy_hq` schema, have RLS enabled as defense in depth, and
 grant no browser Data API access to `anon` or `authenticated` roles.
+
+MFL includes the active season in its linked-season count, so a report of 11
+seasons from 2016–2026 means there are 10 completed seasons (2016–2025) to archive;
+2026 remains the live current season. If MFL rate-limits a batch, wait for the
+cooldown and run the all-seasons import again. It resumes with a missing season
+instead of repeatedly refreshing one already stored.
+
+Apply [`supabase/migrations/004_per_league_themes.sql`](supabase/migrations/004_per_league_themes.sql)
+to add private per-league theme overrides. In the theme control, choose **All
+leagues** to keep one account theme or **This league only** to let each league use
+its own theme. The overrides follow the same MFL login across devices and remain
+server-only; the browser never receives database credentials.
 
 Database connection failures are written to standard output as the structured
 event `database_status_unavailable`. In Azure, enable **Monitoring → App Service
@@ -268,7 +280,9 @@ commit `.env`, the key, or MFL login details.
 
 ## Behavior and safety
 
-- The last selected league and theme are remembered in device-local cookies.
+- The last selected league is remembered locally and, when Supabase is configured,
+  as a non-secret account preference. Themes can be shared across all leagues or
+  saved per league and restored on other devices for the same MFL login.
 - Active sessions last eight hours; an opted-in encrypted session can restore a
   fresh active session after restart for up to 30 days.
 - Remembered sessions never contain the MFL password, API key, CSRF token, caches,

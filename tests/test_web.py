@@ -870,10 +870,16 @@ def test_historical_import_uses_discovered_mfl_season_and_private_store(monkeypa
     source = MFLHistoricalLeague(
         2025, "55555", "https://www49.myfantasyleague.com/2025/home/55555",
     )
+    older_source = MFLHistoricalLeague(
+        2024, "44444", "https://www49.myfantasyleague.com/2024/home/44444",
+    )
 
     class CurrentClient:
         def league_details(self):
-            return MFLLeagueDetails((), {}, history_years=(2026, 2025), history_leagues=(source,))
+            return MFLLeagueDetails(
+                (), {}, history_years=(2026, 2025, 2024),
+                history_leagues=(source, older_source),
+            )
 
     class HistoricalClient:
         def league_details(self):
@@ -895,6 +901,8 @@ def test_historical_import_uses_discovered_mfl_season_and_private_store(monkeypa
         def __init__(self): self.saved = []
         def connection_status(self): return {"schema_version": 3}
         def save_historical_season(self, owner, **kwargs): self.saved.append((owner, kwargs))
+        def load_historical_seasons(self, owner, **kwargs):
+            return ({"season": 2025},)
 
     store = HistoryStore()
     monkeypatch.setenv("WP_DATABASE_URL", "postgresql://configured")
@@ -920,6 +928,16 @@ def test_historical_import_uses_discovered_mfl_season_and_private_store(monkeypa
     assert saved["season"].season == 2025
     assert len(saved["season"].franchises) == 2
     assert len(saved["season"].matchup_teams) == 2
+
+    # An all-season retry skips the already stored year and resumes with the
+    # oldest missing season instead of restarting at the newest MFL link.
+    store.saved.clear()
+    response = client.post("/data-status/history/import", data={
+        "league": league.id, "season": "all", "csrf_token": "csrf",
+    }, follow_redirects=False)
+    assert response.status_code == 303
+    assert "history_imported=1" in response.headers["location"]
+    assert [entry[1]["season"].season for entry in store.saved] == [2024]
 
 
 def test_notification_center_and_first_run_guide(monkeypatch) -> None:
@@ -991,17 +1009,26 @@ def test_mfl_account_choices_restore_across_devices_and_save_server_side(monkeyp
     }
     first = web_app.BrowserSession("one", 2026, [league_one, league_two], "csrf")
     second = web_app.BrowserSession("two", 2026, [league_one, league_two], "csrf")
-    web_app._apply_account_preferences(first, stored)
-    web_app._apply_account_preferences(second, stored)
+    league_themes = {"11111": "tigers", "22222": "lions"}
+    web_app._apply_account_preferences(first, stored, league_themes=league_themes)
+    web_app._apply_account_preferences(second, stored, league_themes=league_themes)
     assert (first.theme, first.ranking_preference, first.default_league_id, first.selected_week) == (
         "pistons", "fantasypros-half", "22222", 6,
     )
     assert second.theme == first.theme and second.onboarding_complete is True
+    assert first.theme_scope == "league"
+    assert first.theme_for("11111") == "tigers" and first.theme_for("22222") == "lions"
 
     saved = []
     class PreferenceStore:
+        league_saved = []
+        cleared = []
         def save_preferences(self, owner, **values):
             saved.append((owner, values))
+        def save_league_theme(self, owner, **values):
+            self.league_saved.append((owner, values))
+        def clear_league_themes(self, owner, **values):
+            self.cleared.append((owner, values))
     first.owner_fingerprint = "account:stable-mfl-user"
     web_app.sessions.clear()
     web_app.sessions["account-choice"] = first
@@ -1014,8 +1041,22 @@ def test_mfl_account_choices_restore_across_devices_and_save_server_side(monkeyp
     )
     assert response.status_code == 204 and first.theme == "redwings"
     assert saved[-1] == ("account:stable-mfl-user", {"theme": "redwings"})
+    assert first.theme_scope == "global" and first.league_themes == {}
+    league_response = client.post(
+        "/preferences/theme", data={
+            "theme": "tigers", "scope": "league", "league": "11111", "csrf_token": "csrf",
+        },
+    )
+    assert league_response.status_code == 204
+    assert first.theme_scope == "league" and first.theme_for("11111") == "tigers"
+    assert PreferenceStore.league_saved[-1][1] == {
+        "year": 2026, "league_id": "11111", "theme": "tigers",
+    }
     assert client.post(
         "/preferences/theme", data={"theme": "unknown", "csrf_token": "csrf"},
+    ).status_code == 400
+    assert client.post(
+        "/preferences/theme", data={"theme": "lions", "scope": "device", "csrf_token": "csrf"},
     ).status_code == 400
 
 

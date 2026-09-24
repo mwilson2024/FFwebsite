@@ -486,12 +486,19 @@ class BrowserSession:
     operations: list[OperationRecord] = field(default_factory=list)
     ranking_preference: str = field(default_factory=_default_ranking_preference)
     theme: str = ""
+    theme_scope: str = "global"
+    league_themes: dict[str, str] = field(default_factory=dict)
     default_league_id: str = ""
     onboarding_complete: bool = False
     ranking_setup_complete: bool = False
     remember_token: str = ""
     owner_fingerprint: str = ""
     created_at: float = field(default_factory=time.monotonic)
+
+    def theme_for(self, league_id: str = "") -> str:
+        if self.theme_scope == "league" and league_id:
+            return self.league_themes.get(str(league_id), self.theme)
+        return self.theme
 
 
 sessions: dict[str, BrowserSession] = {}
@@ -669,6 +676,18 @@ def _database_preferences(owner_fingerprint: str) -> dict:
         return {}
 
 
+def _database_league_themes(owner_fingerprint: str, year: int) -> dict[str, str]:
+    if not owner_fingerprint or not os.environ.get("WP_DATABASE_URL", "").strip():
+        return {}
+    try:
+        return _persistent_store().load_league_themes(owner_fingerprint, year=year)
+    except Exception as error:
+        # Migration 4 is optional during rollout. Global account themes keep
+        # working even if per-league persistence has not been installed yet.
+        log_error("league_theme_restore_failed", error)
+        return {}
+
+
 def _database_watchlists(owner_fingerprint: str, year: int) -> dict[str, set[str]]:
     if not owner_fingerprint or not os.environ.get("WP_DATABASE_URL", "").strip():
         return {}
@@ -713,6 +732,7 @@ def _apply_account_preferences(
     *,
     cookie_ranking: str = "",
     cookie_league: str = "",
+    league_themes: dict[str, str] | None = None,
 ) -> None:
     """Apply database choices first, with device cookies as legacy fallback."""
     stored_ranking = str(stored.get("ranking_preference") or "")
@@ -724,6 +744,12 @@ def _apply_account_preferences(
     stored_theme = str(stored.get("theme") or "")
     current.theme = stored_theme if stored_theme in _THEMES else ""
     available_leagues = {item.id for item in current.leagues}
+    current.league_themes = {
+        str(league_id): str(theme)
+        for league_id, theme in (league_themes or {}).items()
+        if str(league_id) in available_leagues and str(theme) in _THEMES
+    }
+    current.theme_scope = "league" if current.league_themes else "global"
     stored_league = str(stored.get("default_league_id") or "")
     cookie_year, separator, cookie_league_id = cookie_league.partition(":")
     if not separator or cookie_year != str(current.year):
@@ -873,6 +899,7 @@ def _session(request: Request) -> BrowserSession | None:
                 stored,
                 cookie_ranking=cookie_preference,
                 cookie_league=request.cookies.get("wp_last_league", ""),
+                league_themes=_database_league_themes(restored.owner_fingerprint, restored.year),
             )
             restored.watchlists = _database_watchlists(restored.owner_fingerprint, restored.year)
             restored.remember_token = remember_token
@@ -2681,6 +2708,7 @@ def login(
             stored_preferences,
             cookie_ranking=cookie_preference,
             cookie_league=request.cookies.get("wp_last_league", ""),
+            league_themes=_database_league_themes(current.owner_fingerprint, current.year),
         )
         current.watchlists = _database_watchlists(current.owner_fingerprint, current.year)
         persistent_leagues = [
@@ -2842,14 +2870,40 @@ def save_ranking_preference(
 def save_theme_preference(
     request: Request,
     theme: str = Form(...),
+    scope: str = Form("global"),
+    league: str = Form(""),
     csrf_token: str = Form(...),
 ):
     current = _require_session(request)
     _check_csrf(current, csrf_token)
     if theme not in _THEMES:
         raise HTTPException(status_code=400, detail="Choose a valid theme")
-    current.theme = theme
-    _persist_account_preferences(current, theme=theme)
+    if scope not in {"global", "league"}:
+        raise HTTPException(status_code=400, detail="Choose a valid theme scope")
+    if scope == "league":
+        selected = _league(current, league)
+        current.theme_scope = "league"
+        current.league_themes[selected.id] = theme
+        if current.owner_fingerprint and os.environ.get("WP_DATABASE_URL", "").strip():
+            try:
+                _persistent_store().save_league_theme(
+                    current.owner_fingerprint, year=current.year,
+                    league_id=selected.id, theme=theme,
+                )
+            except Exception as error:
+                log_error("league_theme_save_failed", error)
+    else:
+        current.theme_scope = "global"
+        current.theme = theme
+        current.league_themes.clear()
+        _persist_account_preferences(current, theme=theme)
+        if current.owner_fingerprint and os.environ.get("WP_DATABASE_URL", "").strip():
+            try:
+                _persistent_store().clear_league_themes(
+                    current.owner_fingerprint, year=current.year,
+                )
+            except Exception as error:
+                log_error("league_theme_clear_failed", error)
     return HTMLResponse(status_code=204)
 
 
@@ -3646,7 +3700,24 @@ def import_historical_data(
         available = tuple(
             source for source in details.history_leagues if source.year < current.year
         )[:20]
-        if season != "all":
+        if season == "all":
+            saved_years = {
+                int(row["season"])
+                for row in store.load_historical_seasons(
+                    current.owner_fingerprint, current_league_id=selected.id,
+                )
+            }
+            missing = tuple(
+                sorted(
+                    (source for source in available if source.year not in saved_years),
+                    key=lambda source: source.year,
+                )
+            )
+            # A retry after an MFL rate limit resumes with the oldest missing
+            # season instead of repeatedly refreshing the newest saved year.
+            # Once the archive is complete, Import all remains a full refresh.
+            available = missing or tuple(sorted(available, key=lambda source: source.year))
+        else:
             if not season.isdecimal():
                 raise ValueError("Choose a valid MFL historical season")
             available = tuple(source for source in available if source.year == int(season))
@@ -3899,7 +3970,8 @@ def manager_page(request: Request, franchise_id: str, league: str):
     if not team:
         raise HTTPException(status_code=404, detail="That manager is not in this league")
     context.update(session=current, league=selected, active_tool="league", team=team,
-                   ranking=context["rank_by_team"].get(franchise_id))
+                   ranking=context["rank_by_team"].get(franchise_id),
+                   history_rows=_database_history_summary(current, selected.id))
     return templates.TemplateResponse(request=request, name="manager.html", context=context)
 
 

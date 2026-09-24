@@ -51,6 +51,7 @@ class FakePostgresConnection:
         self.onboarding_complete = False
         self.ranking_setup_complete = False
         self.watchlists = set()
+        self.league_themes = {}
         self.statements = []
 
     def __enter__(self):
@@ -96,6 +97,14 @@ class FakePostgresConnection:
             ))
         if sql.startswith("SELECT watchlist.league_id"):
             return FakePostgresResult(sorted(self.watchlists))
+        if sql.startswith("SELECT league_theme.league_id"):
+            return FakePostgresResult(sorted(self.league_themes.items()))
+        if sql.startswith("INSERT INTO fantasy_hq.league_theme"):
+            self.league_themes[str(params[2])] = str(params[3])
+            return FakePostgresResult()
+        if sql.startswith("DELETE FROM fantasy_hq.league_theme"):
+            self.league_themes.clear()
+            return FakePostgresResult()
         if sql.startswith("INSERT INTO fantasy_hq.watchlist_player"):
             self.watchlists.add((str(params[2]), str(params[3])))
             return FakePostgresResult()
@@ -191,6 +200,12 @@ def test_postgres_store_uses_private_schema_encryption_and_tls(monkeypatch):
     assert choices["default_league_id"] == "54321"
     assert choices["selected_week"] == 7
     assert choices["onboarding_complete"] is True
+    store.save_league_theme(
+        "account:owner-hash", year=2026, league_id="12345", theme="tigers",
+    )
+    assert store.load_league_themes("account:owner-hash", year=2026) == {"12345": "tigers"}
+    store.clear_league_themes("account:owner-hash", year=2026)
+    assert store.load_league_themes("account:owner-hash", year=2026) == {}
     store.save_watchlist_player(
         "account:owner-hash", year=2026, league_id="12345", player_id="999", enabled=True,
     )
