@@ -470,6 +470,74 @@ class EncryptedSessionStore:
                     (user_id, int(year), str(league_id), str(player_id)),
                 )
 
+    def save_player_market_snapshot(
+        self,
+        owner_fingerprint: str,
+        *,
+        year: int,
+        league_id: str,
+        payload: dict[str, Any],
+    ) -> None:
+        """Atomically store a bounded, non-authoritative player-market view."""
+        if not self.database_url:
+            return
+        if not owner_fingerprint or not str(league_id).isdecimal() or not 2020 <= int(year) <= 2100:
+            raise ValueError("A valid owner, MFL league, and season are required")
+        if not isinstance(payload, dict):
+            raise ValueError("Player-market snapshot payload must be an object")
+        encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+        if len(encoded.encode("utf-8")) > 5 * 1024 * 1024:
+            raise ValueError("Player-market snapshot exceeds the storage limit")
+        with self._connect_postgres() as connection:
+            user_id = self._postgres_user_id(connection, owner_fingerprint)
+            connection.execute(
+                "INSERT INTO fantasy_hq.player_market_snapshot "
+                "(user_id, season, league_id, payload, captured_at) "
+                "VALUES (%s, %s, %s, %s::jsonb, now()) "
+                "ON CONFLICT (user_id, season, league_id) DO UPDATE SET "
+                "payload = excluded.payload, captured_at = now()",
+                (user_id, int(year), str(league_id), encoded),
+            )
+
+    def load_player_market_snapshot(
+        self,
+        owner_fingerprint: str,
+        *,
+        year: int,
+        league_id: str,
+        max_age_seconds: int = 7 * 86400,
+    ) -> dict[str, Any] | None:
+        """Load a recent browse-only snapshot for the same authenticated MFL user."""
+        if not self.database_url or not owner_fingerprint:
+            return None
+        if not str(league_id).isdecimal() or not 2020 <= int(year) <= 2100:
+            return None
+        with self._connect_postgres() as connection:
+            row = connection.execute(
+                "SELECT snapshot.payload, snapshot.captured_at "
+                "FROM fantasy_hq.app_user AS app_user "
+                "JOIN fantasy_hq.player_market_snapshot AS snapshot "
+                "ON snapshot.user_id = app_user.id "
+                "WHERE app_user.owner_fingerprint_hash = %s "
+                "AND snapshot.season = %s AND snapshot.league_id = %s "
+                "AND snapshot.captured_at >= now() - (%s * interval '1 second')",
+                (
+                    self._digest_bytes(owner_fingerprint), int(year), str(league_id),
+                    max(60, min(30 * 86400, int(max_age_seconds))),
+                ),
+            ).fetchone()
+        if not row:
+            return None
+        payload = row[0]
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except json.JSONDecodeError:
+                return None
+        if not isinstance(payload, dict):
+            return None
+        return {"payload": payload, "captured_at": self._epoch(row[1])}
+
     def save_historical_season(
         self,
         owner_fingerprint: str,

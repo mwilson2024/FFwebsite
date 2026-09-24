@@ -1242,6 +1242,82 @@ def test_player_market_pool_only_skips_slow_enrichment_reads(monkeypatch) -> Non
     assert calls == {"week": 0, "schedule": 0, "projections": 0, "reference": 0, "scores": 0}
 
 
+def test_player_market_uses_private_snapshot_without_waiting_for_mfl(monkeypatch) -> None:
+    web_app.sessions.clear()
+    league = MFLLeague("11111", "0001", "Fast League")
+    current = web_app.BrowserSession(
+        "cookie", 2026, [league], "csrf", owner_fingerprint="account:fast-owner",
+    )
+    web_app.sessions["snapshot-session"] = current
+    roster_player = MFLPlayer("101", "My Receiver", "WR", "DET")
+    free_player = MFLPlayer("202", "Cached Runner", "RB", "BUF")
+    board = [PlayerRecommendation(
+        free_player,
+        MFLAvailability("202", status="available"),
+        None,
+        None,
+        None,
+        "Refreshing",
+        "muted",
+        "MFL is verifying current ownership and availability.",
+    )]
+    payload = web_app._player_market_snapshot_payload(3, [roster_player], board)
+
+    class SnapshotStore:
+        def load_player_market_snapshot(self, owner, **kwargs):
+            assert owner == "account:fast-owner"
+            assert kwargs == {"year": 2026, "league_id": "11111"}
+            return {"payload": payload, "captured_at": 1_797_000_000}
+
+    monkeypatch.setenv("WP_DATABASE_URL", "postgresql://configured")
+    monkeypatch.setattr(web_app, "_persistent_store", lambda: SnapshotStore())
+    monkeypatch.setattr(web_app, "_client", lambda *args: object())
+    monkeypatch.setattr(
+        web_app,
+        "_load_player_board",
+        lambda *args, **kwargs: pytest.fail("MFL should not block a cached market render"),
+    )
+
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", "snapshot-session")
+    response = client.get("/moves?league=11111")
+
+    assert response.status_code == 200
+    assert "Cached Runner" in response.text
+    assert "1 cached" in response.text
+    assert "browse-only while MFL verifies" in response.text
+    add_control = response.text.split('value="202"', 1)[1].split(">", 1)[0]
+    assert "disabled" in add_control
+    assert "revision=" + web_app._player_market_snapshot_revision(payload) in response.text
+
+
+def test_player_market_snapshot_round_trip_keeps_only_display_state() -> None:
+    roster_player = MFLPlayer("101", "My Receiver", "WR", "DET", espn_id="999")
+    target = PlayerRecommendation(
+        MFLPlayer("202", "Waiver Runner", "RB", "BUF"),
+        MFLAvailability("202", status="waiver", locked=True),
+        12.5,
+        3.0,
+        roster_player,
+        "Waiver target",
+        "good",
+        "Projection detail",
+    )
+    payload = web_app._player_market_snapshot_payload(4, [roster_player], [target])
+
+    parsed = web_app._deserialize_player_market_snapshot(payload)
+
+    assert parsed is not None
+    week, roster, board = parsed
+    assert week == 4
+    assert [player.id for player in roster] == ["101"]
+    assert board[0].player.id == "202"
+    assert board[0].market_status == "locked"
+    assert board[0].projection is None
+    assert "projection" not in payload["players"][0]
+    assert "reason" not in payload["players"][0]
+
+
 def test_player_market_loader_reuses_brief_session_cache(monkeypatch) -> None:
     player = MFLPlayer("free", "Free Player", "RB", "DET")
 

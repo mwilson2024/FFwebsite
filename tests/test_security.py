@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,6 +54,7 @@ class FakePostgresConnection:
         self.ranking_setup_complete = False
         self.watchlists = set()
         self.league_themes = {}
+        self.player_market_snapshots = {}
         self.statements = []
 
     def __enter__(self):
@@ -112,6 +114,15 @@ class FakePostgresConnection:
         if sql.startswith("DELETE FROM fantasy_hq.watchlist_player"):
             self.watchlists.discard((str(params[2]), str(params[3])))
             return FakePostgresResult()
+        if sql.startswith("INSERT INTO fantasy_hq.player_market_snapshot"):
+            self.player_market_snapshots[(int(params[1]), str(params[2]))] = (
+                json.loads(params[3]), datetime.now(timezone.utc),
+            )
+            return FakePostgresResult()
+        if sql.startswith("SELECT snapshot.payload"):
+            return FakePostgresResult(
+                self.player_market_snapshots.get((int(params[1]), str(params[2])))
+            )
         if sql.startswith("DELETE FROM fantasy_hq.remembered_session") and params and len(params) == 1:
             if isinstance(params[0], bytes):
                 self.sessions.pop(params[0], None)
@@ -149,6 +160,19 @@ def test_disabled_data_api_workaround_uses_empty_documented_schema() -> None:
     assert "alter role authenticator set pgrst.db_schemas = 'pgrst_no_exposed_schemas'" in migration
     assert "notify pgrst, 'reload config'" in migration
     assert "create schema if not exists pg_pgrst_no_exposed_schemas" not in migration
+
+
+def test_player_market_snapshot_migration_is_private_and_bounded() -> None:
+    migration = (
+        Path(__file__).resolve().parents[1]
+        / "supabase" / "migrations" / "006_player_market_snapshot.sql"
+    ).read_text(encoding="utf-8")
+
+    assert "primary key (user_id, season, league_id)" in migration
+    assert "jsonb_typeof(payload) = 'object'" in migration
+    assert "octet_length(payload::text) <= 5242880" in migration
+    assert "enable row level security" in migration
+    assert "revoke all on fantasy_hq.player_market_snapshot from anon, authenticated" in migration
 
 
 def test_remembered_session_is_encrypted_tamper_evident_and_revocable(monkeypatch, tmp_path):
@@ -227,6 +251,22 @@ def test_postgres_store_uses_private_schema_encryption_and_tls(monkeypatch):
         "account:owner-hash", year=2026, league_id="12345", player_id="999", enabled=False,
     )
     assert store.load_watchlists("account:owner-hash", 2026) == {}
+    snapshot = {
+        "version": 1,
+        "week": 3,
+        "roster": [],
+        "players": [{"player": {"id": "123", "name": "Cached Player"}}],
+    }
+    store.save_player_market_snapshot(
+        "account:owner-hash", year=2026, league_id="12345", payload=snapshot,
+    )
+    restored_snapshot = store.load_player_market_snapshot(
+        "account:owner-hash", year=2026, league_id="12345",
+    )
+    assert restored_snapshot is not None
+    assert restored_snapshot["payload"] == snapshot
+    assert isinstance(restored_snapshot["captured_at"], int)
+    assert all("account:owner-hash" not in repr(params) for _, params in database.statements)
 
     store.revoke(token)
     assert store.restore(token) is None

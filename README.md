@@ -91,7 +91,7 @@ WP_SESSION_SECRET=<your generated Fernet key>
 ## Supabase PostgreSQL on Azure App Service
 
 The application can use the free Supabase PostgreSQL project instead of the
-SQLite remembered-session file. The database must contain schema migrations 1–5 in
+SQLite remembered-session file. The database must contain schema migrations 1–6 in
 the private `fantasy_hq` schema. When `WP_DATABASE_URL` is absent, local and
 existing Railway deployments continue to use SQLite without any behavior change.
 
@@ -160,6 +160,14 @@ is intentionally empty and does not expose `fantasy_hq`. If the Data API is late
 re-enabled, reset the manual override first with
 `alter role authenticator reset pgrst.db_schemas;` and reload PostgREST with
 `notify pgrst, 'reload config';` so the dashboard can manage exposed schemas again.
+
+Apply [`supabase/migrations/006_player_market_snapshot.sql`](supabase/migrations/006_player_market_snapshot.sql)
+to add the private player-market snapshot. It is keyed by the authenticated MFL
+account, season, and league. The Players page can render this last-known pool
+immediately after an Azure restart, then refresh ownership, availability, locks,
+projections, and recommendations from MFL in the background. Cached rows are
+browse-only: add/drop controls remain disabled until the refresh succeeds, and
+the normal live submission checks still run before every transaction.
 
 Database connection failures are written to standard output as the structured
 event `database_status_unavailable`. In Azure, enable **Monitoring → App Service
@@ -301,10 +309,13 @@ commit `.env`, the key, or MFL login details.
 - Lineup and transaction changes always have a review step before submission.
 - Ownership, free-agent availability, administrative locks, and kickoff locks are
   checked again before player-move submissions.
-- The player market renders its authoritative player pool and ownership first.
-  Projections, rankings, season totals, matchup context, waiver optimization, and
-  defense streaming load in a second same-page request. Drop controls remain
-  disabled until that request completes the kickoff-lock check.
+- With migration 6 installed, the player market first renders its private saved
+  player pool without waiting on MFL. The saved rows are browse-only until a
+  second same-page request verifies ownership, availability, and locks and loads
+  projections, rankings, season totals, matchup context, waiver optimization,
+  and defense streaming. Without a usable snapshot, the page falls back to a
+  live MFL pool read. Drop controls remain disabled until the background lock
+  check completes.
 - Live scoring automatically polls only while an NFL game is in progress.
 - Current-week scores refresh every 30 seconds only while an NFL game clock is
   active. Between games, the last score is retained until the next kickoff; after

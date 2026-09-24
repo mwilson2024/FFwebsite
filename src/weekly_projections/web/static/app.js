@@ -513,9 +513,20 @@
       const response = await fetch(url, { headers: { "Accept": "application/json" } });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || "Player intelligence is unavailable.");
+      if (data.reload_required) {
+        window.location.reload();
+        return;
+      }
+      if (marketWorkspace) marketWorkspace.dataset.marketVerified = "true";
       rows.forEach((row) => {
         const player = data.players?.[row.dataset.playerId];
         if (!player) return;
+        const addControl = row.querySelector('input[name="add_id"]');
+        if (addControl) {
+          addControl.disabled = Boolean(player.is_rostered || !player.is_claimable);
+          addControl.dataset.marketStatus = player.market_status;
+          addControl.dataset.waiverOnly = ["waiver", "locked"].includes(player.market_status) ? "true" : "false";
+        }
         row.dataset.projected = player.projection === null ? "missing" : "projected";
         row.dataset.projection = String(numberOr(player.projection, -9999));
         row.dataset.espnRank = String(numberOr(player.espn_rank, 9999));
@@ -586,7 +597,7 @@
       if (source) source.textContent = data.projection.source;
       if (ml) ml.textContent = `${data.projection.ml_matched} players`;
       if (combined) combined.textContent = `${data.projection.combined_matched} players`;
-      if (copy) copy.textContent = `${data.projection.ranking_label} leads the default sort. MFL remains authoritative for league scoring, locks, ownership, and moves.`;
+      if (copy) copy.textContent = `${data.projection.ranking_label} leads the default sort. MFL just verified ownership, availability, and locks; every submitted move is checked again before it is sent.`;
       const lockedDrops = new Set(data.roster_locked || []);
       dropSelect?.querySelectorAll("[data-drop-player]").forEach((option) => {
         const locked = lockedDrops.has(option.dataset.dropPlayer);
@@ -602,6 +613,7 @@
       if (defense) defense.innerHTML = data.defense_html;
       applyFilters();
       applySort();
+      updateReviewState();
     } catch (error) {
       const source = document.getElementById("market-projection-source");
       const copy = document.getElementById("market-enrichment-copy");
@@ -609,7 +621,7 @@
       if (copy) copy.textContent = `${error.message} The player pool remains available; drops stay disabled until the kickoff lock check succeeds.`;
       ["market-waiver-enrichment", "market-defense-enrichment"].forEach((id) => {
         const target = document.getElementById(id);
-        if (target) target.textContent = "Advisory details could not be loaded. The player pool remains usable.";
+        if (target) target.textContent = "Advisory details could not be loaded. The saved player pool remains available for research.";
       });
     }
   };

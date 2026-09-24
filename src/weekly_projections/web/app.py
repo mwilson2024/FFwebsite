@@ -6,6 +6,7 @@ import math
 import statistics
 import time
 import hashlib
+import json
 import re
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
@@ -696,6 +697,155 @@ def _database_watchlists(owner_fingerprint: str, year: int) -> dict[str, set[str
     except Exception as error:
         log_error("watchlist_restore_failed", error)
         return {}
+
+
+def _market_player_payload(player: MFLPlayer) -> dict[str, str]:
+    return {
+        "id": player.id,
+        "name": player.name,
+        "position": player.position,
+        "team": player.team,
+        "espn_id": player.espn_id,
+        "jersey": player.jersey,
+        "college": player.college,
+        "height": player.height,
+        "weight": player.weight,
+        "draft_year": player.draft_year,
+    }
+
+
+def _player_market_snapshot_payload(
+    week: int | None,
+    roster: list[MFLPlayer],
+    recommendations: list[PlayerRecommendation],
+) -> dict:
+    """Serialize only safe display data; never pending actions or authentication."""
+    return {
+        "version": 1,
+        "week": week if week is not None and 1 <= week <= 18 else None,
+        "roster": [
+            _market_player_payload(player)
+            for player in sorted(roster, key=lambda item: item.id)
+        ],
+        "players": [
+            {
+                "player": _market_player_payload(item.player),
+                "availability": {
+                    "status": item.availability.status,
+                    "locked": bool(item.availability.locked),
+                    "cant_add": bool(item.availability.cant_add),
+                },
+                "fantasy_team_id": item.fantasy_team_id,
+                "fantasy_team_name": item.fantasy_team_name,
+            }
+            for item in sorted(recommendations, key=lambda row: row.player.id)
+        ],
+    }
+
+
+def _player_market_snapshot_revision(payload: dict) -> str:
+    encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:20]
+
+
+def _deserialize_player_market_snapshot(
+    payload: dict,
+) -> tuple[int | None, list[MFLPlayer], list[PlayerRecommendation]] | None:
+    """Parse an untrusted persisted snapshot into browse-only domain objects."""
+    if payload.get("version") != 1:
+        return None
+    raw_roster = payload.get("roster")
+    raw_players = payload.get("players")
+    if not isinstance(raw_roster, list) or not isinstance(raw_players, list):
+        return None
+    if len(raw_roster) > 256 or len(raw_players) > 5_000:
+        return None
+    try:
+        roster = [MFLPlayer.from_dict(row) for row in raw_roster if isinstance(row, dict)]
+        recommendations = []
+        for row in raw_players:
+            if not isinstance(row, dict) or not isinstance(row.get("player"), dict):
+                continue
+            player = MFLPlayer.from_dict(row["player"])
+            if not player.id or len(player.id) > 64 or not _include_on_player_board(player):
+                continue
+            raw_availability = row.get("availability")
+            if not isinstance(raw_availability, dict):
+                raw_availability = {}
+            availability = MFLAvailability(
+                player.id,
+                status=str(raw_availability.get("status") or "available")[:32],
+                locked=bool(raw_availability.get("locked")),
+                cant_add=bool(raw_availability.get("cant_add")),
+            )
+            fantasy_team_id = str(row.get("fantasy_team_id") or "")[:32]
+            fantasy_team_name = str(row.get("fantasy_team_name") or "")[:160]
+            recommendations.append(PlayerRecommendation(
+                player=player,
+                availability=availability,
+                projection=None,
+                roster_delta=None,
+                suggested_drop=None,
+                recommendation="Refreshing",
+                recommendation_tone="muted",
+                reason="MFL is verifying current ownership and availability.",
+                fantasy_team_id=fantasy_team_id,
+                fantasy_team_name=fantasy_team_name,
+            ))
+    except (TypeError, ValueError):
+        return None
+    week = payload.get("week")
+    week = int(week) if isinstance(week, int) and 1 <= week <= 18 else None
+    recommendations.sort(key=lambda item: (
+        {"open": 0, "waiver": 1, "locked": 2, "rostered": 3, "mine": 4}.get(item.market_status, 9),
+        item.player.name.casefold(),
+    ))
+    return week, roster, recommendations
+
+
+def _load_database_player_market_snapshot(
+    current: BrowserSession, league_id: str,
+) -> tuple[int | None, list[MFLPlayer], list[PlayerRecommendation], str, int] | None:
+    if not current.owner_fingerprint or not os.environ.get("WP_DATABASE_URL", "").strip():
+        return None
+    try:
+        stored = _persistent_store().load_player_market_snapshot(
+            current.owner_fingerprint,
+            year=current.year,
+            league_id=league_id,
+        )
+    except Exception as error:
+        _log_provider_error_once(current, league_id, "player_market_snapshot_load_failed", error, window=1800)
+        return None
+    if not stored:
+        return None
+    payload = stored.get("payload")
+    parsed = _deserialize_player_market_snapshot(payload) if isinstance(payload, dict) else None
+    if not parsed:
+        return None
+    return (*parsed, _player_market_snapshot_revision(payload), int(stored.get("captured_at") or 0))
+
+
+def _save_database_player_market_snapshot(
+    current: BrowserSession,
+    league_id: str,
+    week: int | None,
+    roster: list[MFLPlayer],
+    recommendations: list[PlayerRecommendation],
+) -> tuple[str, dict]:
+    payload = _player_market_snapshot_payload(week, roster, recommendations)
+    revision = _player_market_snapshot_revision(payload)
+    if current.owner_fingerprint and os.environ.get("WP_DATABASE_URL", "").strip():
+        try:
+            _persistent_store().save_player_market_snapshot(
+                current.owner_fingerprint,
+                year=current.year,
+                league_id=league_id,
+                payload=payload,
+            )
+        except Exception as error:
+            _log_provider_error_once(current, league_id, "player_market_snapshot_save_failed", error, window=1800)
+    return revision, payload
 
 
 def _database_history_summary(
@@ -4494,15 +4644,29 @@ def moves(request: Request, league: str, q: str = "", error: str = ""):
     blend = ProjectionBlend(scores={}, mfl_scores={}, ml_scores={}, ml_matched=0)
     roster_locked: set[str] = set()
     week: int | None = None
+    market_verified = True
+    market_snapshot_revision = ""
+    market_snapshot_captured_at = 0
     query = q.strip()[:80]
-    try:
-        week, roster, recommendations, blend, roster_locked = _load_player_board(
-            client, current, pool_only=True,
-        )
-        _remember_catalog(current, client)
-    except MFLApiError as caught:
-        log_error("player_board_failed", caught)
-        api_error = str(caught)
+    stored_market = _load_database_player_market_snapshot(current, selected.id)
+    if stored_market:
+        week, roster, recommendations, market_snapshot_revision, market_snapshot_captured_at = stored_market
+        market_verified = False
+        current.player_catalog = {
+            item.player.id: item.player for item in recommendations
+        } | {player.id: player for player in roster}
+    else:
+        try:
+            week, roster, recommendations, blend, roster_locked = _load_player_board(
+                client, current, pool_only=True,
+            )
+            _remember_catalog(current, client)
+            market_snapshot_revision, _ = _save_database_player_market_snapshot(
+                current, selected.id, week, roster, recommendations,
+            )
+        except MFLApiError as caught:
+            log_error("player_board_failed", caught)
+            api_error = str(caught)
     positions = sorted(
         {_board_position(item.player) for item in recommendations if item.player.position},
         key=lambda value: (value not in {"QB", "RB", "WR", "TE", "PK", "DEF"}, value),
@@ -4571,6 +4735,9 @@ def moves(request: Request, league: str, q: str = "", error: str = ""):
             "default_market_count": default_market_count,
             "default_market_label": default_market_label,
             "enrichment_pending": bool(recommendations),
+            "market_verified": market_verified,
+            "market_snapshot_revision": market_snapshot_revision,
+            "market_snapshot_captured_at": market_snapshot_captured_at,
         },
     )
 
@@ -5663,7 +5830,7 @@ class StageMoveRequest(BaseModel):
 
 
 @app.get("/api/player-market/enrichment")
-def api_player_market_enrichment(request: Request, league: str):
+def api_player_market_enrichment(request: Request, league: str, revision: str = ""):
     """Return advisory player-market data without delaying the initial pool."""
     current = _require_session(request)
     selected = _league(current, league)
@@ -5691,6 +5858,13 @@ def api_player_market_enrichment(request: Request, league: str):
 
     recommendations = context["recommendations"]
     blend = context["blend"]
+    current_revision, _ = _save_database_player_market_snapshot(
+        current,
+        selected.id,
+        context["week"],
+        context["roster"],
+        recommendations,
+    )
     ytd_scores = getattr(client, "player_ytd_scores", {})
     avg_scores = getattr(client, "player_avg_scores", {})
     median_scores = getattr(client, "player_median_scores", {})
@@ -5700,6 +5874,13 @@ def api_player_market_enrichment(request: Request, league: str):
     for item in recommendations:
         strength = opponent_strength.get(item.player.id)
         players[item.player.id] = {
+            "market_status": item.market_status,
+            "is_rostered": item.is_rostered,
+            "is_claimable": item.is_claimable,
+            "availability_label": item.availability.label,
+            "availability_locked": item.availability.locked,
+            "fantasy_team_id": item.fantasy_team_id,
+            "fantasy_team_name": item.fantasy_team_name,
             "projection": item.projection,
             "ml_projection": blend.ml_scores.get(item.player.id),
             "espn_rank": (blend.espn_ranks or {}).get(item.player.id),
@@ -5730,6 +5911,9 @@ def api_player_market_enrichment(request: Request, league: str):
     return {
         "league_id": selected.id,
         "week": context["week"],
+        "market_verified": True,
+        "market_revision": current_revision,
+        "reload_required": bool(revision and revision != current_revision),
         "players": players,
         "summary": {
             "player_count": len(recommendations),
