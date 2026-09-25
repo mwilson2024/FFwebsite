@@ -164,10 +164,12 @@ re-enabled, reset the manual override first with
 Apply [`supabase/migrations/006_player_market_snapshot.sql`](supabase/migrations/006_player_market_snapshot.sql)
 to add the private player-market snapshot. It is keyed by the authenticated MFL
 account, season, and league. The Players page can render this last-known pool
-immediately after an Azure restart, then refresh ownership, availability, locks,
-projections, and recommendations from MFL in the background. Cached rows are
-browse-only: add/drop controls remain disabled until the refresh succeeds, and
-the normal live submission checks still run before every transaction.
+immediately after an Azure restart. A fast follow-up request verifies ownership,
+availability, and kickoff locks and enables eligible moves without waiting for
+projection providers. A second background request then fills projected points,
+YTD/average/median scoring, ESPN/MFL/FantasyPros/CBS ranks, matchup context, and
+recommendations. Cached rows are browse-only until verification succeeds, and the
+normal live submission checks still run before every transaction.
 
 Apply [`supabase/migrations/007_league_report_snapshots.sql`](supabase/migrations/007_league_report_snapshots.sql)
 to activate the existing private `provider_cache` table as persistent read-through
@@ -365,11 +367,12 @@ commit `.env`, the key, or MFL login details.
   checked again before player-move submissions.
 - With migration 6 installed, the player market first renders its private saved
   player pool without waiting on MFL. The saved rows are browse-only until a
-  second same-page request verifies ownership, availability, and locks and loads
-  projections, rankings, season totals, matchup context, waiver optimization,
-  and defense streaming. Without a usable snapshot, the page falls back to a
-  live MFL pool read. Drop controls remain disabled until the background lock
-  check completes.
+  fast same-page request verifies ownership, availability, and locks. Eligible
+  moves are enabled at that point; projections, source-specific ranking columns,
+  season totals, matchup context, waiver optimization, and defense streaming load
+  afterward without blocking the verified player pool. Without a usable snapshot,
+  the page falls back to a live MFL pool read. Drop controls remain disabled until
+  the background lock check completes.
 - Live scoring automatically polls only while an NFL game is in progress.
 - Current-week scores refresh every 30 seconds only while an NFL game clock is
   active. Between games, the last score is retained until the next kickoff; after

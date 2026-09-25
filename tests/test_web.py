@@ -361,6 +361,10 @@ def test_move_page_shows_full_board_projections_and_locks(monkeypatch) -> None:
         espn_ranks={"a1": 8.5},
         espn_matched=1,
         espn_source="ESPN weekly consensus (PPR)",
+        fantasypros_ranks={"a1": 7.0},
+        fantasypros_matched=1,
+        cbs_ranks={"a1": 9.0},
+        cbs_matched=1,
         combined_ranks={"a1": 2.0},
         combined_matched=1,
         combined_source="Equal-weight MFL + ESPN + StatHead position ranks",
@@ -383,6 +387,9 @@ def test_move_page_shows_full_board_projections_and_locks(monkeypatch) -> None:
     payload = enriched.json()
     assert payload["players"]["a1"]["projection"] == 14.5
     assert payload["players"]["a1"]["espn_rank"] == 8.5
+    assert payload["players"]["a1"]["mfl_rank"] == 1.0
+    assert payload["players"]["a1"]["fantasypros_rank"] == 7.0
+    assert payload["players"]["a1"]["cbs_rank"] == 9.0
     assert payload["players"]["a1"]["combined_rank"] == 2.0
     assert '<option value="combined-rank"' in response.text
     assert '<option value="espn-rank" selected>ESPN weekly rank</option>' in response.text
@@ -391,10 +398,18 @@ def test_move_page_shows_full_board_projections_and_locks(monkeypatch) -> None:
     assert "Waiver claim only" in response.text
     assert 'value="a2"' in response.text
     locked_control = response.text.split('value="a2"', 1)[1].split(">", 1)[0]
-    assert "disabled" not in locked_control
+    assert "disabled" in locked_control
     assert 'data-waiver-only="true"' in locked_control
+    verified = client.get("/api/player-market/verify?league=11111")
+    assert verified.status_code == 200
+    assert verified.json()["players"]["a2"]["is_claimable"] is True
     assert "YTD" in response.text
     assert "Avg" in response.text
+    assert "Median" in response.text
+    assert "ESPN rank" in response.text
+    assert "MFL proj rank" in response.text
+    assert "FantasyPros" in response.text
+    assert "CBS rank" in response.text
     assert payload["projection"]["source"] == "MFL league scoring · FantasySharks"
     assert 'data-drop-player="r1"' in response.text
     drop_control = response.text.split('data-drop-player="r1"', 1)[1].split(">", 1)[0]
@@ -476,7 +491,7 @@ def test_defense_streaming_cards_use_loaded_data_and_existing_move_builder(monke
         assert client.get("/api/player-market/enrichment?league=11111").status_code == 200
         assert reads == {"details": 1, "activity": 1}
         assert f"2026:11111:report:activity" in web_app.sessions[session_id].read_cache
-    assert "20260919-waiver-optimizer" in response.text
+    assert "20260924-progressive-market" in response.text
     assert "themes.css" in response.text and "viewport-fit=cover" in response.text
 
 
@@ -1256,6 +1271,56 @@ def test_player_market_pool_only_skips_slow_enrichment_reads(monkeypatch) -> Non
     assert blend.scores == {}
     assert locked == set()
     assert calls == {"week": 0, "schedule": 0, "projections": 0, "reference": 0, "scores": 0}
+
+
+def test_player_market_verification_loads_locks_before_projection_data(monkeypatch) -> None:
+    player = MFLPlayer("free", "Free Player", "RB", "DET")
+    calls = {"week": 0, "schedule": 0, "projections": 0, "reference": 0, "scores": 0}
+
+    class VerificationClient:
+        config = MFLConfig(2026, "11111", "0001", user_cookie="test")
+        session = None
+        week_games = {}
+
+        def roster_ids(self): return set()
+        def free_agents(self): return {player.id: MFLAvailability(player.id)}
+        def trade_rosters(self): return {"0001": set()}
+        def league_details(self):
+            return MFLLeagueDetails((), {"0001": MFLFranchise("0001", "My Team")})
+        def players(self): return {player.id: player}
+        def current_week(self):
+            calls["week"] += 1
+            return 2
+        def nfl_team_kickoffs(self, *, week):
+            calls["schedule"] += 1
+            return {"DET": 4_000_000_000}
+        def projected_scores(self, **kwargs):
+            calls["projections"] += 1
+            return {player.id: 10.0}
+
+    monkeypatch.setattr(
+        web_app,
+        "_load_reference_projection_blend",
+        lambda *args, **kwargs: calls.__setitem__("reference", calls["reference"] + 1),
+    )
+    monkeypatch.setattr(
+        web_app,
+        "_load_player_score_summaries",
+        lambda *args, **kwargs: calls.__setitem__("scores", calls["scores"] + 1),
+    )
+
+    week, _, board, blend, locked = web_app._load_player_board(
+        VerificationClient(),
+        include_reference=False,
+        include_score_context=False,
+        include_projections=False,
+    )
+
+    assert week == 2
+    assert [item.player.id for item in board] == ["free"]
+    assert blend.scores == {}
+    assert locked == set()
+    assert calls == {"week": 1, "schedule": 1, "projections": 0, "reference": 0, "scores": 0}
 
 
 def test_player_market_uses_private_snapshot_without_waiting_for_mfl(monkeypatch) -> None:

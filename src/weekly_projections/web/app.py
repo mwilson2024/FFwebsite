@@ -2776,12 +2776,31 @@ def _primary_projection_ranks(
     }, "MFL projected position rank"
 
 
+def _player_market_rank_maps(
+    recommendations: list[PlayerRecommendation],
+    blend: ProjectionBlend,
+) -> dict[str, dict[str, float]]:
+    """Keep source ranks separate so the market never compares raw point scales."""
+    players = {item.player.id: item.player for item in recommendations}
+    return {
+        "mfl": {
+            player_id: float(rank)
+            for player_id, rank in _position_score_ranks(players, blend.mfl_scores).items()
+        },
+        "espn": dict(blend.espn_ranks or {}),
+        "fantasypros": dict(blend.fantasypros_ranks or {}),
+        "cbs": dict(blend.cbs_ranks or {}),
+        "combined": dict(blend.combined_ranks or {}),
+    }
+
+
 def _load_player_board(
     client: MFLClient,
     current: BrowserSession | None = None,
     *,
     include_reference: bool = True,
     include_score_context: bool = True,
+    include_projections: bool = True,
     pool_only: bool = False,
 ) -> tuple[
     int | None,
@@ -2795,6 +2814,8 @@ def _load_player_board(
     board_label = (
         "player-pool"
         if pool_only
+        else "player-board-verification"
+        if not include_projections
         else f"player-board:{ranking_cache}"
         if include_reference and include_score_context
         else "home-player-board"
@@ -2909,7 +2930,7 @@ def _load_player_board(
         except MFLApiError:
             pass
     projections: dict[str, float] = {}
-    if not pool_only:
+    if not pool_only and include_projections:
         try:
             # One league-wide request is both more complete and gentler on MFL's
             # rate limit than separate free-agent and roster projection requests.
@@ -2924,7 +2945,7 @@ def _load_player_board(
     reference_players = [player for player in catalog.values() if _include_on_player_board(player)]
     blend = (
         ProjectionBlend(scores={}, mfl_scores={}, ml_scores={}, ml_matched=0)
-        if pool_only
+        if pool_only or not include_projections
         else _load_reference_projection_blend(
             client,
             current,
@@ -5485,7 +5506,7 @@ def moves(request: Request, league: str, q: str = "", error: str = ""):
     blend = ProjectionBlend(scores={}, mfl_scores={}, ml_scores={}, ml_matched=0)
     roster_locked: set[str] = set()
     week: int | None = None
-    market_verified = True
+    market_verified = False
     market_snapshot_revision = ""
     market_snapshot_captured_at = 0
     query = q.strip()[:80]
@@ -5522,6 +5543,13 @@ def moves(request: Request, league: str, q: str = "", error: str = ""):
         key=lambda item: item[1].casefold(),
     )
     default_market_filter, default_market_count, default_market_label = _market_default_filter(recommendations)
+    market_ranks = _player_market_rank_maps(recommendations, blend)
+    ranking_default_sorts = {
+        "mfl": "mfl-rank",
+        "combined": "combined-rank",
+        "fantasypros-half": "fantasypros-rank",
+        "cbs-ppr": "cbs-rank",
+    }
     return templates.TemplateResponse(
         request=request,
         name="moves.html",
@@ -5553,16 +5581,17 @@ def moves(request: Request, league: str, q: str = "", error: str = ""):
             "espn_source": blend.espn_source,
             "mfl_projections": blend.mfl_scores,
             "ml_projections": blend.ml_scores,
-            "espn_ranks": blend.espn_ranks or {},
-            "combined_ranks": blend.combined_ranks or {},
+            "mfl_projection_ranks": market_ranks["mfl"],
+            "espn_ranks": market_ranks["espn"],
+            "fantasypros_ranks": market_ranks["fantasypros"],
+            "cbs_ranks": market_ranks["cbs"],
+            "combined_ranks": market_ranks["combined"],
             "combined_matched": blend.combined_matched,
             "combined_source": blend.combined_source,
             "ranking_preference": current.ranking_preference,
             "ranking_label": _RANKING_PREFERENCES[current.ranking_preference],
-            "ranking_default_sort": (
-                "projection" if current.ranking_preference == "mfl"
-                else "combined-rank" if current.ranking_preference == "combined"
-                else "espn-rank"
+            "ranking_default_sort": ranking_default_sorts.get(
+                current.ranking_preference, "espn-rank",
             ),
             "ytd_scores": getattr(client, "player_ytd_scores", {}),
             "avg_scores": getattr(client, "player_avg_scores", {}),
@@ -6670,6 +6699,71 @@ class StageMoveRequest(BaseModel):
     replace_existing: bool = False
 
 
+@app.get("/api/player-market/verify")
+def api_player_market_verify(request: Request, league: str, revision: str = ""):
+    """Verify ownership and kickoff locks without waiting on projection providers."""
+    current = _require_session(request)
+    selected = _league(current, league)
+    client = _client(current, selected)
+    try:
+        week, roster, recommendations, _, roster_locked = _load_player_board(
+            client,
+            current,
+            include_reference=False,
+            include_score_context=False,
+            include_projections=False,
+        )
+        _remember_catalog(current, client)
+    except MFLApiError as error:
+        _log_provider_error_once(
+            current,
+            selected.id,
+            "player_market_verification_failed",
+            error,
+            window=error.retry_after if isinstance(error, MFLRateLimitError) else 120,
+        )
+        return JSONResponse(
+            {
+                "detail": (
+                    "The saved player pool is available for research, but MFL could "
+                    "not verify ownership, availability, and kickoff locks right now."
+                ),
+                "reference": request.state.error_reference,
+            },
+            status_code=503,
+        )
+
+    current_revision, _ = _save_database_player_market_snapshot(
+        current, selected.id, week, roster, recommendations,
+    )
+    return {
+        "league_id": selected.id,
+        "week": week,
+        "market_verified": True,
+        "market_revision": current_revision,
+        "reload_required": bool(revision and revision != current_revision),
+        "players": {
+            item.player.id: {
+                "market_status": item.market_status,
+                "is_rostered": item.is_rostered,
+                "is_claimable": item.is_claimable,
+                "availability_label": item.availability.label,
+                "availability_locked": item.availability.locked,
+                "fantasy_team_id": item.fantasy_team_id,
+                "fantasy_team_name": item.fantasy_team_name,
+            }
+            for item in recommendations
+        },
+        "summary": {
+            "player_count": len(recommendations),
+            "available_count": sum(not item.is_rostered for item in recommendations),
+            "rostered_count": sum(item.is_rostered for item in recommendations),
+            "locked_count": sum(item.availability.locked for item in recommendations),
+        },
+        "roster_locked": sorted(roster_locked),
+    }
+
+
 @app.get("/api/player-market/enrichment")
 def api_player_market_enrichment(request: Request, league: str, revision: str = ""):
     """Return advisory player-market data without delaying the initial pool."""
@@ -6711,6 +6805,7 @@ def api_player_market_enrichment(request: Request, league: str, revision: str = 
     median_scores = getattr(client, "player_median_scores", {})
     median_window = getattr(client, "player_median_window", 0)
     opponent_strength = getattr(client, "opponent_strength", {})
+    market_ranks = _player_market_rank_maps(recommendations, blend)
     players = {}
     for item in recommendations:
         strength = opponent_strength.get(item.player.id)
@@ -6723,9 +6818,13 @@ def api_player_market_enrichment(request: Request, league: str, revision: str = 
             "fantasy_team_id": item.fantasy_team_id,
             "fantasy_team_name": item.fantasy_team_name,
             "projection": item.projection,
+            "mfl_projection": blend.mfl_scores.get(item.player.id),
             "ml_projection": blend.ml_scores.get(item.player.id),
-            "espn_rank": (blend.espn_ranks or {}).get(item.player.id),
-            "combined_rank": (blend.combined_ranks or {}).get(item.player.id),
+            "mfl_rank": market_ranks["mfl"].get(item.player.id),
+            "espn_rank": market_ranks["espn"].get(item.player.id),
+            "fantasypros_rank": market_ranks["fantasypros"].get(item.player.id),
+            "cbs_rank": market_ranks["cbs"].get(item.player.id),
+            "combined_rank": market_ranks["combined"].get(item.player.id),
             "ytd": ytd_scores.get(item.player.id),
             "average": avg_scores.get(item.player.id),
             "median": median_scores.get(item.player.id),

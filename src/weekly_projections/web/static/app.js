@@ -415,6 +415,9 @@
     const text = (row, key) => row.dataset[key] || "";
     const sorted = rows.slice().sort((left, right) => {
       if (selected === "espn-rank") return number(left, "espnRank") - number(right, "espnRank") || number(right, "projection") - number(left, "projection");
+      if (selected === "mfl-rank") return number(left, "mflRank") - number(right, "mflRank") || number(right, "projection") - number(left, "projection");
+      if (selected === "fantasypros-rank") return number(left, "fantasyprosRank") - number(right, "fantasyprosRank") || number(right, "projection") - number(left, "projection");
+      if (selected === "cbs-rank") return number(left, "cbsRank") - number(right, "cbsRank") || number(right, "projection") - number(left, "projection");
       if (selected === "combined-rank") return number(left, "combinedRank") - number(right, "combinedRank") || number(right, "projection") - number(left, "projection");
       if (selected === "projection") return number(right, "projection") - number(left, "projection") || text(left, "name").localeCompare(text(right, "name"));
       if (selected === "ytd") return number(right, "ytd") - number(left, "ytd") || number(right, "avg") - number(left, "avg");
@@ -506,6 +509,52 @@
     }
   };
   const numberOr = (value, fallback) => value === null || value === undefined ? fallback : Number(value);
+  const applyMarketVerification = (data) => {
+    if (data.reload_required) {
+      window.location.reload();
+      return false;
+    }
+    if (marketWorkspace) marketWorkspace.dataset.marketVerified = "true";
+    rows.forEach((row) => {
+      const player = data.players?.[row.dataset.playerId];
+      if (!player) return;
+      row.dataset.status = player.market_status;
+      row.dataset.fantasyTeam = player.fantasy_team_id || "none";
+      const addControl = row.querySelector('input[name="add_id"]');
+      if (addControl) {
+        addControl.disabled = Boolean(player.is_rostered || !player.is_claimable);
+        addControl.dataset.marketStatus = player.market_status;
+        addControl.dataset.waiverOnly = ["waiver", "locked"].includes(player.market_status) ? "true" : "false";
+      }
+    });
+    const summaryTargets = {
+      "market-player-count": data.summary?.player_count,
+      "market-available-count": data.summary?.available_count,
+      "market-rostered-count": data.summary?.rostered_count,
+      "market-locked-count": data.summary?.locked_count,
+    };
+    Object.entries(summaryTargets).forEach(([id, value]) => {
+      const target = document.getElementById(id);
+      if (target && value !== undefined) target.textContent = value;
+    });
+    const lockedDrops = new Set(data.roster_locked || []);
+    dropSelect?.querySelectorAll("[data-drop-player]").forEach((option) => {
+      const locked = lockedDrops.has(option.dataset.dropPlayer);
+      option.disabled = locked;
+      option.textContent = `${option.dataset.dropLabel}${locked ? " · LOCKED" : ""}`;
+      if (locked && option.selected) dropSelect.value = "";
+    });
+    const lockStatus = document.getElementById("drop-lock-status");
+    if (lockStatus) lockStatus.textContent = "Ownership and kickoff locks are verified. Started games stay locked and cannot be dropped.";
+    applyFilters();
+    updateReviewState();
+    return true;
+  };
+  const scheduleMarketEnrichment = () => {
+    if (!marketWorkspace?.dataset.playerMarketEnrichment) return;
+    if ("requestIdleCallback" in window) window.requestIdleCallback(enrichMarket, { timeout: 1500 });
+    else window.setTimeout(enrichMarket, 0);
+  };
   const enrichMarket = async () => {
     const url = marketWorkspace?.dataset.playerMarketEnrichment;
     if (!url || !rows.length) return;
@@ -513,23 +562,16 @@
       const response = await fetch(url, { headers: { "Accept": "application/json" } });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || "Player intelligence is unavailable.");
-      if (data.reload_required) {
-        window.location.reload();
-        return;
-      }
-      if (marketWorkspace) marketWorkspace.dataset.marketVerified = "true";
+      if (!applyMarketVerification(data)) return;
       rows.forEach((row) => {
         const player = data.players?.[row.dataset.playerId];
         if (!player) return;
-        const addControl = row.querySelector('input[name="add_id"]');
-        if (addControl) {
-          addControl.disabled = Boolean(player.is_rostered || !player.is_claimable);
-          addControl.dataset.marketStatus = player.market_status;
-          addControl.dataset.waiverOnly = ["waiver", "locked"].includes(player.market_status) ? "true" : "false";
-        }
         row.dataset.projected = player.projection === null ? "missing" : "projected";
         row.dataset.projection = String(numberOr(player.projection, -9999));
         row.dataset.espnRank = String(numberOr(player.espn_rank, 9999));
+        row.dataset.mflRank = String(numberOr(player.mfl_rank, 9999));
+        row.dataset.fantasyprosRank = String(numberOr(player.fantasypros_rank, 9999));
+        row.dataset.cbsRank = String(numberOr(player.cbs_rank, 9999));
         row.dataset.combinedRank = String(numberOr(player.combined_rank, 9999));
         row.dataset.ytd = String(numberOr(player.ytd, -9999));
         row.dataset.avg = String(numberOr(player.average, -9999));
@@ -537,14 +579,14 @@
         row.dataset.matchup = String(numberOr(player.matchup?.rank, 9999));
         row.dataset.edge = String(numberOr(player.roster_delta, -9999));
 
-        const projectionDetail = ["MFL league"];
-        if (player.combined_rank !== null) projectionDetail.push(`Combined ${Number(player.combined_rank).toFixed(1)} ${row.dataset.position} rank`);
-        if (player.espn_rank !== null) projectionDetail.push(`ESPN #${Number(player.espn_rank).toFixed(1)}`);
-        if (player.ml_projection !== null) projectionDetail.push(`ML ${Number(player.ml_projection).toFixed(1)}`);
-        replaceMetric(row.querySelector(".projection-cell"), player.projection === null ? null : Number(player.projection).toFixed(1), projectionDetail.join(" · "));
+        replaceMetric(row.querySelector(".projection-cell"), player.projection === null ? null : Number(player.projection).toFixed(1), "MFL league-scored");
         replaceMetric(row.querySelector(".ytd-cell"), player.ytd === null ? null : Number(player.ytd).toFixed(1));
-        replaceMetric(row.querySelector(".avg-cell"), player.average === null ? null : Number(player.average).toFixed(1));
         replaceMetric(row.querySelector(".median-cell"), player.median === null ? null : Number(player.median).toFixed(1), player.median === null ? "" : `Last ${player.median_window}`);
+        replaceMetric(row.querySelector(".avg-cell"), player.average === null ? null : Number(player.average).toFixed(1));
+        replaceMetric(row.querySelector(".espn-rank-cell"), player.espn_rank === null ? null : `#${Number(player.espn_rank).toFixed(1)}`);
+        replaceMetric(row.querySelector(".mfl-rank-cell"), player.mfl_rank === null ? null : `#${Number(player.mfl_rank).toFixed(1)}`);
+        replaceMetric(row.querySelector(".fantasypros-rank-cell"), player.fantasypros_rank === null ? null : `#${Number(player.fantasypros_rank).toFixed(1)}`);
+        replaceMetric(row.querySelector(".cbs-rank-cell"), player.cbs_rank === null ? null : `#${Number(player.cbs_rank).toFixed(1)}`);
         const matchupCell = row.querySelector(".matchup-cell");
         matchupCell?.replaceChildren();
         if (matchupCell && player.matchup) {
@@ -579,17 +621,8 @@
           recommendationCell.append(label, reason);
         }
       });
-      const summaryTargets = {
-        "market-player-count": data.summary.player_count,
-        "market-available-count": data.summary.available_count,
-        "market-rostered-count": data.summary.rostered_count,
-        "market-projected-count": data.summary.projected_count,
-        "market-locked-count": data.summary.locked_count,
-      };
-      Object.entries(summaryTargets).forEach(([id, value]) => {
-        const target = document.getElementById(id);
-        if (target) target.textContent = value;
-      });
+      const projectedCount = document.getElementById("market-projected-count");
+      if (projectedCount) projectedCount.textContent = data.summary.projected_count;
       const source = document.getElementById("market-projection-source");
       const ml = document.getElementById("market-ml-matched");
       const combined = document.getElementById("market-combined-matched");
@@ -597,16 +630,7 @@
       if (source) source.textContent = data.projection.source;
       if (ml) ml.textContent = `${data.projection.ml_matched} players`;
       if (combined) combined.textContent = `${data.projection.combined_matched} players`;
-      if (copy) copy.textContent = `${data.projection.ranking_label} leads the default sort. MFL just verified ownership, availability, and locks; every submitted move is checked again before it is sent.`;
-      const lockedDrops = new Set(data.roster_locked || []);
-      dropSelect?.querySelectorAll("[data-drop-player]").forEach((option) => {
-        const locked = lockedDrops.has(option.dataset.dropPlayer);
-        option.disabled = locked;
-        option.textContent = `${option.dataset.dropLabel}${locked ? " · LOCKED" : ""}`;
-        if (locked && option.selected) dropSelect.value = "";
-      });
-      const lockStatus = document.getElementById("drop-lock-status");
-      if (lockStatus) lockStatus.textContent = "Started games stay locked and cannot be dropped.";
+      if (copy) copy.textContent = `${data.projection.ranking_label} leads the default sort. Rankings and projections loaded after MFL verified ownership, availability, and locks; every submitted move is checked again before it is sent.`;
       const waiver = document.getElementById("market-waiver-enrichment");
       const defense = document.getElementById("market-defense-enrichment");
       if (waiver) waiver.innerHTML = data.waiver_html;
@@ -618,17 +642,36 @@
       const source = document.getElementById("market-projection-source");
       const copy = document.getElementById("market-enrichment-copy");
       if (source) source.textContent = "Extra data unavailable";
-      if (copy) copy.textContent = `${error.message} The player pool remains available; drops stay disabled until the kickoff lock check succeeds.`;
+      const verified = marketWorkspace?.dataset.marketVerified === "true";
+      if (copy) copy.textContent = verified
+        ? `${error.message} Ownership and kickoff locks are verified, so moves remain available; only advisory rankings are missing.`
+        : `${error.message} The player pool remains available; moves stay disabled until the kickoff lock check succeeds.`;
       ["market-waiver-enrichment", "market-defense-enrichment"].forEach((id) => {
         const target = document.getElementById(id);
         if (target) target.textContent = "Advisory details could not be loaded. The saved player pool remains available for research.";
       });
     }
   };
-  if (marketWorkspace?.dataset.playerMarketEnrichment) {
-    if ("requestIdleCallback" in window) window.requestIdleCallback(enrichMarket, { timeout: 1200 });
-    else window.setTimeout(enrichMarket, 0);
-  }
+  const verifyMarket = async () => {
+    const url = marketWorkspace?.dataset.playerMarketVerification;
+    if (!url || !rows.length) {
+      scheduleMarketEnrichment();
+      return;
+    }
+    try {
+      const response = await fetch(url, { headers: { "Accept": "application/json" } });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "MFL verification is unavailable.");
+      if (!applyMarketVerification(data)) return;
+      const copy = document.getElementById("market-enrichment-copy");
+      if (copy) copy.textContent = "Ownership, availability, and kickoff locks are ready. Projection points, season totals, rankings, matchup context, and waiver intelligence are loading next.";
+    } catch (error) {
+      const copy = document.getElementById("market-enrichment-copy");
+      if (copy) copy.textContent = `${error.message} The saved player pool remains browse-only while the full refresh tries again.`;
+    }
+    scheduleMarketEnrichment();
+  };
+  if (marketWorkspace) verifyMarket();
 
   const moveBuilder = document.querySelector("#move-builder");
   const useDefenseSuggestion = (button) => {
