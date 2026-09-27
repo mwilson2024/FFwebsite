@@ -22,5 +22,10 @@ def test_service_worker_handles_background_push_and_safe_internal_navigation():
 
 def test_command_center_loads_leagues_sequentially():
     script = (ROOT / "src" / "weekly_projections" / "web" / "static" / "command-center.js").read_text(encoding="utf-8")
+    template = (ROOT / "src" / "weekly_projections" / "web" / "templates" / "command_center.html").read_text(encoding="utf-8")
     assert "for (const card of cards)" in script
     assert "Promise.all" not in script
+    assert script.index("for (const card of cards)") < script.index("/queue")
+    assert "data-command-filter" in template
+    assert "command-action-count" in template
+    assert "Core data loads first; transaction queues follow." in template

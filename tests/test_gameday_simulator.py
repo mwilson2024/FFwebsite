@@ -31,6 +31,19 @@ def test_gameday_does_not_duplicate_unchanged_snapshots():
     assert len(state["probability"]) == 1
 
 
+def test_gameday_can_keep_probability_without_mfl_score_events():
+    state = observe_scoring(
+        None, _teams(), (55.0, 45.0), observed_at=1000, timezone=timezone.utc,
+        record_events=False,
+    )
+    state = observe_scoring(
+        state, _teams(16.2, 7.0, 16.2), (68.25, 31.75), observed_at=1060,
+        timezone=timezone.utc, record_events=False,
+    )
+    assert state["events"] == []
+    assert len(state["probability"]) == 2
+
+
 def test_decision_simulator_reports_week_ros_byes_and_playoffs():
     current = MFLPlayer("1", "Current", "RB", "DET")
     proposed = MFLPlayer("2", "Proposed", "RB", "GB")

@@ -1,1 +1,57 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"><meta name="csrf-token" content="{{ session.csrf_token }}"><title>Command center</title><link rel="stylesheet" href="/static/app.css?v=20260927-command"><link rel="stylesheet" href="/static/workspace.css?v=3"><link rel="stylesheet" href="/static/command-center.css?v=1"><link rel="stylesheet" href="/static/lions.css?v=1"><script src="/static/command-center.js?v=1" defer></script>{% include '_theme_assets.html' %}</head><body class="gameday-page">{% include '_league_header.html' %}<main class="command-shell" id="main-content"><section class="command-hero"><div><p class="eyebrow">EVERY LEAGUE · ONE BOARD</p><h1>Multi-league command center</h1><p>Scores, lineup edges, and urgent roster alerts load one league at a time to protect your MFL request limit.</p></div><span>{{ leagues|length }} connected</span></section><div class="command-grid" data-command-center>{% for item in leagues %}<article class="command-card loading" data-command-league="{{ item.id }}"><header><span class="league-badge">{{ loop.index }}</span><div><h2>{{ item.name }}</h2><p>League {{ item.id }}</p></div><span class="load-state">Loading…</span></header><div class="command-skeleton"><i></i><i></i><i></i></div></article>{% endfor %}</div><noscript><p class="warning">JavaScript is required to progressively load each league. Your MFL data is not requested until this page can load it safely.</p></noscript></main></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="csrf-token" content="{{ session.csrf_token }}">
+  <title>Command center</title>
+  <link rel="stylesheet" href="/static/app.css?v=20260927-command">
+  <link rel="stylesheet" href="/static/workspace.css?v=3">
+  <link rel="stylesheet" href="/static/command-center.css?v=2">
+  <link rel="stylesheet" href="/static/lions.css?v=1">
+  <script src="/static/command-center.js?v=2" defer></script>
+  {% include '_theme_assets.html' %}
+</head>
+<body class="gameday-page">
+  {% include '_league_header.html' %}
+  <main class="command-shell" id="main-content">
+    <section class="command-hero">
+      <div>
+        <p class="eyebrow">EVERY LEAGUE · ONE BOARD</p>
+        <h1>Multi-league command center</h1>
+        <p>See what needs action first, then jump straight into the lineup, matchup, waiver, or trade that matters.</p>
+      </div>
+      <div class="command-hero-status"><strong>{{ leagues|length }}</strong><span>connected leagues</span><small id="command-load-progress">Preparing board…</small></div>
+    </section>
+    <section class="command-overview" aria-label="Portfolio summary" aria-live="polite">
+      <article><span>Needs attention</span><strong id="command-action-count">—</strong><small>lineup and injury items</small></article>
+      <article><span>Live now</span><strong id="command-live-count">—</strong><small>active matchups</small></article>
+      <article><span>Pending</span><strong id="command-pending-count">—</strong><small>waivers and trades</small></article>
+      <article><span>Lineup upside</span><strong id="command-edge-total">—</strong><small>projected points available</small></article>
+    </section>
+    <div class="command-toolbar" aria-label="Command center filters">
+      <div role="group" aria-label="Filter leagues">
+        <button type="button" class="active" data-command-filter="all" aria-pressed="true">All leagues</button>
+        <button type="button" data-command-filter="action" aria-pressed="false">Needs action</button>
+        <button type="button" data-command-filter="live" aria-pressed="false">Live</button>
+        <button type="button" data-command-filter="ready" aria-pressed="false">Ready</button>
+      </div>
+      <p><span class="command-live-dot" aria-hidden="true"></span> Core data loads first; transaction queues follow.</p>
+    </div>
+    <div class="command-grid" data-command-center data-league-count="{{ leagues|length }}">
+      {% for item in leagues %}
+      <article class="command-card loading" data-command-league="{{ item.id }}" data-command-category="loading">
+        <header>
+          <span class="league-badge">{{ loop.index }}</span>
+          <div><h2>{{ item.name }}</h2><p>League {{ item.id }}</p></div>
+          <span class="load-state">Loading core…</span>
+        </header>
+        <div class="command-skeleton" aria-label="Loading league brief"><i></i><i></i><i></i></div>
+      </article>
+      {% endfor %}
+    </div>
+    <p class="command-filter-empty" id="command-filter-empty" hidden>No leagues match this view.</p>
+    <noscript><p class="warning">JavaScript is required to progressively load each league. Your MFL data is not requested until this page can load it safely.</p></noscript>
+  </main>
+</body>
+</html>

@@ -3591,7 +3591,7 @@ def _observe_gameday_timeline(
     week: int | None,
     head_to_head: HeadToHeadView | None,
 ) -> dict:
-    """Record only fantasy-total changes MFL actually returned this session."""
+    """Retain win-probability history without using MFL changes as live events."""
     if week is None or head_to_head is None or len(head_to_head.teams) != 2:
         return {"events": (), "probability": (), "chart_points": ""}
     team_ids = "-".join(team.franchise_id for team in head_to_head.teams)
@@ -3615,7 +3615,7 @@ def _observe_gameday_timeline(
     ]
     state = observe_scoring(
         current.live_timelines.get(key), payload, percentages,
-        observed_at=time.time(), timezone=_APP_TIME_ZONE,
+        observed_at=time.time(), timezone=_APP_TIME_ZONE, record_events=False,
     )
     current.live_timelines[key] = state
     probability = list(state.get("probability") or ())
@@ -3898,7 +3898,7 @@ def command_center_page(request: Request, league: str = ""):
 
 @app.get("/api/command-center/{league_id}")
 def command_center_league(request: Request, league_id: str):
-    """Load one league at a time so a multi-league page never fans out at once."""
+    """Load one league's decision brief without fanning out provider reads."""
     current = _require_session(request)
     selected = _league(current, league_id)
     try:
@@ -3923,20 +3923,110 @@ def command_center_league(request: Request, league_id: str):
         if matchup and matchup.forecast and own_team:
             own_index = matchup.teams.index(own_team)
             chance = matchup.forecast["percentages"][own_index]
-        urgent = [item for item in insight["actions"] if item["tone"] in {"danger", "warning"}]
+        lineup = insight["lineup"]
+        settings = insight["settings"]
+        open_slots = max(0, settings.starter_count - len(lineup.current_starters))
+        changes = sum(item.action in {"START", "SIT"} for item in lineup.players)
+
+        def projected_finish(team):
+            if team is None or not team.starters:
+                return None
+            total = float(team.score)
+            for player in team.starters:
+                remaining = min(1.0, max(0.0, player.game_seconds_remaining / 3600))
+                if not remaining:
+                    continue
+                if player.projection is None or not math.isfinite(player.projection):
+                    return None
+                total += player.projection * remaining
+            return round(total, 2)
+
+        standings_error = False
+        try:
+            standings = _cached_session_read(
+                current, selected.id, "standings", client.league_standings,
+                ttl=_seconds_until_daily_refresh(), stale_ttl=_LEAGUE_STATIC_STALE_TTL,
+                shared=True,
+            )
+        except MFLApiError as error:
+            standings = []
+            standings_error = True
+            _log_provider_error_once(current, selected.id, "command_center_standings_unavailable", error)
+        own_id = selected.franchise_id.zfill(4)
+        standing = next((row for row in standings if row.get("id") == own_id), None)
+        rank = next((index for index, row in enumerate(standings, 1) if row.get("id") == own_id), None)
+        record = None
+        if standing:
+            record = f"{standing.get('h2hw', '—')}-{standing.get('h2hl', '—')}"
+            if str(standing.get("h2ht", "0")) not in {"0", "—", ""}:
+                record += f"-{standing['h2ht']}"
+        alerts = list(insight["actions"][:5])
+        danger_count = sum(item["tone"] == "danger" for item in alerts)
+        warning_count = sum(item["tone"] == "warning" for item in alerts)
+        game_state = matchup.game_state if matchup else "Unavailable"
+        if open_slots or danger_count:
+            priority, priority_rank = "Needs action", 4
+        elif warning_count or lineup.projected_gain > .05:
+            priority, priority_rank = "Review", 3
+        elif game_state == "Live":
+            priority, priority_rank = "Live", 2
+        else:
+            priority, priority_rank = "Ready", 1
+        recent_issue = next(({
+            "title": operation.title, "detail": operation.message, "status": operation.status,
+        } for operation in reversed(current.operations)
+            if operation.league_id == selected.id and operation.status in {"failed", "uncertain"}), None)
+        local_reviews = sum(
+            getattr(item, "league_id", "") == selected.id
+            and getattr(item, "status", "draft") == "draft"
+            for collection in (current.pending_moves.values(), current.pending_lineups.values(), current.trades.values())
+            for item in collection
+        )
         return {
             "league_id": selected.id, "name": selected.name, "week": week,
+            "priority": priority, "priority_rank": priority_rank,
+            "team": own_team.name if own_team else "Your team",
             "score": own_team.score if own_team else None,
             "opponent": opponent.name if opponent else "Matchup unavailable",
             "opponent_score": opponent.score if opponent else None,
             "win_probability": chance,
-            "alerts": [{"title": item["title"], "detail": item["detail"], "href": item["href"]} for item in urgent[:3]],
-            "projected_gain": round(insight["lineup"].projected_gain, 2),
+            "game_state": game_state,
+            "projected_score": projected_finish(own_team),
+            "opponent_projected_score": projected_finish(opponent),
+            "playing": own_team.starters_playing if own_team else 0,
+            "left": own_team.starters_left if own_team else 0,
+            "final": max(0, len(own_team.starters) - own_team.starters_playing - own_team.starters_left) if own_team else 0,
+            "alerts": [{
+                "tone": item["tone"], "title": item["title"], "detail": item["detail"],
+                "href": item["href"], "label": item.get("label", "Open"),
+            } for item in alerts],
+            "alert_count": danger_count + warning_count,
+            "lineup": {
+                "starters": len(lineup.current_starters), "required": settings.starter_count,
+                "open_slots": open_slots, "changes": changes,
+                "current_projection": round(lineup.current_projection, 2),
+                "recommended_projection": round(lineup.recommended_projection, 2),
+                "projected_gain": round(lineup.projected_gain, 2),
+            },
+            "standing": {
+                "rank": rank, "teams": len(standings), "record": record,
+                "points_for": standing.get("pf") if standing else None,
+                "unavailable": standings_error,
+            },
+            "watchlist_count": len(current.watchlists.get(selected.id, set())),
+            "local_reviews": local_reviews,
+            "recent_issue": recent_issue,
+            "updated_at": int(time.time()),
             "links": {
                 "home": f"/home?league={selected.id}",
                 "lineup": f"/lineup?league={selected.id}&week={week}",
                 "scores": f"/scores?league={selected.id}&week={week}",
                 "moves": f"/moves?league={selected.id}",
+                "transactions": f"/transactions/pending?league={selected.id}",
+                "trades": f"/trades?league={selected.id}",
+                "watchlist": f"/watchlist?league={selected.id}",
+                "insights": f"/insights?league={selected.id}",
+                "standings": f"/standings?league={selected.id}",
             },
         }
     except (MFLApiError, ValueError) as error:
@@ -3946,6 +4036,44 @@ def command_center_league(request: Request, league_id: str):
             "league_id": selected.id, "name": selected.name,
             "error": "This league could not refresh. Its other cards are still available.",
         }, status_code=503)
+
+
+@app.get("/api/command-center/{league_id}/queue")
+def command_center_queue(request: Request, league_id: str):
+    """Add pending MFL transactions after every league's core brief is visible."""
+    current = _require_session(request)
+    selected = _league(current, league_id)
+    client = _client(current, selected)
+    errors = []
+    try:
+        claims = _cached_session_read(
+            current, selected.id, "pending-waivers", client.pending_waivers,
+            ttl=90, stale_ttl=1800,
+        )
+    except MFLApiError as error:
+        claims = ()
+        errors.append("waivers")
+        _log_provider_error_once(current, selected.id, "command_center_waivers_unavailable", error)
+    try:
+        trades = _cached_session_read(
+            current, selected.id, "pending-trades", client.pending_trades,
+            ttl=90, stale_ttl=1800,
+        )
+    except MFLApiError as error:
+        trades = ()
+        errors.append("trades")
+        _log_provider_error_once(current, selected.id, "command_center_trades_unavailable", error)
+    own = selected.franchise_id.zfill(4)
+    incoming = sum(trade.offering_team != own for trade in trades)
+    outgoing = len(trades) - incoming
+    return {
+        "league_id": selected.id,
+        "waiver_claims": len(claims),
+        "incoming_trades": incoming,
+        "outgoing_trades": outgoing,
+        "pending_total": len(claims) + len(trades),
+        "errors": errors,
+    }
 
 
 def _background_push_cycle() -> None:
@@ -6721,7 +6849,9 @@ def api_starter_scoring(request: Request, player_id: str, league: str, franchise
     if player is None:
         raise HTTPException(status_code=404, detail="Player not found")
     result = {"official_points": item.score, "stat_lines": [], "components": [],
-              "state": "Upcoming", "difference": None, "source": "Official points: MFL · Box score: ESPN",
+              "state": "Upcoming", "difference": None, "stat_points": None,
+              "tracker_points": None, "tracker_source": None, "discrepancy": None,
+              "source": "Official points: MFL · Box score: ESPN",
               "note": "Stats will appear after kickoff."}
     if item.game_seconds_remaining >= 3600:
         return result
@@ -6731,19 +6861,36 @@ def api_starter_scoring(request: Request, player_id: str, league: str, franchise
         box = weekly_boxscore(player, current.year, week)
         if box:
             result.update(state=box["state"], stat_lines=box["stat_lines"])
-            result["note"] = "Stat points use this league’s supported scoring rules. MFL’s total is authoritative; feeds may update at different times."
+            result["note"] = "Live tracker points use the ESPN stat line with this league’s supported scoring rules."
             try:
                 rules = _cached_session_read(
                     current, selected.id, "scoring-rules", client.scoring_rules,
                     ttl=_SCORING_RULES_TTL, stale_ttl=_SCORING_RULES_STALE_TTL,
                 )
                 result["components"] = scoring_components(box, rules, player.position)
+                result["stat_points"] = round(sum(c["points"] for c in result["components"]), 2)
             except MFLApiError as error:
                 _log_provider_error_once(current, selected.id, "scoring_detail_rules_unavailable", error)
                 result["note"] = "League rules are unavailable. Stats and official MFL points are shown separately."
-            result["difference"] = round(item.score - sum(c["points"] for c in result["components"]), 2)
+            if result["stat_points"] is not None:
+                result["difference"] = round(item.score - result["stat_points"], 2)
     except (requests.RequestException, ValueError, KeyError, TypeError, AttributeError) as error:
         log_error("scoring_detail_stats_unavailable", error)
+    if result["state"] == "Final":
+        result["tracker_points"] = item.score
+        result["tracker_source"] = "MFL final"
+        if result["stat_points"] is not None and abs(result["difference"] or 0) >= 0.01:
+            result["discrepancy"] = result["difference"]
+            result["note"] = (
+                "The game is final, so the tracker now uses MFL’s authoritative total. "
+                "A stat-line discrepancy is shown below."
+            )
+        elif result["stat_points"] is not None:
+            result["note"] = "The game is final. MFL’s authoritative total matches the supported stat-line scoring."
+    elif result["state"] == "Live" and result["stat_points"] is not None:
+        result["tracker_points"] = result["stat_points"]
+        result["tracker_source"] = "Stat line"
+        result["note"] += " MFL remains authoritative after the game is final."
     return result
 
 

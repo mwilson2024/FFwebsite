@@ -17,8 +17,9 @@ def observe_scoring(
     *,
     observed_at: float,
     timezone,
+    record_events: bool = True,
 ) -> dict[str, Any]:
-    """Return a bounded timeline after comparing one authoritative MFL snapshot."""
+    """Return bounded probability history and, when requested, MFL score events."""
     state = dict(state or {})
     previous = state.get("snapshot") if isinstance(state.get("snapshot"), dict) else None
     normalized = []
@@ -41,7 +42,7 @@ def observe_scoring(
     except ValueError:  # Windows strftime does not support %-I.
         stamp = datetime.fromtimestamp(observed_at, timezone).strftime("%a %I:%M:%S %p").replace(" 0", " ")
     events = list(state.get("events") or [])
-    if previous is None and normalized:
+    if record_events and previous is None and normalized:
         events.append({
             "observed_at": observed_at,
             "time": stamp,
@@ -49,7 +50,7 @@ def observe_scoring(
             "detail": " · ".join(f"{team['name']} {team['score']:.2f}" for team in normalized),
             "tone": "baseline",
         })
-    elif previous:
+    elif record_events and previous:
         old_teams = {team["id"]: team for team in previous.get("teams", ())}
         for team in normalized:
             old_team = old_teams.get(team["id"], {"score": 0.0, "players": {}})

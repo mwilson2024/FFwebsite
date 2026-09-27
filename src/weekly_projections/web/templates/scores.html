@@ -6,10 +6,10 @@
   <title>{{ league.name }} · Week {{ week or '—' }} Scores</title>
   <link rel="stylesheet" href="/static/app.css?v=20260910-modern">
   <link rel="stylesheet" href="/static/workspace.css?v=2">
-  <link rel="stylesheet" href="/static/fantasy.css?v=20260923-touchdown-clips">
+  <link rel="stylesheet" href="/static/fantasy.css?v=20260927-stat-line-tracker">
   <link rel="stylesheet" href="/static/lions.css?v=1">
   <meta name="csrf-token" content="{{ session.csrf_token }}">
-  <script src="/static/diagnostics.js" defer></script><script src="/static/app.js?v=20260923-touchdown-clips" defer></script>
+  <script src="/static/diagnostics.js" defer></script><script src="/static/app.js?v=20260927-stat-line-tracker" defer></script>
   {% include '_theme_assets.html' %}
 </head>
 <body class="gameday-page" data-live-refresh="{{ refresh_seconds }}" data-next-kickoff="{{ next_kickoff or '' }}" data-live-window="/api/live-window?league={{ league.id }}&week={{ week or 1 }}">
@@ -62,11 +62,12 @@
       <div class="paired-boxscore">{% set paired_rows = head_to_head.rows() %}{% include '_matchup_rows.html' %}</div>
       {% if not head_to_head.rows() %}<p class="empty">MFL has not published starter scoring for this matchup yet.</p>{% endif %}
       <details class="matchup-bench"><summary>Bench players</summary>{% set paired_rows = head_to_head.rows(false) %}{% include '_matchup_rows.html' %}</details>
-      {% if gameday_timeline is defined %}<section class="score-timeline" aria-labelledby="score-timeline-title">
-        <div class="score-timeline-heading"><div><p class="eyebrow">OBSERVED MFL CHANGES</p><h2 id="score-timeline-title">Live scoring timeline</h2></div><span>{{ gameday_timeline.events|length }} events this session</span></div>
+      {% if gameday_timeline is defined %}<section class="score-timeline" data-stat-tracker data-tracker-key="{{ league.id }}:{{ week }}:{% for team in head_to_head.teams %}{{ team.franchise_id }}{% if not loop.last %}-{% endif %}{% endfor %}" aria-labelledby="score-timeline-title">
+        <div class="score-timeline-heading"><div><p class="eyebrow">LIVE STAT LINE</p><h2 id="score-timeline-title">Live point tracker</h2></div><span><b id="stat-tracker-count">0</b> events this session</span></div>
         {% if gameday_timeline.probability %}<div class="win-chart" role="img" aria-label="Estimated win probability history for {{ gameday_timeline.left_name }}"><div class="chart-labels"><strong>{{ gameday_timeline.left_name }}</strong><span>100%</span></div><svg viewBox="0 0 720 180" preserveAspectRatio="none" aria-hidden="true"><line x1="0" y1="90" x2="720" y2="90"/><polyline points="{{ gameday_timeline.chart_points }}"/></svg><div class="chart-axis"><span>Earlier</span><span>50% line</span><span>Latest · {{ '%.2f'|format(gameday_timeline.probability[-1].left) }}%</span></div></div>{% endif %}
-        <ol class="score-event-list">{% for event in gameday_timeline.events %}<li class="{{ event.tone }}"><time>{{ event.time }}</time><div><strong>{{ event.title }}</strong><p>{{ event.detail }}</p></div></li>{% else %}<li class="empty">The first scoring snapshot has not arrived yet.</li>{% endfor %}</ol>
-        <p class="timeline-disclosure">MFL’s live export supplies fantasy totals, not the underlying NFL play description. Each entry is an exact score change observed by this app; open a player’s Points breakdown for supported stat components. The chart is the app’s projection-based estimate, not an official MFL probability.</p>
+        <div id="stat-discrepancy-alerts" class="stat-discrepancy-alerts" aria-live="polite"></div>
+        <ol class="score-event-list" id="stat-score-event-list"><li class="empty">Waiting for the first live stat-line update.</li></ol>
+        <p class="timeline-disclosure">During a live game, tracker points come from ESPN’s stat line scored with the supported parts of this league’s MFL rules. When the game becomes final, the tracker switches to MFL’s authoritative total and calls out any difference. Special, tiered, or unsupported rules can cause a discrepancy. The chart remains the app’s projection-based estimate, not an official MFL probability.</p>
       </section>{% endif %}
       <details class="forecast-method"><summary>About the win estimate</summary><p>A rough, uncalibrated estimate from current MFL points, league-scored projections and game time remaining. It assumes independent player outcomes with a 65% projection-based spread. Missing starters or projections can make it unavailable; it is not MFL’s official probability.</p></details>
       <footer class="scoring-attribution">Scores and projections use this league’s MFL scoring rules.<span id="refresh-status">{% if refresh_seconds %}Live · updates in <b id="refresh-countdown">{{ refresh_seconds }}</b>s{% elif next_kickoff %}Auto-updates paused until the next NFL kickoff.{% else %}Auto-updates paused · no NFL game confirmed live.{% endif %}</span><a href="/scores?league={{ league.id }}&week={{ week }}{% if viewed_matchup is not none and viewed_matchup is defined %}&matchup={{ viewed_matchup }}{% endif %}">Refresh now</a></footer>

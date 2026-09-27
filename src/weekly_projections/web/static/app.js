@@ -68,6 +68,80 @@
   });
   const pointsCard = document.querySelector('#points-card');
   let activePointsPanel = null;
+  const statTracker = document.querySelector('[data-stat-tracker]');
+  const trackerList = document.querySelector('#stat-score-event-list');
+  const trackerCount = document.querySelector('#stat-tracker-count');
+  const discrepancyAlerts = document.querySelector('#stat-discrepancy-alerts');
+  const trackerStorageKey = statTracker ? `fantasy-hq:stat-tracker:v1:${statTracker.dataset.trackerKey || ''}` : '';
+  let trackerState = {players:{}, events:[]};
+  if (trackerStorageKey) {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(trackerStorageKey) || 'null');
+      if (saved && saved.players && Array.isArray(saved.events)) trackerState = saved;
+    } catch (_) { /* Session storage can be unavailable in privacy modes. */ }
+  }
+  const saveTrackerState = () => {
+    if (!trackerStorageKey) return;
+    try { sessionStorage.setItem(trackerStorageKey, JSON.stringify(trackerState)); } catch (_) { /* Keep tracking in memory. */ }
+  };
+  const renderStatTracker = () => {
+    if (!trackerList) return;
+    trackerList.replaceChildren();
+    const events = trackerState.events.slice().reverse();
+    if (!events.length) {
+      const empty = document.createElement('li'); empty.className = 'empty';
+      empty.textContent = 'Waiting for the first live stat-line update.'; trackerList.append(empty);
+    }
+    events.forEach(event => {
+      const item = document.createElement('li'); item.className = event.tone || 'baseline';
+      const stamp = document.createElement('time'); stamp.textContent = event.time;
+      const body = document.createElement('div'); const title = document.createElement('strong');
+      const detail = document.createElement('p'); title.textContent = event.title; detail.textContent = event.detail;
+      body.append(title, detail); item.append(stamp, body); trackerList.append(item);
+    });
+    if (trackerCount) trackerCount.textContent = String(events.length);
+    if (discrepancyAlerts) {
+      discrepancyAlerts.replaceChildren();
+      Object.values(trackerState.players).filter(player => player.state === 'Final' && Number.isFinite(player.discrepancy)).forEach(player => {
+        const alert = document.createElement('div'); alert.className = 'stat-discrepancy-alert'; alert.setAttribute('role', 'alert');
+        const direction = player.discrepancy >= 0 ? '+' : '';
+        alert.textContent = `Scoring discrepancy: ${player.name} — MFL ${player.points.toFixed(2)} vs stat line ${player.statPoints.toFixed(2)} (${direction}${player.discrepancy.toFixed(2)}). MFL is being used.`;
+        discrepancyAlerts.append(alert);
+      });
+    }
+  };
+  const updateStatTracker = (panel, data) => {
+    if (!statTracker || !Number.isFinite(data.tracker_points)) return;
+    const key = `${panel.dataset.franchise}:${panel.dataset.scoringPlayer}`;
+    const prior = trackerState.players[key];
+    const points = Number(data.tracker_points);
+    const statPoints = Number.isFinite(data.stat_points) ? Number(data.stat_points) : null;
+    const discrepancy = Number.isFinite(data.discrepancy) ? Number(data.discrepancy) : null;
+    const time = new Date().toLocaleTimeString([], {hour:'numeric', minute:'2-digit', second:'2-digit'});
+    const statDetail = (data.stat_lines || []).join(' · ') || 'Detailed stat line unavailable';
+    if (!prior) {
+      trackerState.events.push({
+        time, tone:'baseline', title:`${panel.dataset.playerName} · ${points.toFixed(2)} ${data.tracker_source === 'MFL final' ? 'final MFL' : 'stat-line'} points`,
+        detail:`${panel.dataset.teamName || 'Fantasy team'} · ${statDetail}`,
+      });
+    } else if (prior.state !== 'Final' && data.state === 'Final') {
+      trackerState.events.push({
+        time, tone:discrepancy === null ? 'baseline' : 'discrepancy', title:`${panel.dataset.playerName} final · ${points.toFixed(2)} MFL points`,
+        detail:statPoints === null ? 'MFL final is authoritative; stat-line comparison unavailable.' : `Stat-line estimate ${statPoints.toFixed(2)} · official MFL ${points.toFixed(2)}`,
+      });
+    } else {
+      const delta = Math.round((points - Number(prior.points)) * 100) / 100;
+      const pointSource = data.tracker_source === 'MFL final' ? 'final MFL' : 'stat-line';
+      if (delta) trackerState.events.push({
+        time, tone:delta > 0 ? 'gain' : 'loss', title:`${panel.dataset.playerName} ${delta > 0 ? '+' : ''}${delta.toFixed(2)} ${pointSource} points`,
+        detail:`${panel.dataset.teamName || 'Fantasy team'} · ${Number(prior.points).toFixed(2)} → ${points.toFixed(2)} · ${statDetail}`,
+      });
+    }
+    trackerState.players[key] = {name:panel.dataset.playerName, points, statPoints, discrepancy, state:data.state};
+    trackerState.events = trackerState.events.slice(-100);
+    saveTrackerState(); renderStatTracker();
+  };
+  renderStatTracker();
   pointsCard?.addEventListener('click', event => {
     if (event.target === pointsCard) {
       const rect = pointsCard.getBoundingClientRect();
@@ -94,6 +168,7 @@
         const response = await queueStatRead(() => fetch(`/api/scoring/${encodeURIComponent(panel.dataset.scoringPlayer)}?${query}`, {signal:AbortSignal.timeout(25000)}));
         const data = await response.json();
         if (!response.ok) throw new Error(response.status === 409 ? data.detail : 'Scoring details are unavailable. Close and reopen to retry.');
+        updateStatTracker(panel, data);
         content.replaceChildren();
         const statsContainer = statLine || content;
         if (statLine) statLine.replaceChildren();
@@ -116,6 +191,7 @@
         };
         (data.components || []).forEach((entry) => addRow(`${entry.label} · ${entry.stat}`, entry.points));
         if (data.difference) addRow('Unallocated / feed difference*', data.difference);
+        if (data.state === 'Live' && data.stat_points !== null) addRow('Live stat-line tracker', data.stat_points, true);
         addRow('Official MFL points', data.official_points, true);
         content.append(list);
         const note = document.createElement('p'); note.className = 'stat-note'; note.textContent = data.note;

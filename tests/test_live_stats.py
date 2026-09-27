@@ -137,8 +137,26 @@ def test_endpoint_reconciles_official_score_without_inventing_events(monkeypatch
     data = response.json()
     assert data["official_points"] == 27.2
     assert data["difference"] == 1.7
+    assert data["stat_points"] == 25.5
+    assert data["tracker_points"] == 27.2
+    assert data["tracker_source"] == "MFL final"
+    assert data["discrepancy"] == 1.7
     assert data["state"] == "Final"
     assert sum(c["points"] for c in data["components"]) + data["difference"] == pytest.approx(27.2)
+
+
+def test_live_tracker_uses_stat_line_until_mfl_becomes_final(monkeypatch):
+    client = scoring_client(monkeypatch, seconds=1800)
+    payload = sample_box()
+    payload["header"]["competitions"][0]["status"]["type"] = {"state": "in", "completed": False}
+    box = parse_boxscore(payload, MFLPlayer("p", "Player", espn_id="123"), 2026, 1)
+    monkeypatch.setattr(web, "weekly_boxscore", lambda *args: box)
+    data = client.get("/api/scoring/p?league=l&franchise=0001&week=1").json()
+    assert data["state"] == "Live"
+    assert data["stat_points"] == 25.5
+    assert data["tracker_points"] == 25.5
+    assert data["tracker_source"] == "Stat line"
+    assert data["discrepancy"] is None
 
 
 @pytest.mark.parametrize("status", ["nonstarter", "bench", "IR", "R"])
@@ -162,12 +180,16 @@ def test_unavailable_stats_preserve_mfl_score_and_upcoming_does_not_fetch(monkey
     monkeypatch.setattr(web, "weekly_boxscore", lambda *a: pytest.fail("No future boxscore fetch"))
     data = client.get("/api/scoring/p?league=l&franchise=0001&week=1").json()
     assert data["state"] == "Upcoming" and data["stat_lines"] == []
+    assert data["tracker_points"] is None
     client = scoring_client(monkeypatch)
     def unavailable(*args):
         raise requests.Timeout("private error text must not reach the browser")
     monkeypatch.setattr(web, "weekly_boxscore", unavailable)
     data = client.get("/api/scoring/p?league=l&franchise=0001&week=1").json()
     assert data["official_points"] == 27.2
+    assert data["tracker_points"] == 27.2
+    assert data["tracker_source"] == "MFL final"
+    assert data["discrepancy"] is None
     assert "unavailable" in data["note"] and "private error" not in str(data)
 
 
@@ -279,6 +301,7 @@ def test_matchup_header_switches_all_leagues_and_separates_stats_from_points():
     html = web.templates.env.get_template('scores.html').render(
         league=league, session=session, week=1, current_week=1, weeks=range(1,19),
         head_to_head=web.HeadToHeadView((team,),1,1), live=None, error=None, refresh_seconds=60,
+        gameday_timeline={"events": (), "probability": ()},
     )
     soup = BeautifulSoup(html, 'html.parser')
     assert len(soup.select('select[name="league"]')) == 1
@@ -299,3 +322,7 @@ def test_matchup_header_switches_all_leagues_and_separates_stats_from_points():
     assert panel.select_one('.touchdown-trigger') is None
     assert soup.select_one('dialog#touchdown-card') is None
     assert panel.select_one('details') is None
+    assert soup.select_one('[data-stat-tracker]') is not None
+    assert soup.select_one('#stat-score-event-list') is not None
+    assert soup.select_one('#stat-discrepancy-alerts')['aria-live'] == 'polite'
+    assert 'tracker switches to MFL’s authoritative total' in soup.select_one('.timeline-disclosure').get_text()
