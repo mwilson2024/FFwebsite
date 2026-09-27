@@ -508,6 +508,89 @@ class EncryptedSessionStore:
                     (user_id, int(year), str(league_id), str(player_id)),
                 )
 
+    def save_push_subscription(
+        self,
+        owner_fingerprint: str,
+        *,
+        year: int,
+        league_id: str,
+        subscription: dict[str, Any],
+        expires_at: int | None = None,
+    ) -> None:
+        """Encrypt and upsert a capability-bearing browser push subscription."""
+        if not self.database_url:
+            raise RuntimeError("Background push requires the private PostgreSQL database")
+        endpoint = str(subscription.get("endpoint") or "")
+        if not endpoint or len(endpoint) > 4096:
+            raise ValueError("A valid push endpoint is required")
+        encoded = json.dumps(subscription, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        if len(encoded) > 12_000:
+            raise ValueError("Push subscription exceeds the storage limit")
+        ciphertext = self.cipher.encrypt(encoded)
+        with self._connect_postgres() as connection:
+            user_id = self._postgres_user_id(connection, owner_fingerprint)
+            connection.execute(
+                "INSERT INTO fantasy_hq.web_push_subscription "
+                "(user_id, endpoint_hash, encrypted_subscription, season, league_id, expires_at) "
+                "VALUES (%s, %s, %s, %s, %s, CASE WHEN %s IS NULL THEN NULL ELSE to_timestamp(%s) END) "
+                "ON CONFLICT (user_id, endpoint_hash) DO UPDATE SET "
+                "encrypted_subscription = excluded.encrypted_subscription, season = excluded.season, "
+                "league_id = excluded.league_id, expires_at = excluded.expires_at, updated_at = now()",
+                (
+                    user_id, self._digest_bytes(endpoint), ciphertext, int(year),
+                    str(league_id), expires_at, expires_at,
+                ),
+            )
+
+    def load_push_subscriptions(self, owner_fingerprint: str) -> list[dict[str, Any]]:
+        if not self.database_url or not owner_fingerprint:
+            return []
+        with self._connect_postgres() as connection:
+            rows = connection.execute(
+                "SELECT subscription.endpoint_hash, subscription.encrypted_subscription, "
+                "subscription.season, subscription.league_id, subscription.last_signature "
+                "FROM fantasy_hq.app_user AS app_user "
+                "JOIN fantasy_hq.web_push_subscription AS subscription ON subscription.user_id = app_user.id "
+                "WHERE app_user.owner_fingerprint_hash = %s "
+                "AND (subscription.expires_at IS NULL OR subscription.expires_at > now()) "
+                "ORDER BY subscription.updated_at DESC",
+                (self._digest_bytes(owner_fingerprint),),
+            ).fetchall()
+        subscriptions = []
+        for endpoint_hash, ciphertext, season, league_id, last_signature in rows:
+            try:
+                payload = json.loads(self.cipher.decrypt(bytes(ciphertext)).decode("utf-8"))
+            except (InvalidToken, UnicodeError, json.JSONDecodeError, TypeError, ValueError):
+                continue
+            if isinstance(payload, dict) and payload.get("endpoint"):
+                subscriptions.append({
+                    "subscription": payload, "endpoint_hash": bytes(endpoint_hash),
+                    "season": int(season), "league_id": str(league_id),
+                    "last_signature": str(last_signature or ""),
+                })
+        return subscriptions
+
+    def delete_push_subscription(self, owner_fingerprint: str, endpoint: str) -> None:
+        if not self.database_url or not owner_fingerprint or not endpoint:
+            return
+        with self._connect_postgres() as connection:
+            user_id = self._postgres_user_id(connection, owner_fingerprint)
+            connection.execute(
+                "DELETE FROM fantasy_hq.web_push_subscription WHERE user_id = %s AND endpoint_hash = %s",
+                (user_id, self._digest_bytes(endpoint)),
+            )
+
+    def mark_push_sent(self, owner_fingerprint: str, endpoint_hash: bytes, signature: str) -> None:
+        if not self.database_url:
+            return
+        with self._connect_postgres() as connection:
+            user_id = self._postgres_user_id(connection, owner_fingerprint)
+            connection.execute(
+                "UPDATE fantasy_hq.web_push_subscription SET last_signature = %s, "
+                "last_sent_at = now(), updated_at = now() WHERE user_id = %s AND endpoint_hash = %s",
+                (str(signature)[:128], user_id, endpoint_hash),
+            )
+
     def save_player_market_snapshot(
         self,
         owner_fingerprint: str,

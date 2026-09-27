@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from itertools import zip_longest
 from pathlib import Path
-from threading import BoundedSemaphore, Lock, RLock
+from threading import BoundedSemaphore, Event, Lock, RLock, Thread
 from typing import Literal
 from urllib.parse import urlencode, urlsplit
 from zoneinfo import ZoneInfo
@@ -92,6 +92,9 @@ from weekly_projections.web.diagnostics import (
     client_ip, initialize_log, log_access, log_error, log_event, request_context,
 )
 from weekly_projections.web.session_store import EncryptedSessionStore
+from weekly_projections.web_push import configured as push_configured, public_key as push_public_key, send_web_push
+from weekly_projections.gameday import chart_points, observe_scoring
+from weekly_projections.decision_simulator import simulate_decision
 
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -545,6 +548,7 @@ class BrowserSession:
     social_posts: dict[str, SocialPostDraft] = field(default_factory=dict)
     depth_snapshots: dict[str, dict[str, int]] = field(default_factory=dict)
     watchlists: dict[str, set[str]] = field(default_factory=dict)
+    live_timelines: dict[str, dict] = field(default_factory=dict)
     operations: list[OperationRecord] = field(default_factory=list)
     ranking_preference: str = field(default_factory=_default_ranking_preference)
     theme: str = ""
@@ -574,6 +578,9 @@ pending_action_lock = Lock()
 social_send_lock = Lock()
 shared_read_cache: dict[str, tuple[float, object]] = {}
 shared_read_lock = RLock()
+push_worker_lock = Lock()
+push_worker_stop = Event()
+push_worker: Thread | None = None
 initialize_log()
 app = FastAPI(title="Weekly Projections · MFL Moves", docs_url=None, redoc_url=None)
 
@@ -637,7 +644,7 @@ async def secure_local_responses(request: Request, call_next):
         response.delete_cookie("wp_remember", path="/", httponly=True, samesite="strict", secure=_secure_cookies(request))
     league_id = request.query_params.get("league")
     if (current and request.method == "GET" and response.status_code == 200
-            and request.url.path in {"/home", "/lineup", "/rosters", "/moves", "/scores", "/trades", "/standings", "/league", "/insights", "/planner", "/transactions", "/transactions/pending", "/watchlist", "/compare", "/notifications", "/schedule", "/rules", "/data-status", "/guide"}
+            and request.url.path in {"/home", "/command-center", "/simulator", "/lineup", "/rosters", "/moves", "/scores", "/trades", "/standings", "/league", "/insights", "/planner", "/transactions", "/transactions/pending", "/watchlist", "/compare", "/notifications", "/schedule", "/rules", "/data-status", "/guide"}
             and any(item.id == league_id for item in current.leagues)):
         response.set_cookie("wp_last_league", f"{current.year}:{league_id}", max_age=365*86400,
                             httponly=True, samesite="strict", secure=_secure_cookies(request))
@@ -1735,6 +1742,7 @@ def _session(request: Request) -> BrowserSession | None:
             restored_id = secrets.token_urlsafe(32)
             with sessions_lock:
                 sessions[restored_id] = restored
+            _ensure_push_worker()
             request.state.restored_session_id = restored_id
             request.state.browser_session = restored
             return restored
@@ -2604,6 +2612,10 @@ def _load_player_score_summaries(
     client.player_avg_scores = reports["AVG"]
     client.player_median_scores = medians
     client.player_median_window = len(weekly)
+    client.player_weekly_scores = {
+        player_id: tuple(scores[player_id] for scores in weekly if player_id in scores)
+        for player_id in player_ids
+    }
     return reports["YTD"], reports["AVG"], medians
 
 
@@ -3253,6 +3265,20 @@ def _projection_tracker_summary(report: ProjectionAccuracyReport) -> dict:
     }
 
 
+def _practice_report(details: str) -> str:
+    """Extract only practice participation explicitly present in MFL's text."""
+    normalized = " ".join(str(details or "").split())
+    for pattern, label in (
+        (r"\b(?:did not practice|dnp)\b", "Did not practice"),
+        (r"\blimited(?: participation| practice)?\b", "Limited practice"),
+        (r"\bfull(?: participation| practice)?\b", "Full practice"),
+        (r"\bnon[- ]participant\b", "Did not practice"),
+    ):
+        if re.search(pattern, normalized, flags=re.IGNORECASE):
+            return label
+    return "Not reported by MFL"
+
+
 def _load_insights(
     current: BrowserSession,
     selected: MFLLeague,
@@ -3310,6 +3336,7 @@ def _load_insights(
             "item": item,
             "injury_status": status,
             "injury_details": injury.details if injury else "",
+            "practice_status": _practice_report(injury.details if injury else ""),
             "severity": severity,
             "depth": role,
             "weather": outlook,
@@ -3558,6 +3585,49 @@ def _load_live_scoring_week(
     return week, current_week, live, names, head_to_head
 
 
+def _observe_gameday_timeline(
+    current: BrowserSession,
+    league: MFLLeague,
+    week: int | None,
+    head_to_head: HeadToHeadView | None,
+) -> dict:
+    """Record only fantasy-total changes MFL actually returned this session."""
+    if week is None or head_to_head is None or len(head_to_head.teams) != 2:
+        return {"events": (), "probability": (), "chart_points": ""}
+    team_ids = "-".join(team.franchise_id for team in head_to_head.teams)
+    key = f"{league.id}:{week}:{team_ids}"
+    forecast = head_to_head.forecast
+    percentages = tuple(forecast["percentages"]) if forecast else None
+    payload = [
+        {
+            "id": team.franchise_id,
+            "name": team.name,
+            "score": team.score,
+            "players": [
+                {
+                    "id": item.player.id, "name": item.player.name,
+                    "score": item.score, "starter": item.is_starter,
+                }
+                for item in team.players
+            ],
+        }
+        for team in head_to_head.teams
+    ]
+    state = observe_scoring(
+        current.live_timelines.get(key), payload, percentages,
+        observed_at=time.time(), timezone=_APP_TIME_ZONE,
+    )
+    current.live_timelines[key] = state
+    probability = list(state.get("probability") or ())
+    return {
+        "events": tuple(reversed(state.get("events") or ())),
+        "probability": tuple(probability),
+        "chart_points": chart_points(probability),
+        "left_name": head_to_head.teams[0].name,
+        "right_name": head_to_head.teams[1].name,
+    }
+
+
 def _check_csrf(current: BrowserSession, token: str) -> None:
     if not secrets.compare_digest(current.csrf_token, token):
         raise HTTPException(status_code=403, detail="The form expired; reload and try again")
@@ -3760,6 +3830,7 @@ def login(
             for old_id, _ in same_owner[:max(0, len(same_owner) - 4)]:
                 sessions.pop(old_id, None)
             sessions[session_id] = current
+        _ensure_push_worker()
         _cleanup_sessions()
         _clear_login_failures(keys)
     except (MFLApiError, ValueError) as error:
@@ -3813,6 +3884,133 @@ def dashboard(request: Request, source: str = ""):
         route = {"pwa-lineup": "/lineup", "pwa-briefing": "/insights", "pwa-score": "/scores"}[source]
         return RedirectResponse(route + "?" + urlencode({"league": selected.id}), status_code=303)
     return RedirectResponse(_league_home_url(request, current), status_code=303)
+
+
+@app.get("/command-center", response_class=HTMLResponse)
+def command_center_page(request: Request, league: str = ""):
+    current = _require_session(request)
+    selected = _league(current, league or current.default_league_id or current.leagues[0].id)
+    return templates.TemplateResponse(request=request, name="command_center.html", context={
+        "session": current, "league": selected, "active_tool": "command-center",
+        "leagues": current.leagues,
+    })
+
+
+@app.get("/api/command-center/{league_id}")
+def command_center_league(request: Request, league_id: str):
+    """Load one league at a time so a multi-league page never fans out at once."""
+    current = _require_session(request)
+    selected = _league(current, league_id)
+    try:
+        insight = _load_insights(
+            current, selected, include_external=False, include_accuracy=False,
+        )
+        week = insight["week"]
+        client = _client(current, selected)
+        _, _, _, _, matchup = _load_live_scoring_week(
+            client, requested_week=week, current=current, include_reference=False,
+        )
+        own_team = next(
+            (team for team in (matchup.teams if matchup else ())
+             if team.franchise_id.zfill(4) == selected.franchise_id.zfill(4)),
+            None,
+        )
+        opponent = next(
+            (team for team in (matchup.teams if matchup else ()) if team is not own_team),
+            None,
+        )
+        chance = None
+        if matchup and matchup.forecast and own_team:
+            own_index = matchup.teams.index(own_team)
+            chance = matchup.forecast["percentages"][own_index]
+        urgent = [item for item in insight["actions"] if item["tone"] in {"danger", "warning"}]
+        return {
+            "league_id": selected.id, "name": selected.name, "week": week,
+            "score": own_team.score if own_team else None,
+            "opponent": opponent.name if opponent else "Matchup unavailable",
+            "opponent_score": opponent.score if opponent else None,
+            "win_probability": chance,
+            "alerts": [{"title": item["title"], "detail": item["detail"], "href": item["href"]} for item in urgent[:3]],
+            "projected_gain": round(insight["lineup"].projected_gain, 2),
+            "links": {
+                "home": f"/home?league={selected.id}",
+                "lineup": f"/lineup?league={selected.id}&week={week}",
+                "scores": f"/scores?league={selected.id}&week={week}",
+                "moves": f"/moves?league={selected.id}",
+            },
+        }
+    except (MFLApiError, ValueError) as error:
+        if isinstance(error, MFLApiError):
+            _log_provider_error_once(current, selected.id, "command_center_league_unavailable", error)
+        return JSONResponse({
+            "league_id": selected.id, "name": selected.name,
+            "error": "This league could not refresh. Its other cards are still available.",
+        }, status_code=503)
+
+
+def _background_push_cycle() -> None:
+    """Send generic opted-in wake-ups; private league details stay in the app."""
+    if not push_configured() or not os.environ.get("WP_DATABASE_URL", "").strip():
+        return
+    with sessions_lock:
+        active = sorted(sessions.values(), key=lambda item: item.created_at, reverse=True)
+    seen: set[str] = set()
+    for current in active:
+        if (current.expires_at <= time.monotonic() or not current.owner_fingerprint
+                or current.owner_fingerprint in seen):
+            continue
+        seen.add(current.owner_fingerprint)
+        try:
+            subscriptions = _persistent_store().load_push_subscriptions(current.owner_fingerprint)
+        except Exception as error:
+            log_error("push_subscription_load_failed", error)
+            continue
+        for stored in subscriptions:
+            league = next((item for item in current.leagues if item.id == stored["league_id"]), None)
+            if league is None:
+                league = next((item for item in current.leagues if item.id == current.default_league_id), current.leagues[0])
+            try:
+                insight = _load_insights(current, league, include_external=False, include_accuracy=False)
+                urgent = [item for item in insight["actions"] if item["tone"] in {"danger", "warning"}]
+                if not urgent:
+                    continue
+                signature = hashlib.sha256("|".join(item["title"] for item in urgent).encode("utf-8")).hexdigest()[:32]
+                if stored["last_signature"] == signature:
+                    continue
+                # The push service sees only generic copy and an internal route;
+                # names, scores, injuries, league IDs, and MFL data stay server-side.
+                send_web_push(
+                    stored["subscription"], title="Fantasy HQ update",
+                    body="A roster item needs your attention. Open Fantasy HQ for details.",
+                    url="/dashboard?source=pwa-briefing", tag="fantasy-hq-briefing",
+                )
+                _persistent_store().mark_push_sent(
+                    current.owner_fingerprint, stored["endpoint_hash"], signature,
+                )
+            except Exception as error:
+                log_error("background_push_failed", error)
+
+
+def _push_worker_loop() -> None:
+    try:
+        interval = int(os.environ.get("WP_PUSH_POLL_SECONDS", "600"))
+    except ValueError:
+        interval = 600
+    interval = max(300, min(3600, interval))
+    while not push_worker_stop.wait(interval):
+        _background_push_cycle()
+
+
+def _ensure_push_worker() -> None:
+    global push_worker
+    if not push_configured():
+        return
+    with push_worker_lock:
+        if push_worker and push_worker.is_alive():
+            return
+        push_worker_stop.clear()
+        push_worker = Thread(target=_push_worker_loop, name="fantasy-hq-push", daemon=True)
+        push_worker.start()
 
 
 @app.get("/home", response_class=HTMLResponse)
@@ -4024,6 +4222,74 @@ def roster_planner_page(request: Request, league: str):
             "error": "The roster planner is temporarily unavailable. Your existing league data was not changed.",
         }
     return templates.TemplateResponse(request=request, name="planner.html", context=context)
+
+
+@app.get("/simulator", response_class=HTMLResponse)
+def decision_simulator_page(
+    request: Request,
+    league: str,
+    kind: str = "start-sit",
+    current_player: str = "",
+    proposed_player: str = "",
+):
+    current = _require_session(request)
+    selected = _league(current, league)
+    context = {
+        "session": current, "league": selected, "active_tool": "simulator",
+        "kind": kind, "owned": (), "targets": (), "result": None, "error": "",
+    }
+    try:
+        if kind not in {"start-sit", "waiver", "trade"}:
+            raise ValueError("Choose a start/sit, waiver, or trade decision")
+        client = _client(current, selected)
+        week, roster, board, blend, _ = _load_player_board(
+            client, current, include_reference=False, include_score_context=True,
+        )
+        if week is None:
+            raise MFLApiError("MFL did not return the current scoring week")
+        by_id = {item.player.id: item for item in board}
+        owned = sorted(
+            (item for item in board if item.fantasy_team_id == selected.franchise_id.zfill(4)),
+            key=lambda item: _player_position_sort_key(item.player),
+        )
+        if kind == "start-sit":
+            targets = owned
+        elif kind == "waiver":
+            targets = sorted(
+                (item for item in board if item.is_claimable and not item.is_rostered),
+                key=lambda item: (-(item.projection or -999), item.player.name.casefold()),
+            )
+        else:
+            targets = sorted(
+                (item for item in board if item.is_rostered and item.fantasy_team_id != selected.franchise_id.zfill(4)),
+                key=lambda item: (item.fantasy_team_name.casefold(), _player_position_sort_key(item.player)),
+            )
+        context.update(week=week, owned=owned, targets=targets)
+        if current_player or proposed_player:
+            baseline = by_id.get(current_player)
+            target = by_id.get(proposed_player)
+            if not baseline or baseline not in owned:
+                raise ValueError("Choose a player from your roster for the current option")
+            if not target or target not in targets:
+                raise ValueError("Choose a valid proposed player for this decision type")
+            if kind in {"start-sit", "waiver"} and _board_position(baseline.player) != _board_position(target.player):
+                raise ValueError("Choose players at the same normalized position for a direct comparison")
+            try:
+                schedule = load_nfl_schedule(current.year)
+            except RuntimeError as error:
+                schedule = {}
+                _log_provider_error_once(current, selected.id, "simulator_schedule_unavailable", error, window=1800)
+            context["result"] = simulate_decision(
+                kind=kind, current=baseline.player, proposed=target.player,
+                projections=blend.mfl_scores,
+                recent_scores=getattr(client, "player_weekly_scores", {}),
+                schedule=schedule, current_week=week,
+            )
+    except (MFLApiError, ValueError) as error:
+        if isinstance(error, MFLApiError):
+            _log_provider_error_once(current, selected.id, "decision_simulator_unavailable", error)
+        context["error"] = str(error)
+    return templates.TemplateResponse(request=request, name="simulator.html", context=context)
 
 
 @app.get("/transactions", response_class=HTMLResponse)
@@ -5710,6 +5976,9 @@ def scores_page(request: Request, league: str, week: int | None = None, matchup:
         api_error = str(caught)
     if selected_week is not None:
         _set_selected_week(current, selected_week)
+    gameday_timeline = _observe_gameday_timeline(
+        current, selected, selected_week, head_to_head,
+    )
     refresh_state = {"active": False, "next_kickoff": None}
     if selected_week is not None and selected_week == current_week:
         loaded_refresh_state = getattr(client, "live_refresh_state", None)
@@ -5737,6 +6006,7 @@ def scores_page(request: Request, league: str, week: int | None = None, matchup:
             "next_kickoff": refresh_state["next_kickoff"],
             "viewed_matchup": matchup_index,
             "score_view": view,
+            "gameday_timeline": gameday_timeline,
             "error": api_error,
         },
     )
@@ -6670,10 +6940,100 @@ def api_player_card(request: Request, player_id: str, league: str, week: int | N
     }
 
 
+class PushKeysRequest(BaseModel):
+    p256dh: str = Field(min_length=32, max_length=512)
+    auth: str = Field(min_length=8, max_length=256)
+
+
+class PushSubscriptionRequest(BaseModel):
+    endpoint: str = Field(min_length=12, max_length=4096)
+    keys: PushKeysRequest
+    expiration_time: int | None = Field(default=None, ge=0)
+    league_id: str = Field(default="", max_length=32)
+
+
+def _validated_push_payload(payload: PushSubscriptionRequest) -> dict:
+    parsed = urlsplit(payload.endpoint)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise HTTPException(status_code=400, detail="The browser returned an invalid push endpoint")
+    return {
+        "endpoint": payload.endpoint,
+        "keys": {"p256dh": payload.keys.p256dh, "auth": payload.keys.auth},
+    }
+
+
+@app.get("/api/push/config")
+def push_configuration(request: Request):
+    _require_session(request)
+    return {"available": push_configured(), "public_key": push_public_key() if push_configured() else ""}
+
+
+@app.post("/api/push/subscribe")
+def subscribe_push(request: Request, payload: PushSubscriptionRequest):
+    current = _require_session(request)
+    _check_csrf(current, request.headers.get("x-csrf-token", ""))
+    if not push_configured():
+        raise HTTPException(status_code=503, detail="Background push is not configured on this server")
+    if payload.league_id:
+        _league(current, payload.league_id)
+    try:
+        store = _persistent_store()
+        if int(store.connection_status().get("schema_version") or 0) < 9:
+            raise RuntimeError("Apply Supabase migration 009 before enabling background push")
+        expires = payload.expiration_time
+        if expires and expires > 10_000_000_000:
+            expires //= 1000
+        store.save_push_subscription(
+            current.owner_fingerprint, year=current.year,
+            league_id=payload.league_id or current.default_league_id,
+            subscription=_validated_push_payload(payload), expires_at=expires,
+        )
+        _ensure_push_worker()
+    except HTTPException:
+        raise
+    except Exception as error:
+        log_error("push_subscription_save_failed", error)
+        raise HTTPException(status_code=503, detail="Background push could not be saved. Check migration 009 and the server keys.")
+    return {"enabled": True}
+
+
+@app.post("/api/push/unsubscribe")
+def unsubscribe_push(request: Request, payload: PushSubscriptionRequest):
+    current = _require_session(request)
+    _check_csrf(current, request.headers.get("x-csrf-token", ""))
+    try:
+        _persistent_store().delete_push_subscription(current.owner_fingerprint, payload.endpoint)
+    except Exception as error:
+        log_error("push_subscription_delete_failed", error)
+        raise HTTPException(status_code=503, detail="The server could not remove this push subscription")
+    return {"enabled": False}
+
+
+@app.post("/api/push/test")
+def test_push(request: Request):
+    current = _require_session(request)
+    _check_csrf(current, request.headers.get("x-csrf-token", ""))
+    try:
+        stored = _persistent_store().load_push_subscriptions(current.owner_fingerprint)
+        if not stored:
+            raise ValueError("Enable background alerts on this device first")
+        send_web_push(
+            stored[0]["subscription"], title="Fantasy HQ background alerts are ready",
+            body="This generic test arrived through Web Push. Open the app to view private league details.",
+            url="/dashboard?source=pwa-briefing", tag="fantasy-hq-test",
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error))
+    except Exception as error:
+        log_error("push_test_failed", error)
+        raise HTTPException(status_code=503, detail="The background push test failed; check Azure logs for the error reference")
+    return {"sent": True}
+
+
 class BrowserErrorRequest(BaseModel):
     kind: Literal["script", "promise"]
     page: Literal[
-        "/dashboard", "/home", "/lineup", "/rosters", "/leaders", "/moves", "/scores", "/trades",
+        "/dashboard", "/home", "/command-center", "/simulator", "/lineup", "/rosters", "/leaders", "/moves", "/scores", "/trades",
         "/transactions", "/watchlist", "/compare", "/notifications", "/schedule", "/rules",
         "/data-status", "/guide",
     ]

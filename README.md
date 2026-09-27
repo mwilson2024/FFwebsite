@@ -91,7 +91,7 @@ WP_SESSION_SECRET=<your generated Fernet key>
 ## Supabase PostgreSQL on Azure App Service
 
 The application can use the free Supabase PostgreSQL project instead of the
-SQLite remembered-session file. The database must contain schema migrations 1–7 in
+SQLite remembered-session file. The database must contain schema migrations 1–9 in
 the private `fantasy_hq` schema. When `WP_DATABASE_URL` is absent, local and
 existing Railway deployments continue to use SQLite without any behavior change.
 
@@ -187,6 +187,31 @@ after migration 007. It adds the `stale_until` index used by the bounded cleanup
 job. The web process removes at most 500 long-expired snapshots once every six
 hours, keeping the free Supabase project small without a separate worker or cron
 service.
+
+Apply [`supabase/migrations/009_web_push_subscriptions.sql`](supabase/migrations/009_web_push_subscriptions.sql)
+to enable opt-in background Web Push. The full browser subscription (including its
+capability-bearing endpoint) is encrypted with `WP_SESSION_SECRET`; PostgreSQL
+indexes only a SHA-256 digest. The table is private, has RLS enabled as defense in
+depth, and grants no browser Data API access. Push payloads contain generic alert
+copy only. Player names, scores, injuries, league IDs, MFL cookies, and credentials
+remain on the server and appear only after the user opens the authenticated app.
+
+Generate one VAPID key pair with a trusted Web Push key generator (for example,
+`npx web-push generate-vapid-keys`) and store the results only in Azure App Service
+environment variables:
+
+```text
+WP_VAPID_PUBLIC_KEY=<public application server key>
+WP_VAPID_PRIVATE_KEY=<private VAPID key>
+WP_VAPID_SUBJECT=mailto:<your contact email>
+WP_PUSH_POLL_SECONDS=600
+```
+
+The polling interval is bounded to 5–60 minutes. It runs only after an authenticated
+user opts in and only while that single-worker app process retains an active MFL
+session. Azure Free/Student plans may suspend an idle app; no web process can send
+while the host is asleep. The Settings panel includes a real background test button
+so deployment can be verified without exposing league content.
 
 The same private cache also stores two league-independent public feeds: the
 detailed MFL player catalog and each week's NFL kickoff/opponent schedule. Those
@@ -312,8 +337,10 @@ The site is installable as a PWA on supported browsers. Its service worker cache
 only the public offline shell and static icon assets; authenticated league HTML,
 MFL responses, credentials, CSRF state, and transactions are never cached offline.
 The Settings menu includes installation guidance, device-local alert preferences,
-and app-badge support. Device alerts are evaluated after an authenticated refresh;
-there is no background push server and no push service receives MFL credentials.
+app-badge support, and opt-in background Web Push when migration 009 and the VAPID
+variables are configured. Push endpoints are encrypted server-side and outbound
+notifications contain generic copy only; no push service receives MFL credentials
+or private league details. In-page alerts continue to work without Web Push.
 The installed app exposes a direct Team Score shortcut where the host platform
 supports manifest shortcuts. A true iPhone Home Screen widget is not a web/PWA
 feature; that would require a separately shipped native iOS app and WidgetKit
