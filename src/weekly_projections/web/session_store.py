@@ -532,13 +532,13 @@ class EncryptedSessionStore:
             connection.execute(
                 "INSERT INTO fantasy_hq.web_push_subscription "
                 "(user_id, endpoint_hash, encrypted_subscription, season, league_id, expires_at) "
-                "VALUES (%s, %s, %s, %s, %s, CASE WHEN %s IS NULL THEN NULL ELSE to_timestamp(%s) END) "
+                "VALUES (%s, %s, %s, %s, %s, to_timestamp(%s::double precision)) "
                 "ON CONFLICT (user_id, endpoint_hash) DO UPDATE SET "
                 "encrypted_subscription = excluded.encrypted_subscription, season = excluded.season, "
                 "league_id = excluded.league_id, expires_at = excluded.expires_at, updated_at = now()",
                 (
                     user_id, self._digest_bytes(endpoint), ciphertext, int(year),
-                    str(league_id), expires_at, expires_at,
+                    str(league_id), expires_at,
                 ),
             )
 

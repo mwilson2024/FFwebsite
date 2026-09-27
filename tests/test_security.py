@@ -300,6 +300,22 @@ def test_postgres_store_uses_private_schema_encryption_and_tls(monkeypatch):
         "account:owner-hash", year=2026, league_id="12345", player_id="999", enabled=False,
     )
     assert store.load_watchlists("account:owner-hash", 2026) == {}
+    push_endpoint = "https://push.example/subscription-capability"
+    store.save_push_subscription(
+        "account:owner-hash", year=2026, league_id="12345",
+        subscription={
+            "endpoint": push_endpoint,
+            "keys": {"p256dh": "public-client-key", "auth": "client-auth-secret"},
+        },
+        expires_at=None,
+    )
+    push_sql, push_params = next(
+        (sql, params) for sql, params in reversed(database.statements)
+        if sql.startswith("INSERT INTO fantasy_hq.web_push_subscription")
+    )
+    assert "to_timestamp(%s::double precision)" in push_sql
+    assert len(push_params) == 6 and push_params[-1] is None
+    assert push_endpoint not in repr(push_params)
     snapshot = {
         "version": 1,
         "week": 3,
