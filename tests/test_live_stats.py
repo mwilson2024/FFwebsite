@@ -301,7 +301,11 @@ def test_matchup_header_switches_all_leagues_and_separates_stats_from_points():
     html = web.templates.env.get_template('scores.html').render(
         league=league, session=session, week=1, current_week=1, weeks=range(1,19),
         head_to_head=web.HeadToHeadView((team,),1,1), live=None, error=None, refresh_seconds=60,
-        gameday_timeline={"events": (), "probability": ()},
+        gameday_timeline={
+            "events": (), "probability": (), "opponent_name": "Opponent",
+            "lineup_observations": 0, "chart_points": "", "right_chart_points": "",
+            "opening": None, "latest": None, "left_swing": None,
+        },
     )
     soup = BeautifulSoup(html, 'html.parser')
     assert len(soup.select('select[name="league"]')) == 1
@@ -325,4 +329,7 @@ def test_matchup_header_switches_all_leagues_and_separates_stats_from_points():
     assert soup.select_one('[data-stat-tracker]') is not None
     assert soup.select_one('#stat-score-event-list') is not None
     assert soup.select_one('#stat-discrepancy-alerts')['aria-live'] == 'polite'
-    assert 'tracker switches to MFL’s authoritative total' in soup.select_one('.timeline-disclosure').get_text()
+    stat_disclosure = soup.select_one('.live-stat-tracker .timeline-disclosure')
+    assert 'tracker switches to MFL’s authoritative total' in stat_disclosure.get_text()
+    assert soup.select_one('#opponent-lineup-title').get_text() == 'Opponent lineup timeline'
+    assert 'WEEK-LONG MATCHUP HISTORY' in html

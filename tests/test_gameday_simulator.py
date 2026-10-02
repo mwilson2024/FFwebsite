@@ -44,6 +44,46 @@ def test_gameday_can_keep_probability_without_mfl_score_events():
     assert len(state["probability"]) == 2
 
 
+def test_gameday_records_only_observed_opponent_starter_changes():
+    first = observe_scoring(
+        None, _teams(), (55.0, 45.0), observed_at=1000, timezone=timezone.utc,
+        record_events=False, tracked_lineup_team_id="0002",
+    )
+    changed = _teams()
+    changed[1]["players"] = [
+        {"id": "2", "name": "Passer, Two", "score": 7.0, "starter": False},
+        {"id": "3", "name": "Runner, Three", "score": 0.0, "starter": True},
+    ]
+    second = observe_scoring(
+        first, changed, (56.0, 44.0), observed_at=1060, timezone=timezone.utc,
+        record_events=False, tracked_lineup_team_id="0002",
+    )
+    assert [event["title"] for event in second["events"]] == [
+        "Gold initial lineup observed", "Gold changed the lineup",
+    ]
+    assert "Started Runner, Three" in second["events"][-1]["detail"]
+    assert "Benched Passer, Two" in second["events"][-1]["detail"]
+    assert "observed it" in second["events"][-1]["detail"]
+
+    unchanged = observe_scoring(
+        second, changed, (56.0, 44.0), observed_at=1120, timezone=timezone.utc,
+        record_events=False, tracked_lineup_team_id="0002",
+    )
+    assert unchanged["events"] == second["events"]
+    assert unchanged["probability"] == second["probability"]
+    assert unchanged["lineup_snapshot"]["observed_at"] == 1060
+
+
+def test_week_odds_chart_uses_elapsed_time_and_can_render_both_teams():
+    points = [
+        {"observed_at": 1000, "left": 60, "right": 40},
+        {"observed_at": 1010, "left": 55, "right": 45},
+        {"observed_at": 1100, "left": 70, "right": 30},
+    ]
+    assert chart_points(points).split()[1].startswith("72.0,")
+    assert chart_points(points, field="right").endswith(",126.0")
+
+
 def test_decision_simulator_reports_week_ros_byes_and_playoffs():
     current = MFLPlayer("1", "Current", "RB", "DET")
     proposed = MFLPlayer("2", "Proposed", "RB", "GB")

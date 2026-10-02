@@ -1435,6 +1435,28 @@ def test_persistent_report_codecs_restore_domain_shapes() -> None:
             combined_source="Combined positional consensus",
         ),
         "league-intelligence:test-fingerprint": intelligence,
+        "matchup-history:3:0001-0002": {
+            "events": [{
+                "observed_at": 1_800_000_000.0,
+                "time": "Thu 1:00 PM",
+                "title": "Two initial lineup observed",
+                "detail": "1 starters · Player Two",
+                "tone": "lineup-baseline",
+                "kind": "lineup",
+            }],
+            "probability": [{
+                "observed_at": 1_800_000_000.0,
+                "time": "Thu 1:00 PM",
+                "left": 55.25,
+                "right": 44.75,
+            }],
+            "lineup_snapshot": {
+                "team_id": "0002",
+                "team_name": "Two",
+                "starters": {"202": "Player Two"},
+                "observed_at": 1_800_000_000.0,
+            },
+        },
     }
 
     restored = {
@@ -1454,6 +1476,58 @@ def test_persistent_report_codecs_restore_domain_shapes() -> None:
     assert restored["nfl-schedule:3"] == values["nfl-schedule:3"]
     assert restored["reference-projections:3:combined"] == values["reference-projections:3:combined"]
     assert restored["league-intelligence:test-fingerprint"] == intelligence
+    assert restored["matchup-history:3:0001-0002"] == values["matchup-history:3:0001-0002"]
+
+
+def test_matchup_history_tracks_opponent_lineup_and_saves_only_real_changes(monkeypatch) -> None:
+    league = MFLLeague("11111", "0001", "One")
+    current = web_app.BrowserSession(
+        "cookie", 2026, [league], "csrf", owner_fingerprint="account:history-owner",
+    )
+    own = web_app.LiveTeamView(
+        "0001", "My Team", 0.0, False, 1, 0,
+        (web_app.LivePlayerView(MFLPlayer("101", "Own QB", "QB"), 0.0, "starter", 3600, 20.0),),
+    )
+    opponent_initial = web_app.LiveTeamView(
+        "0002", "Opponent", 0.0, True, 1, 0,
+        (
+            web_app.LivePlayerView(MFLPlayer("201", "First QB", "QB"), 0.0, "starter", 3600, 18.0),
+            web_app.LivePlayerView(MFLPlayer("202", "Second QB", "QB"), 0.0, "bench", 3600, 22.0),
+        ),
+    )
+    saves = []
+    monkeypatch.setattr(web_app, "_load_database_report_snapshot", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        web_app, "_save_database_report_snapshot",
+        lambda *args, **kwargs: saves.append((args, kwargs)),
+    )
+    observed_times = iter((1_800_000_000.0, 1_800_000_060.0, 1_800_000_120.0))
+    monkeypatch.setattr(web_app.time, "time", lambda: next(observed_times))
+
+    first = web_app._observe_gameday_timeline(
+        current, league, 3, web_app.HeadToHeadView((own, opponent_initial), 3, 3),
+    )
+    unchanged = web_app._observe_gameday_timeline(
+        current, league, 3, web_app.HeadToHeadView((own, opponent_initial), 3, 3),
+    )
+    opponent_changed = web_app.LiveTeamView(
+        "0002", "Opponent", 0.0, True, 1, 0,
+        (
+            web_app.LivePlayerView(MFLPlayer("201", "First QB", "QB"), 0.0, "bench", 3600, 18.0),
+            web_app.LivePlayerView(MFLPlayer("202", "Second QB", "QB"), 0.0, "starter", 3600, 22.0),
+        ),
+    )
+    changed = web_app._observe_gameday_timeline(
+        current, league, 3, web_app.HeadToHeadView((own, opponent_changed), 3, 3),
+    )
+
+    assert first["opponent_name"] == "Opponent"
+    assert first["lineup_observations"] == 1
+    assert unchanged["lineup_observations"] == 1
+    assert changed["lineup_observations"] == 2
+    assert "Started Second QB" in changed["events"][0]["detail"]
+    assert "Benched First QB" in changed["events"][0]["detail"]
+    assert len(saves) == 2
 
 
 def test_league_intelligence_fingerprint_changes_with_authoritative_inputs() -> None:

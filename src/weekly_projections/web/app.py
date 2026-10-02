@@ -576,6 +576,7 @@ login_slots = BoundedSemaphore(4)
 trade_send_lock = Lock()
 pending_action_lock = Lock()
 social_send_lock = Lock()
+matchup_history_lock = Lock()
 shared_read_cache: dict[str, tuple[float, object]] = {}
 shared_read_lock = RLock()
 push_worker_lock = Lock()
@@ -925,7 +926,7 @@ def _persistent_report_identity(label: str) -> tuple[str, str] | None:
         return label, ""
     for prefix in (
         "nfl-schedule:", "projections:", "player-scores:",
-        "reference-projections:", "league-intelligence:",
+        "reference-projections:", "league-intelligence:", "matchup-history:",
     ):
         if label.startswith(prefix):
             report_key = label[len(prefix):]
@@ -947,6 +948,77 @@ def _persistent_report_location(
     if not current.owner_fingerprint:
         return None
     return current.owner_fingerprint, league_id
+
+
+def _validated_matchup_history(value: object) -> dict | None:
+    """Bound private, display-only week history before database persistence."""
+    if not isinstance(value, dict):
+        return None
+    raw_events = value.get("events")
+    raw_probability = value.get("probability")
+    if not isinstance(raw_events, list) or len(raw_events) > 200 \
+            or not isinstance(raw_probability, list) or len(raw_probability) > 500:
+        return None
+    events = []
+    for row in raw_events:
+        if not isinstance(row, dict):
+            return None
+        try:
+            observed_at = float(row["observed_at"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return None
+        if not math.isfinite(observed_at) or observed_at <= 0:
+            return None
+        events.append({
+            "observed_at": observed_at,
+            "time": str(row.get("time") or "")[:80],
+            "title": str(row.get("title") or "")[:240],
+            "detail": str(row.get("detail") or "")[:2000],
+            "tone": str(row.get("tone") or "baseline")[:40],
+            "kind": str(row.get("kind") or "score")[:40],
+        })
+    probability = []
+    for row in raw_probability:
+        if not isinstance(row, dict):
+            return None
+        try:
+            observed_at = float(row["observed_at"])
+            left = float(row["left"])
+            right = float(row["right"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return None
+        if not all(math.isfinite(item) for item in (observed_at, left, right)) \
+                or observed_at <= 0 or not 0 <= left <= 100 or not 0 <= right <= 100:
+            return None
+        probability.append({
+            "observed_at": observed_at, "time": str(row.get("time") or "")[:80],
+            "left": round(left, 2), "right": round(right, 2),
+        })
+    lineup = value.get("lineup_snapshot")
+    lineup_snapshot = None
+    if lineup is not None:
+        if not isinstance(lineup, dict) or not isinstance(lineup.get("starters"), dict) \
+                or len(lineup["starters"]) > 64:
+            return None
+        try:
+            lineup_observed_at = float(lineup.get("observed_at") or 0)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if not math.isfinite(lineup_observed_at) or lineup_observed_at <= 0:
+            return None
+        lineup_snapshot = {
+            "team_id": str(lineup.get("team_id") or "")[:64],
+            "team_name": str(lineup.get("team_name") or "")[:160],
+            "starters": {
+                str(player_id)[:64]: str(name)[:160]
+                for player_id, name in lineup["starters"].items()
+            },
+            "observed_at": lineup_observed_at,
+        }
+    return {
+        "events": events, "probability": probability,
+        **({"lineup_snapshot": lineup_snapshot} if lineup_snapshot else {}),
+    }
 
 
 def _serialize_report_snapshot(label: str, value: object) -> dict | None:
@@ -1083,6 +1155,10 @@ def _serialize_report_snapshot(label: str, value: object) -> dict | None:
                 for row in (value.get("last_week_results") or []) if isinstance(row, dict)
             ],
         }
+    elif report_type == "matchup-history":
+        data = _validated_matchup_history(value)
+        if data is None:
+            return None
     elif report_type in {"franchise-names", "projections", "player-scores"} \
             and isinstance(value, dict):
         data = value
@@ -1311,6 +1387,8 @@ def _deserialize_report_snapshot(label: str, payload: dict) -> object | None:
                 ),
                 "last_week_results": last_week_results,
             }
+        if report_type == "matchup-history":
+            return _validated_matchup_history(value)
         if report_type in {"projections", "player-scores"} and isinstance(value, dict) \
                 and len(value) <= 10_000:
             return {str(key): float(item) for key, item in value.items()}
@@ -3591,11 +3669,12 @@ def _observe_gameday_timeline(
     week: int | None,
     head_to_head: HeadToHeadView | None,
 ) -> dict:
-    """Retain win-probability history without using MFL changes as live events."""
+    """Retain week-long matchup odds and observed opponent lineup changes."""
     if week is None or head_to_head is None or len(head_to_head.teams) != 2:
-        return {"events": (), "probability": (), "chart_points": ""}
+        return {"events": (), "probability": (), "chart_points": "", "right_chart_points": ""}
     team_ids = "-".join(team.franchise_id for team in head_to_head.teams)
     key = f"{league.id}:{week}:{team_ids}"
+    history_label = f"matchup-history:{week}:{team_ids}"
     forecast = head_to_head.forecast
     percentages = tuple(forecast["percentages"]) if forecast else None
     payload = [
@@ -3613,18 +3692,61 @@ def _observe_gameday_timeline(
         }
         for team in head_to_head.teams
     ]
-    state = observe_scoring(
-        current.live_timelines.get(key), payload, percentages,
-        observed_at=time.time(), timezone=_APP_TIME_ZONE, record_events=False,
+    own_id = league.franchise_id.zfill(4)
+    own_team = next(
+        (team for team in head_to_head.teams if team.franchise_id.zfill(4) == own_id), None,
     )
-    current.live_timelines[key] = state
+    opponent = next((team for team in head_to_head.teams if team is not own_team), None) if own_team else None
+    with matchup_history_lock:
+        state = current.live_timelines.get(key)
+        if state is None:
+            stored = _load_database_report_snapshot(
+                current, league.id, history_label, stale_ttl=21 * 86400,
+            )
+            state = stored.get("value") if stored else None
+        before = json.dumps({
+            "events": (state or {}).get("events", []),
+            "probability": (state or {}).get("probability", []),
+            "lineup_snapshot": (state or {}).get("lineup_snapshot"),
+        }, sort_keys=True, separators=(",", ":"), default=str)
+        if head_to_head.current_week == week:
+            state = observe_scoring(
+                state, payload, percentages,
+                observed_at=time.time(), timezone=_APP_TIME_ZONE, record_events=False,
+                tracked_lineup_team_id=opponent.franchise_id if opponent else "",
+            )
+        else:
+            state = dict(state or {})
+        current.live_timelines[key] = state
+        after = json.dumps({
+            "events": state.get("events", []),
+            "probability": state.get("probability", []),
+            "lineup_snapshot": state.get("lineup_snapshot"),
+        }, sort_keys=True, separators=(",", ":"), default=str)
+        if after != before:
+            _save_database_report_snapshot(
+                current, league.id, history_label, state,
+                ttl=8 * 86400, stale_ttl=21 * 86400,
+            )
     probability = list(state.get("probability") or ())
+    lineup_events = [
+        event for event in (state.get("events") or ())
+        if event.get("kind") == "lineup"
+    ]
+    opening = probability[0] if probability else None
+    latest = probability[-1] if probability else None
     return {
-        "events": tuple(reversed(state.get("events") or ())),
+        "events": tuple(reversed(lineup_events)),
         "probability": tuple(probability),
         "chart_points": chart_points(probability),
+        "right_chart_points": chart_points(probability, field="right"),
         "left_name": head_to_head.teams[0].name,
         "right_name": head_to_head.teams[1].name,
+        "opening": opening,
+        "latest": latest,
+        "left_swing": round(latest["left"] - opening["left"], 2) if opening and latest else None,
+        "opponent_name": opponent.name if opponent else "Opponent",
+        "lineup_observations": len(lineup_events),
     }
 
 
