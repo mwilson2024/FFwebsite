@@ -403,7 +403,7 @@
         watchButton.hidden = false;
       }
       if (compareLink) {
-        compareLink.href = `/compare?${new URLSearchParams({league:button.dataset.league,p1:button.dataset.playerCard})}`;
+        compareLink.href = `/watchlist?${new URLSearchParams({league:button.dataset.league,view:"compare",p1:button.dataset.playerCard})}`;
         compareLink.hidden = false;
       }
     } catch { if (requestId === cardRequest) status.textContent = 'Player details are unavailable. Close this card and try again.'; }
@@ -439,6 +439,8 @@
   const filterPanel = document.querySelector(".board-filter-panel");
   const resultCount = document.querySelector("#player-result-count");
   const clearFilters = document.querySelector("#clear-player-filters");
+  const metricToggle = document.querySelector("#toggle-market-metrics");
+  const waiverTable = document.querySelector(".waiver-table");
   const playerTableBody = document.querySelector(".waiver-table tbody");
   const empty = document.querySelector("#filtered-empty");
   const selectedCopy = document.querySelector("#selected-player");
@@ -537,6 +539,11 @@
     applyFilters();
     applySort();
     search?.focus();
+  });
+  metricToggle?.addEventListener("click", () => {
+    const expanded = waiverTable?.classList.toggle("show-advanced") || false;
+    metricToggle.setAttribute("aria-pressed", String(expanded));
+    metricToggle.textContent = expanded ? "Hide advanced stats" : "Show advanced stats";
   });
   document.querySelectorAll('input[name="add_id"]').forEach((radio) => radio.addEventListener("change", () => {
     if (radio.checked && ["waiver", "locked"].includes(radio.dataset.marketStatus) && modeSelect) modeSelect.value = "waiver";
@@ -639,6 +646,14 @@
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || "Player intelligence is unavailable.");
       if (!applyMarketVerification(data)) return;
+      const preference = data.projection?.ranking_preference || "espn-ppr";
+      const primaryRank = (player) => {
+        if (preference === "mfl") return player.mfl_rank;
+        if (preference === "combined") return player.combined_rank;
+        if (preference === "fantasypros-half") return player.fantasypros_rank;
+        if (preference === "cbs-ppr") return player.cbs_rank;
+        return player.espn_rank;
+      };
       rows.forEach((row) => {
         const player = data.players?.[row.dataset.playerId];
         if (!player) return;
@@ -659,7 +674,8 @@
         replaceMetric(row.querySelector(".ytd-cell"), player.ytd === null ? null : Number(player.ytd).toFixed(1));
         replaceMetric(row.querySelector(".median-cell"), player.median === null ? null : Number(player.median).toFixed(1), player.median === null ? "" : `Last ${player.median_window}`);
         replaceMetric(row.querySelector(".avg-cell"), player.average === null ? null : Number(player.average).toFixed(1));
-        replaceMetric(row.querySelector(".espn-rank-cell"), player.espn_rank === null ? null : `#${Number(player.espn_rank).toFixed(1)}`);
+        const selectedRank = primaryRank(player);
+        replaceMetric(row.querySelector(".primary-rank-cell"), selectedRank === null ? null : `#${Number(selectedRank).toFixed(1)}`, data.projection.ranking_label);
         replaceMetric(row.querySelector(".mfl-rank-cell"), player.mfl_rank === null ? null : `#${Number(player.mfl_rank).toFixed(1)}`);
         replaceMetric(row.querySelector(".fantasypros-rank-cell"), player.fantasypros_rank === null ? null : `#${Number(player.fantasypros_rank).toFixed(1)}`);
         replaceMetric(row.querySelector(".cbs-rank-cell"), player.cbs_rank === null ? null : `#${Number(player.cbs_rank).toFixed(1)}`);

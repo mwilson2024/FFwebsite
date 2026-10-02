@@ -6,7 +6,7 @@
   {% include '_theme_assets.html' %}
 </head><body>
   {% set active_tool = 'trades' %}{% include '_league_header.html' %}
-  <main class="review-shell"><p class="eyebrow">{{ league.name }} · YOUR TRADE BLOCK</p>
+  <main class="review-shell" id="main-content"><p class="eyebrow">{{ league.name }} · YOUR TRADE BLOCK</p>
   {% if error %}<h1>Update not ready</h1><p role="alert">{{ error }}</p>
   {% elif draft.status == 'draft' %}<h1>Review your trade-block update</h1><p>Adding {% for player in draft.players %}{{ player.name }}{{ ', ' if not loop.last }}{% endfor %}. This preview expires in 20 minutes.</p>
   {% else %}<h1>{{ 'Trade block updated' if draft.status == 'sent' else 'Update not confirmed' }}</h1><p role="status">{{ draft.message or 'An update is running. Refresh to check; do not post again.' }}</p>{% endif %}

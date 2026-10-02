@@ -406,7 +406,8 @@ def test_move_page_shows_full_board_projections_and_locks(monkeypatch) -> None:
     assert "YTD" in response.text
     assert "Avg" in response.text
     assert "Median" in response.text
-    assert "ESPN rank" in response.text
+    assert "Primary rank" in response.text
+    assert "Show advanced stats" in response.text
     assert "MFL proj rank" in response.text
     assert "FantasyPros" in response.text
     assert "CBS rank" in response.text
@@ -554,7 +555,7 @@ def test_rosters_tab_shows_every_member_and_groups_roster_tools(monkeypatch) -> 
     assert 'aria-current="page"><strong>Rosters</strong>' in response.text
     assert "Free agents" in response.text and "Add, drop &amp; waivers" in response.text
     top_nav = response.text.split('<nav class="section-nav"', 1)[1].split("</nav>", 1)[0]
-    assert "Rosters" in top_nav and ">Players<" not in top_nav and ">Trades<" not in top_nav
+    assert ">Players<" in top_nav and ">Rosters<" not in top_nav and ">Trades<" not in top_nav
 
     assert client.get("/rosters?league=77777").status_code == 200
     assert reads == {"details": 1, "rosters": 1, "players": 1}
@@ -732,7 +733,7 @@ def test_player_leaders_show_official_ranks_ownership_and_primary_rank(monkeypat
     assert "Hidden Linebacker" not in response.text
     assert "Combined MFL + ESPN + FantasyPros + CBS + ML ranks" in response.text
     tabs = response.text.split('<nav class="roster-tools"', 1)[1].split("</nav>", 1)[0]
-    assert tabs.index("Compare") < tabs.index("League leaders")
+    assert tabs.index("Watch &amp; compare") < tabs.index("League leaders")
     position_select = response.text.split('<select name="position">', 1)[1].split("</select>", 1)[0]
     assert position_select.index("WR + TE") < position_select.index("FLEX (RB + WR + TE)")
     assert position_select.rfind(">DEF<") > position_select.index("FLEX (RB + WR + TE)")
@@ -878,7 +879,7 @@ def test_operations_schedule_rules_status_and_guide_pages_render(monkeypatch) ->
 
     transactions = client.get("/transactions?league=88882")
     assert transactions.status_code == 200
-    assert "My transactions" in transactions.text and "Player A" in transactions.text
+    assert "My activity" in transactions.text and "Player A" in transactions.text
     schedule = client.get("/schedule?league=88882")
     assert schedule.status_code == 200 and "101.50" in schedule.text and "Opponent" in schedule.text
     rules = client.get("/rules?league=88882")
@@ -1002,7 +1003,7 @@ def test_notification_center_and_first_run_guide(monkeypatch) -> None:
     alerts = client.get("/notifications?league=88883")
     assert alerts.status_code == 200 and "Questionable starter" in alerts.text
     home = client.get("/home?league=88883")
-    assert "Which rankings should lead your player lists?" in home.text and "My transactions" in home.text
+    assert "Which rankings should lead your player lists?" in home.text and "My activity" in home.text
     saved = client.post("/preferences/rankings", data={
         "league": "88883", "ranking_preference": "espn-ppr", "csrf_token": "csrf",
     }, follow_redirects=False)
@@ -2054,31 +2055,27 @@ def test_league_hq_renders_intelligence_and_tracks_session_side_bets(monkeypatch
     response = client.get("/league?league=11111")
     assert response.status_code == 200
     assert "Power rankings &amp; luck index" in response.text
-    assert "Waiver wire intelligence" in response.text
-    assert "Pickup" in response.text
-    assert '<details class="activity-entry">' in response.text
-    assert 'id="activity-card"' not in response.text
-    assert "WR · DET" in response.text
-    assert "Winning FAAB bid" in response.text
-    assert "$3" in response.text
-    assert "MFL reference" in response.text
-    assert 'data-equal-scroll-cards' in response.text
-    assert 'data-scroll-height-source' in response.text
-    assert 'data-scroll-height-target' in response.text
-    assert "/static/league.css?v=20260920-social-bottom" in response.text
+    assert "Waiver wire intelligence" not in response.text
+    assert "/static/league.css?v=20261002-navigation" in response.text
     assert "/static/interface.js?v=4" in response.text
     assert 'class="bracket-round bracket-round-3"' in response.text
     assert "Championship" in response.text
     assert "Projected advancement" in response.text
     assert "Week 1 results" in response.text
     assert "120.00" in response.text
-    assert "Side-bet tracker" in response.text
-    assert "Message board" in response.text and "League chat" in response.text
-    assert response.text.index('id="league-social"') > response.text.index('id="side-bets"')
-    assert response.text.index('id="league-chat"') > response.text.index('id="side-bets"')
-    assert "Trash talk" in response.text and "Good luck" in response.text
-    assert "/league/message-thread/thread-1?league=11111" in response.text
-    assert 'action="/league/social/preview"' in response.text
+    activity_page = client.get("/league?league=11111&view=activity")
+    assert "Waiver wire intelligence" in activity_page.text and "Pickup" in activity_page.text
+    assert '<details class="activity-entry">' in activity_page.text
+    assert "WR · DET" in activity_page.text and "Winning FAAB bid" in activity_page.text
+    assert "$3" in activity_page.text and "MFL reference" in activity_page.text
+    assert 'data-equal-scroll-cards' in activity_page.text
+    community = client.get("/league?league=11111&view=community")
+    assert "Side-bet tracker" in community.text and "Message board" in community.text
+    assert "Trash talk" in community.text and "Good luck" not in community.text
+    assert "/league/message-thread/thread-1?league=11111" in community.text
+    assert 'action="/league/social/preview"' in community.text
+    chat = client.get("/league?league=11111&view=community&channel=chat")
+    assert "League chat" in chat.text and "Good luck" in chat.text
     response = client.post("/league/side-bets", data={
         "league":"11111", "csrf_token":"csrf", "title":"QB duel",
         "participants":"A vs B", "stake":"pizza",

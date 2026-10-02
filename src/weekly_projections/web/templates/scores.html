@@ -14,7 +14,7 @@
 </head>
 <body class="gameday-page" data-live-refresh="{{ refresh_seconds }}" data-next-kickoff="{{ next_kickoff or '' }}" data-live-window="/api/live-window?league={{ league.id }}&week={{ week or 1 }}">
   {% set active_tool = 'scores' %}{% include '_league_header.html' %}
-  <main class="gameday-shell">
+  <main class="gameday-shell" id="main-content">
     <div class="gameday-toolbar">
       <div><p class="eyebrow">GAME DAY</p><h1>{{ 'League scoreboard' if score_view == 'all' else 'Matchup' }}</h1><nav class="score-view-switch" aria-label="Score view"><a class="{{ 'active' if score_view == 'matchup' else '' }}" href="/scores?league={{ league.id }}&week={{ week }}">Matchup</a><a class="{{ 'active' if score_view == 'all' else '' }}" href="/scores?league={{ league.id }}&week={{ week }}&view=all">All scores</a></nav></div>
       <form class="week-picker score-filters" method="get" action="/scores">

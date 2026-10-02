@@ -6,18 +6,18 @@
   
   <meta name="csrf-token" content="{{ session.csrf_token }}">
   <title>{{ league.name }} · Player Market</title>
-  <link rel="stylesheet" href="/static/app.css?v=20260924-progressive-market">
+  <link rel="stylesheet" href="/static/app.css?v=20261002-market">
   <link rel="stylesheet" href="/static/workspace.css?v=20260924-progressive-market">
   <link rel="stylesheet" href="/static/fantasy.css?v=20260921-leaders">
   <link rel="stylesheet" href="/static/lions.css?v=1">
   <link rel="stylesheet" href="/static/rosters.css?v=3">
   <script src="/static/diagnostics.js" defer></script>
-  <script src="/static/app.js?v=20260924-progressive-market" defer></script>
+  <script src="/static/app.js?v=20261002-market" defer></script>
   {% include '_theme_assets.html' %}
 </head>
 <body>
   {% set active_tool = 'moves' %}{% include '_league_header.html' %}
-  <main class="move-shell">
+  <main class="move-shell" id="main-content">
     <section class="move-workspace waiver-workspace" data-player-market-verification="/api/player-market/verify?league={{ league.id|urlencode }}&amp;revision={{ market_snapshot_revision|urlencode }}" data-player-market-enrichment="/api/player-market/enrichment?league={{ league.id|urlencode }}&amp;revision={{ market_snapshot_revision|urlencode }}" data-market-verified="{{ 'true' if market_verified else 'false' }}">
       {% include '_roster_tabs.html' %}
       <div class="page-heading waiver-heading">
@@ -41,7 +41,7 @@
         <p id="market-enrichment-copy">{% if not market_verified %}Showing the last saved player pool immediately. It is browse-only while MFL verifies current ownership, availability, and kickoff locks in the background.{% elif enrichment_pending %}Players, ownership, and add/claim availability are ready now. Rankings, projections, matchup context, and waiver intelligence are loading without blocking the page.{% else %}{{ ranking_label }} leads the default sort. MFL remains authoritative for league scoring, locks, ownership, and moves. Change this anytime in Settings.{% endif %}</p>
       </section>
 
-      <div class="market-jump-grid"><a class="defense-stream-link" href="/transactions/pending?league={{ league.id }}"><span><strong>Pending claims</strong><small>Review or withdraw MFL waivers</small></span><span aria-hidden="true">→</span></a><a class="defense-stream-link" href="#waiver-optimizer"><span><strong>Build my waiver queue</strong><small>Order claims and budget FAAB</small></span><span aria-hidden="true">↓</span></a><a class="defense-stream-link" href="#defense-streaming"><span><strong>Streaming a defense?</strong><small>Compare talent, matchup and waiver price</small></span><span aria-hidden="true">↓</span></a></div>
+      <div class="market-jump-grid"><a class="defense-stream-link" href="/transactions?league={{ league.id }}&amp;view=pending"><span><strong>Pending claims</strong><small>Review or withdraw MFL waivers</small></span><span aria-hidden="true">→</span></a><a class="defense-stream-link" href="#waiver-optimizer"><span><strong>Build my waiver queue</strong><small>Order claims and budget FAAB</small></span><span aria-hidden="true">↓</span></a><a class="defense-stream-link" href="#defense-streaming"><span><strong>Streaming a defense?</strong><small>Compare talent, matchup and waiver price</small></span><span aria-hidden="true">↓</span></a></div>
 
       <form method="post" action="/preview" id="waiver-form">
         <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
@@ -63,14 +63,14 @@
                 <label><span>Fantasy team</span><select id="fantasy-team-filter"><option value="all">All fantasy teams</option>{% for team_id, team_name in fantasy_teams %}<option value="{{ team_id }}">{{ team_name }}</option>{% endfor %}</select></label>
                 <label><span>Projection</span><select id="projection-filter"><option value="all">All</option><option value="projected">Has projection</option><option value="missing">No projection</option></select></label>
                 <label><span>Sort</span><select id="player-sort" data-default-sort="{{ ranking_default_sort }}"><option value="combined-rank" {% if ranking_default_sort == 'combined-rank' %}selected{% endif %}>Combined position rank</option><option value="espn-rank" {% if ranking_default_sort == 'espn-rank' %}selected{% endif %}>ESPN weekly rank</option><option value="mfl-rank" {% if ranking_default_sort == 'mfl-rank' %}selected{% endif %}>MFL projected rank</option><option value="fantasypros-rank" {% if ranking_default_sort == 'fantasypros-rank' %}selected{% endif %}>FantasyPros weekly rank</option><option value="cbs-rank" {% if ranking_default_sort == 'cbs-rank' %}selected{% endif %}>CBS projected rank</option><option value="recommended">Recommended</option><option value="projection">Projected points</option><option value="ytd">YTD points</option><option value="avg">Average points</option><option value="median">Recent median</option><option value="matchup">Best matchup</option><option value="edge">Roster edge</option><option value="name">Name A–Z</option><option value="nfl-team">NFL team</option><option value="fantasy-team">Fantasy team</option></select></label>
-                <div class="filter-actions"><button type="button" class="quiet-button" id="clear-player-filters">Clear filters</button></div>
+                <div class="filter-actions"><button type="button" class="quiet-button" id="toggle-market-metrics" aria-pressed="false">Show advanced stats</button><button type="button" class="quiet-button" id="clear-player-filters">Clear filters</button></div>
               </div>
             </details>
           </div>
 
           <div class="waiver-table-wrap">
             <table class="waiver-table">
-              <thead><tr><th scope="col">Add</th><th scope="col">Player</th><th scope="col">Availability / team</th><th scope="col">Proj points</th><th scope="col">YTD</th><th scope="col">Median</th><th scope="col">Avg</th><th scope="col">ESPN rank</th><th scope="col">MFL proj rank</th><th scope="col">FantasyPros</th><th scope="col">CBS rank</th><th scope="col">Matchup</th><th scope="col">Roster edge</th><th scope="col">Recommendation</th></tr></thead>
+              <thead><tr><th scope="col">Add</th><th scope="col">Player</th><th scope="col">Availability / team</th><th scope="col">Proj points</th><th scope="col">YTD</th><th class="advanced-metric" scope="col">Median</th><th class="advanced-metric" scope="col">Avg</th><th scope="col">Primary rank</th><th class="advanced-metric" scope="col">MFL proj rank</th><th class="advanced-metric" scope="col">FantasyPros</th><th class="advanced-metric" scope="col">CBS rank</th><th scope="col">Matchup</th><th class="advanced-metric" scope="col">Roster edge</th><th scope="col">Recommendation</th></tr></thead>
               <tbody>
               {% for item in recommendations %}
                 {% set strength = opponent_strength.get(item.player.id) %}
@@ -80,14 +80,14 @@
                   <td>{% if item.is_rostered %}<span class="availability-badge rostered">{{ item.fantasy_team_name }}</span><small class="ownership-note">{% if item.market_status == 'mine' %}Your roster{% else %}Rostered · trade only{% endif %}</small>{% else %}<span class="availability-badge {{ item.market_status }}">{% if item.availability.locked %}<span aria-hidden="true">⌁</span>{% endif %} {{ item.availability.label }}</span>{% endif %}</td>
                   <td class="number-cell projection-cell">{% if enrichment_pending %}<span class="no-data">Loading…</span>{% elif item.projection is not none %}<strong>{{ '%.1f'|format(item.projection) }}</strong><small>MFL league-scored</small>{% else %}<span class="no-data">—</span>{% endif %}</td>
                   <td class="number-cell season-cell ytd-cell">{% if enrichment_pending %}<span class="no-data">…</span>{% elif ytd_scores.get(item.player.id) is not none %}<strong>{{ '%.1f'|format(ytd_scores[item.player.id]) }}</strong>{% else %}<span class="no-data">—</span>{% endif %}</td>
-                  <td class="number-cell season-cell median-cell">{% if enrichment_pending %}<span class="no-data">…</span>{% elif median_scores.get(item.player.id) is not none %}<strong>{{ '%.1f'|format(median_scores[item.player.id]) }}</strong><small>Last {{ median_window }}</small>{% else %}<span class="no-data">—</span>{% endif %}</td>
-                  <td class="number-cell season-cell avg-cell">{% if enrichment_pending %}<span class="no-data">…</span>{% elif avg_scores.get(item.player.id) is not none %}<strong>{{ '%.1f'|format(avg_scores[item.player.id]) }}</strong>{% else %}<span class="no-data">—</span>{% endif %}</td>
-                  <td class="number-cell rank-cell espn-rank-cell">{% if enrichment_pending %}<span class="no-data">…</span>{% elif espn_ranks.get(item.player.id) is not none %}<strong>#{{ '%.1f'|format(espn_ranks[item.player.id]) }}</strong>{% else %}<span class="no-data">—</span>{% endif %}</td>
-                  <td class="number-cell rank-cell mfl-rank-cell">{% if enrichment_pending %}<span class="no-data">…</span>{% elif mfl_projection_ranks.get(item.player.id) is not none %}<strong>#{{ '%.1f'|format(mfl_projection_ranks[item.player.id]) }}</strong>{% else %}<span class="no-data">—</span>{% endif %}</td>
-                  <td class="number-cell rank-cell fantasypros-rank-cell">{% if enrichment_pending %}<span class="no-data">…</span>{% elif fantasypros_ranks.get(item.player.id) is not none %}<strong>#{{ '%.1f'|format(fantasypros_ranks[item.player.id]) }}</strong>{% else %}<span class="no-data">—</span>{% endif %}</td>
-                  <td class="number-cell rank-cell cbs-rank-cell">{% if enrichment_pending %}<span class="no-data">…</span>{% elif cbs_ranks.get(item.player.id) is not none %}<strong>#{{ '%.1f'|format(cbs_ranks[item.player.id]) }}</strong>{% else %}<span class="no-data">—</span>{% endif %}</td>
+                  <td class="number-cell season-cell median-cell advanced-metric">{% if enrichment_pending %}<span class="no-data">…</span>{% elif median_scores.get(item.player.id) is not none %}<strong>{{ '%.1f'|format(median_scores[item.player.id]) }}</strong><small>Last {{ median_window }}</small>{% else %}<span class="no-data">—</span>{% endif %}</td>
+                  <td class="number-cell season-cell avg-cell advanced-metric">{% if enrichment_pending %}<span class="no-data">…</span>{% elif avg_scores.get(item.player.id) is not none %}<strong>{{ '%.1f'|format(avg_scores[item.player.id]) }}</strong>{% else %}<span class="no-data">—</span>{% endif %}</td>
+                  <td class="number-cell rank-cell primary-rank-cell">{% if enrichment_pending %}<span class="no-data">…</span>{% elif primary_ranks.get(item.player.id) is not none %}<strong>#{{ '%.1f'|format(primary_ranks[item.player.id]) }}</strong><small>{{ ranking_label }}</small>{% else %}<span class="no-data">—</span>{% endif %}</td>
+                  <td class="number-cell rank-cell mfl-rank-cell advanced-metric">{% if enrichment_pending %}<span class="no-data">…</span>{% elif mfl_projection_ranks.get(item.player.id) is not none %}<strong>#{{ '%.1f'|format(mfl_projection_ranks[item.player.id]) }}</strong>{% else %}<span class="no-data">—</span>{% endif %}</td>
+                  <td class="number-cell rank-cell fantasypros-rank-cell advanced-metric">{% if enrichment_pending %}<span class="no-data">…</span>{% elif fantasypros_ranks.get(item.player.id) is not none %}<strong>#{{ '%.1f'|format(fantasypros_ranks[item.player.id]) }}</strong>{% else %}<span class="no-data">—</span>{% endif %}</td>
+                  <td class="number-cell rank-cell cbs-rank-cell advanced-metric">{% if enrichment_pending %}<span class="no-data">…</span>{% elif cbs_ranks.get(item.player.id) is not none %}<strong>#{{ '%.1f'|format(cbs_ranks[item.player.id]) }}</strong>{% else %}<span class="no-data">—</span>{% endif %}</td>
                   <td class="matchup-cell">{% if enrichment_pending %}<span class="no-data">Loading…</span>{% elif strength %}<span class="opponent-strength {{ strength.tone }}"><b>{{ strength.opponent }}</b> · #{{ strength.rank }} {{ strength.label|lower }}</span><small>{{ '%.1f'|format(strength.points_allowed) }} {{ strength.position }} pts allowed</small>{% else %}<span class="no-data">—</span>{% endif %}</td>
-                  <td class="number-cell edge-cell">{% if enrichment_pending %}<span class="no-data">…</span>{% elif item.roster_delta is not none %}<strong class="{% if item.roster_delta >= 0.5 %}positive{% elif item.roster_delta < 0 %}negative{% endif %}">{% if item.roster_delta > 0 %}+{% endif %}{{ '%.1f'|format(item.roster_delta) }}</strong><small>{% if item.suggested_drop %}vs {{ item.suggested_drop.name }}{% endif %}</small>{% else %}<span class="no-data">—</span>{% endif %}</td>
+                  <td class="number-cell edge-cell advanced-metric">{% if enrichment_pending %}<span class="no-data">…</span>{% elif item.roster_delta is not none %}<strong class="{% if item.roster_delta >= 0.5 %}positive{% elif item.roster_delta < 0 %}negative{% endif %}">{% if item.roster_delta > 0 %}+{% endif %}{{ '%.1f'|format(item.roster_delta) }}</strong><small>{% if item.suggested_drop %}vs {{ item.suggested_drop.name }}{% endif %}</small>{% else %}<span class="no-data">—</span>{% endif %}</td>
                   <td class="recommendation-cell">{% if enrichment_pending %}<span class="recommendation muted">Loading intelligence…</span>{% else %}<span class="recommendation {{ item.recommendation_tone }}">{{ item.recommendation }}</span><small class="recommendation-reason">{{ item.reason }}</small>{% endif %}</td>
                 </tr>
               {% endfor %}

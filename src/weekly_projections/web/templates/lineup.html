@@ -16,7 +16,7 @@
 </head>
 <body class="lineup-editor-page">
   {% set active_tool = 'lineup' %}{% include '_league_header.html' %}
-  <main class="editor-shell">
+  <main class="editor-shell" id="main-content">
     <div class="editor-heading">
       <div><p class="eyebrow">{{ league.name }}</p><h1>My lineup</h1></div>
       <form method="get" action="/lineup" class="editor-selectors compact-selectors">

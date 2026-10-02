@@ -55,10 +55,10 @@ def test_home_remembers_only_authorized_league_and_not_widget_navigation(hub, mo
     assert len(soup.select('[data-hub-url]')) == 4
     assert len(soup.select('[data-hub-priority]')) == 2
     assert '/static/hub.js?v=20260922-week-preference' in home.text
-    assert '/home?league=22222' == client.get('/dashboard', follow_redirects=False).headers['location']
+    assert '/command-center?league=22222' == client.get('/dashboard', follow_redirects=False).headers['location']
     assert client.get('/home?league=99999').status_code == 404
     assert client.get('/hub/block?league=12345').status_code == 200
-    assert '/home?league=22222' == client.get('/dashboard', follow_redirects=False).headers['location']
+    assert '/command-center?league=22222' == client.get('/dashboard', follow_redirects=False).headers['location']
     assert not writes
     assert 'wp_last_league' not in client.post('/logout', data={'csrf_token': 'csrf'}, follow_redirects=False).headers['set-cookie']
     assert client.get('/hub/block?league=12345').status_code == 401
@@ -166,6 +166,8 @@ def test_hub_sections_escape_feed_text_and_fail_independently(hub, monkeypatch):
     standings = client.get('/hub/standings?league=12345').text
     assert '88.5' in standings and 'Blue Division' in standings
     assert 'https://www42.myfantasyleague.com/one.png' in standings
+    summary = client.get('/hub/standing-summary?league=12345').text
+    assert 'Your team' in summary and '#1' in summary and '88.5' in summary
     def fail(): raise MFLApiError('private upstream error')
     monkeypatch.setattr(mfl, 'league_standings', fail)
     session.read_cache.clear()

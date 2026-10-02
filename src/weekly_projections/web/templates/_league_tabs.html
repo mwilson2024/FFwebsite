@@ -1,0 +1,7 @@
+<nav class="context-tabs" aria-label="League sections">
+  <a href="/league?league={{ league.id }}&amp;view=overview" {% if league_view|default('overview') == 'overview' and active_tool == 'league' %}class="active" aria-current="page"{% endif %}>Overview</a>
+  <a href="/league?league={{ league.id }}&amp;view=activity" {% if league_view|default('overview') == 'activity' %}class="active" aria-current="page"{% endif %}>Activity</a>
+  <a href="/league?league={{ league.id }}&amp;view=community" {% if league_view|default('overview') == 'community' %}class="active" aria-current="page"{% endif %}>Community</a>
+  <a href="/schedule?league={{ league.id }}" {% if active_tool == 'schedule' %}class="active" aria-current="page"{% endif %}>Schedule</a>
+  <a href="/rules?league={{ league.id }}" {% if active_tool == 'rules' %}class="active" aria-current="page"{% endif %}>Rules</a>
+</nav>

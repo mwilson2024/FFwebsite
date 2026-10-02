@@ -10,7 +10,7 @@
 </head>
 <body>
   <header class="topbar"><a href="/dashboard" class="brand-mark small">WP</a><strong>{{ league.name }}</strong><span class="season">League {{ league.id }}</span></header>
-  <main class="review-shell">
+  <main class="review-shell" id="main-content">
     {% if success %}
       <p class="eyebrow">TRANSACTION SENT</p><h1>{{ success }}</h1>
       <div class="success-mark" aria-hidden="true">✓</div>

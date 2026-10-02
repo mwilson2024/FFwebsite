@@ -11,8 +11,8 @@
 </head>
 <body class="tools-page">
   {% set active_tool='transactions' %}{% include '_league_header.html' %}
-  <main class="review-shell pending-action-review">
-    <a class="back-link" href="/transactions/pending?league={{ league.id }}">← Back to pending waivers &amp; trades</a>
+  <main class="review-shell pending-action-review" id="main-content">
+    <a class="back-link" href="/transactions?league={{ league.id }}&amp;view=pending">← Back to pending waivers &amp; trades</a>
     <section class="tool-card">
       <p class="card-kicker">REVIEW BEFORE CHANGING MFL</p>
       <h1>{{ draft.title }}</h1>
@@ -22,9 +22,9 @@
       {% else %}<div class="warning" role="alert"><strong>This closes the selected offer.</strong><span>It does not affect another pending trade.</span></div>{% endif %}
 
       {% if draft.message %}<div class="{{ 'success' if draft.status == 'completed' else 'warning' if draft.status == 'uncertain' else 'error' }}" role="status">{{ draft.message }}{% if draft.status in ['failed','uncertain'] %}{% include '_error_reference.html' %}{% endif %}</div>{% endif %}
-      {% if draft.status == 'draft' %}<form method="post" action="/transactions/pending/confirm/{{ pending_id }}" class="pending-confirm-form"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">{% if draft.action == 'reject' %}<label for="reject-comments">Optional rejection message<textarea id="reject-comments" name="comments" maxlength="500" rows="3" placeholder="Add a short note to the offering manager"></textarea></label>{% endif %}<div class="review-actions"><a class="secondary-action" href="/transactions/pending?league={{ league.id }}">Keep pending</a><button class="{{ 'confirm-button' if draft.action == 'accept' else 'danger-action' }}" type="submit">Confirm {{ draft.action }} on MFL</button></div></form>
-      {% elif draft.status == 'uncertain' %}<p class="data-note">Do not repeat this action until you refresh the pending-transactions page or verify the offer directly on MFL.</p><a class="review-button" href="/transactions/pending?league={{ league.id }}">Refresh pending transactions</a>
-      {% else %}<a class="review-button" href="/transactions/pending?league={{ league.id }}">Return to pending transactions</a>{% endif %}
+      {% if draft.status == 'draft' %}<form method="post" action="/transactions/pending/confirm/{{ pending_id }}" class="pending-confirm-form"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">{% if draft.action == 'reject' %}<label for="reject-comments">Optional rejection message<textarea id="reject-comments" name="comments" maxlength="500" rows="3" placeholder="Add a short note to the offering manager"></textarea></label>{% endif %}<div class="review-actions"><a class="secondary-action" href="/transactions?league={{ league.id }}&amp;view=pending">Keep pending</a><button class="{{ 'confirm-button' if draft.action == 'accept' else 'danger-action' }}" type="submit">Confirm {{ draft.action }} on MFL</button></div></form>
+      {% elif draft.status == 'uncertain' %}<p class="data-note">Do not repeat this action until you refresh the pending-transactions page or verify the offer directly on MFL.</p><a class="review-button" href="/transactions?league={{ league.id }}&amp;view=pending">Refresh pending transactions</a>
+      {% else %}<a class="review-button" href="/transactions?league={{ league.id }}&amp;view=pending">Return to pending transactions</a>{% endif %}
     </section>
   </main>
 </body>

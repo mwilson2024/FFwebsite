@@ -1,0 +1,7 @@
+<nav class="context-tabs" aria-label="Home sections">
+  <a href="/home?league={{ league.id }}" {% if active_tool == 'home' %}class="active" aria-current="page"{% endif %}>Overview</a>
+  <a href="/insights?league={{ league.id }}" {% if active_tool == 'insights' %}class="active" aria-current="page"{% endif %}>Briefing</a>
+  <a href="/transactions?league={{ league.id }}" {% if active_tool == 'transactions' %}class="active" aria-current="page"{% endif %}>My activity</a>
+  <a href="/planner?league={{ league.id }}" {% if active_tool == 'planner' %}class="active" aria-current="page"{% endif %}>Planner</a>
+  <a href="/simulator?league={{ league.id }}" {% if active_tool == 'simulator' %}class="active" aria-current="page"{% endif %}>Simulator</a>
+</nav>

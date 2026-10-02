@@ -8,11 +8,8 @@
   <a {% if active_tool == 'trades' %}class="active" aria-current="page"{% endif %} href="/trades?league={{ league.id }}">
     <strong>Trades</strong><small>Offers &amp; trade block</small>
   </a>
-  <a {% if active_tool == 'watchlist' %}class="active" aria-current="page"{% endif %} href="/watchlist?league={{ league.id }}">
-    <strong>Watchlist</strong><small>Players you follow</small>
-  </a>
-  <a {% if active_tool == 'compare' %}class="active" aria-current="page"{% endif %} href="/compare?league={{ league.id }}">
-    <strong>Compare</strong><small>Side-by-side analysis</small>
+  <a {% if active_tool in ['watchlist','compare'] %}class="active" aria-current="page"{% endif %} href="/watchlist?league={{ league.id }}{% if active_tool == 'compare' %}&amp;view=compare{% endif %}">
+    <strong>Watch &amp; compare</strong><small>Follow and analyze players</small>
   </a>
   <a {% if active_tool == 'leaders' %}class="active" aria-current="page"{% endif %} href="/leaders?league={{ league.id }}">
     <strong>League leaders</strong><small>Ranks &amp; ownership</small>

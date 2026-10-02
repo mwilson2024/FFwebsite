@@ -9,7 +9,7 @@
 </head>
 <body>
   {% set active_tool = 'trades' %}{% include '_league_header.html' %}
-  <main class="review-shell">
+  <main class="review-shell" id="main-content">
     <p class="eyebrow">{{ league.name }} · TRADE OFFER</p>
     {% if validation_error %}<h1>Offer not ready</h1><div class="error" role="alert">{{ validation_error }}{% include '_error_reference.html' %}</div>
     {% elif draft.status == 'draft' %}<h1>Review your offer to {{ draft.target_name }}</h1><p class="helper">Confirm the exact players and message below. This review expires after 20 minutes.</p>

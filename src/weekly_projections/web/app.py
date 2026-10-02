@@ -4005,6 +4005,12 @@ def dashboard(request: Request, source: str = ""):
         )
         route = {"pwa-lineup": "/lineup", "pwa-briefing": "/insights", "pwa-score": "/scores"}[source]
         return RedirectResponse(route + "?" + urlencode({"league": selected.id}), status_code=303)
+    if len(current.leagues) > 1:
+        selected = next(
+            (item for item in current.leagues if item.id == current.default_league_id),
+            current.leagues[0],
+        )
+        return RedirectResponse(f"/command-center?league={selected.id}", status_code=303)
     return RedirectResponse(_league_home_url(request, current), status_code=303)
 
 
@@ -4144,11 +4150,11 @@ def command_center_league(request: Request, league_id: str):
                 "lineup": f"/lineup?league={selected.id}&week={week}",
                 "scores": f"/scores?league={selected.id}&week={week}",
                 "moves": f"/moves?league={selected.id}",
-                "transactions": f"/transactions/pending?league={selected.id}",
+                "transactions": f"/transactions?league={selected.id}&view=pending",
                 "trades": f"/trades?league={selected.id}",
                 "watchlist": f"/watchlist?league={selected.id}",
                 "insights": f"/insights?league={selected.id}",
-                "standings": f"/standings?league={selected.id}",
+                "standings": f"/league?league={selected.id}&view=overview#standings",
             },
         }
     except (MFLApiError, ValueError) as error:
@@ -4388,8 +4394,10 @@ def standings_page(request: Request, league: str):
     current = _session(request)
     if not current:
         return RedirectResponse("/", status_code=303)
-    return templates.TemplateResponse(request=request, name="home.html", context={
-        "session": current, "league": _league(current, league), "active_tool": "standings"})
+    selected = _league(current, league)
+    return RedirectResponse(
+        f"/league?league={selected.id}&view=overview#standings", status_code=303,
+    )
 
 
 @app.get("/insights", response_class=HTMLResponse)
@@ -4400,6 +4408,17 @@ def insights_page(request: Request, league: str):
         context = _load_insights(
             current, selected, include_external=True, include_accuracy=True,
         )
+        empty_accuracy = ProjectionAccuracyReport((), (), (), ())
+        context.setdefault("errors", {})
+        context.setdefault("rows", ())
+        context.setdefault("actions", ())
+        context.setdefault("accuracy", empty_accuracy)
+        context.setdefault("projection_tracker", _projection_tracker_summary(context["accuracy"]))
+        context.setdefault("ranking_label", _RANKING_PREFERENCES[current.ranking_preference])
+        context.setdefault("depth_updated", "")
+        context.setdefault("reference_rows", ())
+        context.setdefault("alert_count", len(context["actions"]))
+        context.setdefault("week", None)
         context.update(session=current, league=selected, active_tool="home", error=None)
     except (MFLApiError, ValueError, requests.RequestException) as error:
         if isinstance(error, MFLApiError):
@@ -4543,7 +4562,9 @@ def decision_simulator_page(
 
 
 @app.get("/transactions", response_class=HTMLResponse)
-def transactions_page(request: Request, league: str):
+def transactions_page(request: Request, league: str, view: str = "overview"):
+    if view == "pending":
+        return _pending_transactions_page(request, league)
     current = _require_session(request)
     selected = _league(current, league)
     client = _client(current, selected)
@@ -4590,15 +4611,14 @@ def transactions_page(request: Request, league: str):
     ]
     return templates.TemplateResponse(request=request, name="tools.html", context={
         "session": current, "league": selected, "active_tool": "transactions",
-        "page": "transactions", "page_title": "My transactions", "error": error,
+        "page": "transactions", "page_title": "My activity", "error": error,
         "activity": own_activity, "catalog": catalog, "operations": operations,
         "trades": trades, "blocks": blocks, "pending_moves": pending_moves,
         "pending_lineups": pending_lineups, "activity_time": _activity_time,
     })
 
 
-@app.get("/transactions/pending", response_class=HTMLResponse)
-def pending_transactions_page(request: Request, league: str):
+def _pending_transactions_page(request: Request, league: str):
     current = _require_session(request)
     selected = _league(current, league)
     client = _client(current, selected)
@@ -4658,6 +4678,15 @@ def pending_transactions_page(request: Request, league: str):
         "error": "", "waiver_error": waiver_error, "trade_error": trade_error,
         "activity_time": _activity_time,
     })
+
+
+@app.get("/transactions/pending", response_class=HTMLResponse, include_in_schema=False)
+def pending_transactions_redirect(request: Request, league: str):
+    _require_session(request)
+    return RedirectResponse(
+        "/transactions?" + urlencode({"league": league, "view": "pending"}),
+        status_code=303,
+    )
 
 
 @app.post("/transactions/pending/preview")
@@ -4794,7 +4823,12 @@ def confirm_pending_transaction_action(
 
 
 @app.get("/watchlist", response_class=HTMLResponse)
-def watchlist_page(request: Request, league: str):
+def watchlist_page(
+    request: Request, league: str, view: str = "watchlist",
+    p1: str = "", p2: str = "", p3: str = "",
+):
+    if view == "compare" or p1 or p2:
+        return _compare_players_page(request, league, p1, p2, p3)
     current = _require_session(request)
     selected = _league(current, league)
     client = _client(current, selected)
@@ -4890,8 +4924,7 @@ def toggle_watchlist_player(request: Request, player_id: str, league: str):
     return {"watched": enabled, "count": len(watched)}
 
 
-@app.get("/compare", response_class=HTMLResponse)
-def compare_players_page(
+def _compare_players_page(
     request: Request, league: str, p1: str = "", p2: str = "", p3: str = "",
 ):
     current = _require_session(request)
@@ -4976,83 +5009,21 @@ def compare_players_page(
     })
 
 
+@app.get("/compare", response_class=HTMLResponse, include_in_schema=False)
+def compare_players_redirect(
+    request: Request, league: str, p1: str = "", p2: str = "", p3: str = "",
+):
+    _require_session(request)
+    query = {"league": league, "view": "compare"}
+    query.update({key: value for key, value in (("p1", p1), ("p2", p2), ("p3", p3)) if value})
+    return RedirectResponse("/watchlist?" + urlencode(query), status_code=303)
+
+
 @app.get("/notifications", response_class=HTMLResponse)
 def notifications_page(request: Request, league: str):
     current = _require_session(request)
     selected = _league(current, league)
-    alerts: list[dict] = []
-    error = ""
-    try:
-        insight = _load_insights(
-            current, selected, include_external=False, include_accuracy=False,
-        )
-        alerts.extend(insight["actions"])
-    except (MFLApiError, ValueError, requests.RequestException) as exc:
-        _log_provider_error_once(current, selected.id, "notifications_unavailable", exc)
-        error = "Lineup alerts are temporarily unavailable. Transaction warnings are still shown."
-        insight = {}
-    client = _client(current, selected)
-    week = insight.get("week")
-    watched = current.watchlists.get(selected.id, set())
-    if week is not None and watched:
-        try:
-            injuries = _cached_session_read(
-                current, "mfl-global", f"injuries:{week}",
-                lambda: client.injuries(week=week), ttl=300, stale_ttl=3600, shared=True,
-            )
-            catalog = _cached_session_read(
-                current, "mfl-global", "players", client.players,
-                ttl=86400, stale_ttl=_LEAGUE_STATIC_STALE_TTL, shared=True,
-            )
-            for player_id in watched:
-                injury = injuries.get(player_id)
-                player = catalog.get(player_id)
-                if injury and player:
-                    alerts.append({
-                        "tone": "warning", "title": f"Watchlist: {player.name} · {injury.status}",
-                        "detail": injury.details or "MFL lists an injury designation for this watched player.",
-                        "href": f"/watchlist?league={selected.id}", "label": "Open watchlist",
-                    })
-        except MFLApiError as exc:
-            _log_provider_error_once(current, selected.id, "watchlist_alerts_unavailable", exc)
-    try:
-        activity = _cached_session_read(
-            current, selected.id, "activity",
-            lambda: client.transactions(days=7, count=100), ttl=90, stale_ttl=3600,
-        )
-        own_id = selected.franchise_id.zfill(4)
-        for item in activity:
-            if own_id not in item.franchise_ids:
-                continue
-            alerts.append({
-                "tone": "good", "title": item.kind.replace("_", " ").title(),
-                "detail": "MFL recorded a transaction involving your franchise.",
-                "href": f"/transactions?league={selected.id}", "label": "View MFL activity",
-            })
-            if sum(alert["tone"] == "good" for alert in alerts) >= 4:
-                break
-    except MFLApiError as exc:
-        _log_provider_error_once(current, selected.id, "notification_activity_unavailable", exc)
-    for operation in reversed(current.operations):
-        if operation.league_id == selected.id and operation.status in {"failed", "uncertain"}:
-            alerts.insert(0, {
-                "tone": "danger" if operation.status == "failed" else "warning",
-                "title": operation.title,
-                "detail": operation.message,
-                "href": f"/transactions?league={selected.id}", "label": "View receipt",
-            })
-    for draft in current.trades.values():
-        if draft.league_id == selected.id and draft.status in {"failed", "uncertain"}:
-            alerts.insert(0, {
-                "tone": "danger" if draft.status == "failed" else "warning",
-                "title": f"Trade offer to {draft.target_name}", "detail": draft.message,
-                "href": f"/transactions?league={selected.id}", "label": "View trades",
-            })
-    return templates.TemplateResponse(request=request, name="tools.html", context={
-        "session": current, "league": selected, "active_tool": "notifications",
-        "page": "notifications", "page_title": "Notifications", "error": error,
-        "alerts": alerts[:20],
-    })
+    return RedirectResponse(f"/insights?league={selected.id}#action-center", status_code=303)
 
 
 @app.get("/schedule", response_class=HTMLResponse)
@@ -5329,11 +5300,13 @@ def guide_page(request: Request, league: str):
 
 
 @app.get("/league", response_class=HTMLResponse)
-def league_page(request: Request, league: str):
+def league_page(request: Request, league: str, view: str = "overview", channel: str = "board"):
     current = _session(request)
     if not current:
         return RedirectResponse("/", status_code=303)
     selected = _league(current, league)
+    league_view = view if view in {"overview", "activity", "community"} else "overview"
+    league_channel = channel if channel in {"board", "chat"} else "board"
     try:
         context = _league_hq(current, selected)
     except (MFLApiError, ValueError, requests.RequestException) as error:
@@ -5343,6 +5316,7 @@ def league_page(request: Request, league: str):
             log_error("league_hq_unavailable", error)
         return templates.TemplateResponse(request=request, name="league.html", context={
             "session": current, "league": selected, "active_tool": "league",
+            "league_view": league_view, "league_channel": league_channel,
             "error": "MFL could not load the league reports. Try again shortly.",
         })
     activity_rows = []
@@ -5374,6 +5348,8 @@ def league_page(request: Request, league: str):
         session=current,
         league=selected,
         active_tool="league",
+        league_view=league_view,
+        league_channel=league_channel,
         error=None,
         activity_rows=activity_rows,
         message_threads=message_threads,
@@ -5537,7 +5513,7 @@ def create_side_bet(
     if len(bets) >= 100:
         raise HTTPException(status_code=400, detail="This session has reached 100 side bets")
     bets.insert(0, SideBet(secrets.token_urlsafe(10), title, participants, stake))
-    return RedirectResponse(f"/league?league={selected.id}#side-bets", status_code=303)
+    return RedirectResponse(f"/league?league={selected.id}&view=community#side-bets", status_code=303)
 
 
 @app.post("/league/side-bets/{bet_id}/settle")
@@ -5554,7 +5530,7 @@ def settle_side_bet(
     if not bet:
         raise HTTPException(status_code=404, detail="That side bet is no longer available")
     bet.status = "settled"
-    return RedirectResponse(f"/league?league={selected.id}#side-bets", status_code=303)
+    return RedirectResponse(f"/league?league={selected.id}&view=community#side-bets", status_code=303)
 
 
 @app.get("/hub/{section}", response_class=HTMLResponse)
@@ -5564,7 +5540,7 @@ def hub_section(
 ):
     current = _require_session(request)
     selected = _league(current, league)
-    if section not in {"briefing", "matchup", "pickups", "standings", "block", "ideas"}:
+    if section not in {"briefing", "matchup", "pickups", "standings", "standing-summary", "block", "ideas"}:
         raise HTTPException(status_code=404)
     client = _client(current, selected)
     context = {"session": current, "league": selected, "section": section, "error": None}
@@ -5605,7 +5581,7 @@ def hub_section(
             picks = [item for item in recommendations if item.availability.claimable
                      and item.projection is not None and item.roster_delta is not None and item.roster_delta > 0][:5]
             context.update(week=week, picks=picks)
-        elif section == "standings":
+        elif section in {"standings", "standing-summary"}:
             rows = _cached_session_read(
                 current, selected.id, "standings", client.league_standings,
                 ttl=_seconds_until_daily_refresh(), stale_ttl=_LEAGUE_STATIC_STALE_TTL,
@@ -5615,12 +5591,22 @@ def hub_section(
                 current, selected.id, "details", client.league_details,
                 ttl=900, stale_ttl=_LEAGUE_STATIC_STALE_TTL,
             )
-            context.update(
-                rows=rows,
-                groups=_standings_groups(rows, details),
-                teams=details.franchises,
-                has_divisions=bool(details.divisions),
-            )
+            groups = _standings_groups(rows, details)
+            context.update(rows=rows, groups=groups, teams=details.franchises,
+                           has_divisions=bool(details.divisions))
+            if section == "standing-summary":
+                own_id = selected.franchise_id.zfill(4)
+                own_row = next((row for row in rows if row["id"] == own_id), None)
+                own_group = next((group for group in groups if any(
+                    row["id"] == own_id for row in group["rows"]
+                )), None)
+                context.update(
+                    own_row=own_row,
+                    own_team=details.franchises.get(own_id),
+                    own_rank=next((index for index, row in enumerate(rows, 1)
+                                   if row["id"] == own_id), None),
+                    own_group=own_group,
+                )
         elif section == "block":
             block = _cached_session_read(
                 current, selected.id, "trade-block", client.trade_block, ttl=60, stale_ttl=900,
@@ -6060,6 +6046,10 @@ def moves(request: Request, league: str, q: str = "", error: str = ""):
     )
     default_market_filter, default_market_count, default_market_label = _market_default_filter(recommendations)
     market_ranks = _player_market_rank_maps(recommendations, blend)
+    primary_rank_key = {
+        "mfl": "mfl", "combined": "combined", "fantasypros-half": "fantasypros",
+        "cbs-ppr": "cbs",
+    }.get(current.ranking_preference, "espn")
     ranking_default_sorts = {
         "mfl": "mfl-rank",
         "combined": "combined-rank",
@@ -6102,6 +6092,7 @@ def moves(request: Request, league: str, q: str = "", error: str = ""):
             "fantasypros_ranks": market_ranks["fantasypros"],
             "cbs_ranks": market_ranks["cbs"],
             "combined_ranks": market_ranks["combined"],
+            "primary_ranks": market_ranks[primary_rank_key],
             "combined_matched": blend.combined_matched,
             "combined_source": blend.combined_source,
             "ranking_preference": current.ranking_preference,
@@ -7496,6 +7487,7 @@ def api_player_market_enrichment(request: Request, league: str, revision: str = 
             "ml_matched": blend.ml_matched,
             "combined_matched": blend.combined_matched,
             "ranking_label": _RANKING_PREFERENCES[current.ranking_preference],
+            "ranking_preference": current.ranking_preference,
         },
         "roster_locked": sorted(context["roster_locked"]),
         "waiver_html": templates.env.get_template("_waiver_optimizer.html").render(

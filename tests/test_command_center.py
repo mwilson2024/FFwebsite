@@ -79,7 +79,8 @@ def test_command_center_core_is_an_actionable_cross_league_brief(monkeypatch):
     assert data["projected_score"] == 22.0
     assert data["opponent_projected_score"] == 18.0
     assert data["watchlist_count"] == 2
-    assert data["links"]["transactions"].startswith("/transactions/pending")
+    assert data["links"]["transactions"].startswith("/transactions?")
+    assert "view=pending" in data["links"]["transactions"]
 
 
 def test_command_center_queue_loads_after_core_and_splits_trade_direction(monkeypatch):
