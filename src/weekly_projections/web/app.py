@@ -3836,6 +3836,9 @@ def _observe_gameday_timeline(
     )
     opening = probability[0] if probability else None
     latest = probability[-1] if probability else None
+    end_label = "FINAL" if final else (
+        "LIVE" if any(team.starters_playing for team in head_to_head.teams) else "LATEST"
+    )
     return {
         "events": tuple(reversed(lineup_events)),
         "probability": tuple(probability),
@@ -3845,6 +3848,7 @@ def _observe_gameday_timeline(
         "right_name": head_to_head.teams[1].name,
         "opening": opening,
         "latest": latest,
+        "end_label": end_label,
         "left_swing": round(latest["left"] - opening["left"], 2) if opening and latest else None,
         "opponent_name": opponent.name if opponent else "Opponent",
         "lineup_observations": len(lineup_events),

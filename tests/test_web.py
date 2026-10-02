@@ -1549,6 +1549,7 @@ def test_matchup_history_tracks_opponent_lineup_and_saves_only_real_changes(monk
     assert first["lineup_observations"] == 1
     assert unchanged["lineup_observations"] == 1
     assert changed["lineup_observations"] == 2
+    assert changed["end_label"] == "LATEST"
     assert "Started Second QB" in changed["events"][0]["detail"]
     assert "Benched First QB" in changed["events"][0]["detail"]
     assert changed["what_ifs"][0]["verdict"] == "No scoring difference yet"

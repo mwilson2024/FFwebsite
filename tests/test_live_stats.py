@@ -302,9 +302,13 @@ def test_matchup_header_switches_all_leagues_and_separates_stats_from_points():
         league=league, session=session, week=1, current_week=1, weeks=range(1,19),
         head_to_head=web.HeadToHeadView((team,),1,1), live=None, error=None, refresh_seconds=60,
         gameday_timeline={
-            "events": (), "probability": (), "opponent_name": "Opponent",
-            "lineup_observations": 0, "chart_points": "", "right_chart_points": "",
-            "opening": None, "latest": None, "left_swing": None,
+            "events": (), "probability": ({"left": 46.0, "right": 54.0}, {"left": 61.0, "right": 39.0}),
+            "opponent_name": "Opponent", "lineup_observations": 0,
+            "chart_points": "0.0,97.2 720.0,70.2", "right_chart_points": "0.0,82.8 720.0,109.8",
+            "opening": {"left": 46.0, "right": 54.0, "time": "Thu 8:15 PM"},
+            "latest": {"left": 61.0, "right": 39.0, "time": "Sun 2:24 PM"},
+            "left_name": "Team", "right_name": "Opponent", "left_swing": 15.0,
+            "end_label": "LIVE",
         },
     )
     soup = BeautifulSoup(html, 'html.parser')
@@ -312,6 +316,9 @@ def test_matchup_header_switches_all_leagues_and_separates_stats_from_points():
     switcher = soup.select_one('header .header-league-picker')
     assert [o['value'] for o in switcher.select('option')] == ['1','2']
     assert switcher.select_one('input[name="week"]')['value'] == '1'
+    assert len(soup.select('.week-odds-chart .opening-point')) == 2
+    assert len(soup.select('.week-odds-chart .latest-point')) == 2
+    assert soup.select_one('.chart-axis span:last-child b').get_text(strip=True) == 'LIVE'
     assert soup.select_one('.week-picker input[name="league"]')['value'] == '1'
     identity = soup.select_one('.matchup-identity-line')
     assert identity.select_one('.player-identity') and identity.select_one('.game-status-badge')
