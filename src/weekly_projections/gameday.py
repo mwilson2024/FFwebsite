@@ -19,6 +19,7 @@ def observe_scoring(
     timezone,
     record_events: bool = True,
     tracked_lineup_team_id: str = "",
+    tracked_lineup_team_ids: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Return bounded odds and observed scoring/lineup history."""
     state = dict(state or {})
@@ -85,31 +86,52 @@ def observe_scoring(
                     ),
                     "tone": "gain" if team_delta > 0 else "loss",
                 })
-    tracked_team = next(
-        (team for team in normalized if team["id"].zfill(4) == str(tracked_lineup_team_id).zfill(4)),
-        None,
-    ) if tracked_lineup_team_id else None
-    current_starters = {
-        player_id: player["name"]
-        for player_id, player in (tracked_team or {}).get("players", {}).items()
-        if player["starter"]
-    }
-    previous_lineup = state.get("lineup_snapshot")
-    if tracked_team and current_starters:
+    tracked_ids = {str(team_id).zfill(4) for team_id in tracked_lineup_team_ids if team_id}
+    if tracked_lineup_team_id:
+        tracked_ids.add(str(tracked_lineup_team_id).zfill(4))
+    lineup_history = dict(state.get("lineup_history") or {})
+    legacy_lineup = state.get("lineup_snapshot")
+    if isinstance(legacy_lineup, dict) and legacy_lineup.get("team_id"):
+        legacy_id = str(legacy_lineup["team_id"]).zfill(4)
+        lineup_history.setdefault(legacy_id, {
+            "team_id": legacy_id,
+            "team_name": str(legacy_lineup.get("team_name") or "Team"),
+            "initial_starters": dict(legacy_lineup.get("starters") or {}),
+            "current_starters": dict(legacy_lineup.get("starters") or {}),
+            "initial_observed_at": float(legacy_lineup.get("observed_at") or observed_at),
+            "observed_at": float(legacy_lineup.get("observed_at") or observed_at),
+            "changes": 0,
+        })
+    for tracked_team in normalized:
+        team_id = tracked_team["id"].zfill(4)
+        if team_id not in tracked_ids:
+            continue
+        current_starters = {
+            player_id: player["name"]
+            for player_id, player in tracked_team["players"].items()
+            if player["starter"]
+        }
+        if not current_starters:
+            continue
+        history = lineup_history.get(team_id)
         lineup_changed = False
-        if not isinstance(previous_lineup, dict) \
-                or previous_lineup.get("team_id", "").zfill(4) != tracked_team["id"].zfill(4):
+        if not isinstance(history, dict):
+            history = {
+                "team_id": team_id, "team_name": tracked_team["name"],
+                "initial_starters": dict(current_starters),
+                "current_starters": dict(current_starters),
+                "initial_observed_at": observed_at, "observed_at": observed_at,
+                "changes": 0,
+            }
             events.append({
-                "observed_at": observed_at,
-                "time": stamp,
+                "observed_at": observed_at, "time": stamp, "team_id": team_id,
                 "title": f"{tracked_team['name']} initial lineup observed",
                 "detail": f"{len(current_starters)} starters · " + ", ".join(current_starters.values()),
-                "tone": "lineup-baseline",
-                "kind": "lineup",
+                "tone": "lineup-baseline", "kind": "lineup",
             })
             lineup_changed = True
         else:
-            old_starters = previous_lineup.get("starters")
+            old_starters = history.get("current_starters")
             old_starters = old_starters if isinstance(old_starters, dict) else {}
             started = [current_starters[player_id] for player_id in current_starters.keys() - old_starters.keys()]
             benched = [old_starters[player_id] for player_id in old_starters.keys() - current_starters.keys()]
@@ -120,19 +142,25 @@ def observe_scoring(
                 if benched:
                     details.append("Benched " + ", ".join(sorted(benched)))
                 events.append({
-                    "observed_at": observed_at,
-                    "time": stamp,
+                    "observed_at": observed_at, "time": stamp, "team_id": team_id,
                     "title": f"{tracked_team['name']} changed the lineup",
                     "detail": " · ".join(details) + " · change time is when Fantasy HQ observed it",
-                    "tone": "lineup-change",
-                    "kind": "lineup",
+                    "tone": "lineup-change", "kind": "lineup",
                 })
+                history["changes"] = int(history.get("changes") or 0) + 1
                 lineup_changed = True
-        if lineup_changed:
+            history.update(team_name=tracked_team["name"], current_starters=dict(current_starters))
+            if lineup_changed:
+                history["observed_at"] = observed_at
+        lineup_history[team_id] = history
+        if lineup_changed and tracked_lineup_team_id \
+                and team_id == str(tracked_lineup_team_id).zfill(4):
             state["lineup_snapshot"] = {
-                "team_id": tracked_team["id"], "team_name": tracked_team["name"],
+                "team_id": team_id, "team_name": tracked_team["name"],
                 "starters": current_starters, "observed_at": observed_at,
             }
+    if lineup_history:
+        state["lineup_history"] = lineup_history
     probability = list(state.get("probability") or [])
     if win_percentages and all(value is not None for value in win_percentages):
         point = {
@@ -148,6 +176,64 @@ def observe_scoring(
     state["events"] = events[-200:]
     state["probability"] = probability[-500:]
     return state
+
+
+def lineup_what_if(
+    state: dict[str, Any] | None,
+    team_id: str,
+    *,
+    week: int | None = None,
+    final: bool = False,
+) -> dict[str, Any] | None:
+    """Grade observed starter changes against the first lineup Fantasy HQ saw."""
+    if not isinstance(state, dict):
+        return None
+    normalized_id = str(team_id).zfill(4)
+    histories = state.get("lineup_history")
+    history = histories.get(normalized_id) if isinstance(histories, dict) else None
+    snapshot = state.get("snapshot")
+    teams = snapshot.get("teams") if isinstance(snapshot, dict) else None
+    team = next(
+        (item for item in teams if isinstance(item, dict)
+         and str(item.get("id") or "").zfill(4) == normalized_id),
+        None,
+    ) if isinstance(teams, list) else None
+    if not isinstance(history, dict) or not isinstance(team, dict) \
+            or int(history.get("changes") or 0) < 1:
+        return None
+    initial = history.get("initial_starters")
+    current = history.get("current_starters")
+    players = team.get("players")
+    if not all(isinstance(item, dict) for item in (initial, current, players)):
+        return None
+    if not initial or not current or not set(initial).issubset(players) or not set(current).issubset(players):
+        return None
+    initial_total = round(sum(float(players[player_id]["score"]) for player_id in initial), 2)
+    current_total = round(sum(float(players[player_id]["score"]) for player_id in current), 2)
+    delta = round(current_total - initial_total, 2)
+    started = [current[player_id] for player_id in current.keys() - initial.keys()]
+    benched = [initial[player_id] for player_id in initial.keys() - current.keys()]
+    if delta > 0.005:
+        verdict, tone = (("The lineup change was right" if final else "The change is helping so far"), "positive")
+    elif delta < -0.005:
+        verdict, tone = (("Keeping the initial lineup would have scored more" if final else "The initial lineup is ahead so far"), "negative")
+    else:
+        verdict, tone = (("The change finished even" if final else "No scoring difference yet"), "neutral")
+    return {
+        "team_id": normalized_id,
+        "team_name": str(history.get("team_name") or team.get("name") or "Team"),
+        "week": week,
+        "initial_total": initial_total,
+        "current_total": current_total,
+        "delta": delta,
+        "verdict": verdict,
+        "tone": tone,
+        "started": tuple(sorted(started)),
+        "benched": tuple(sorted(benched)),
+        "changes": int(history.get("changes") or 0),
+        "final": bool(final),
+        "official_total": round(float(team.get("score") or 0), 2),
+    }
 
 
 def chart_points(

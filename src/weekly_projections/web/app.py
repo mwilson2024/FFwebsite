@@ -93,7 +93,7 @@ from weekly_projections.web.diagnostics import (
 )
 from weekly_projections.web.session_store import EncryptedSessionStore
 from weekly_projections.web_push import configured as push_configured, public_key as push_public_key, send_web_push
-from weekly_projections.gameday import chart_points, observe_scoring
+from weekly_projections.gameday import chart_points, lineup_what_if, observe_scoring
 from weekly_projections.decision_simulator import simulate_decision
 
 
@@ -976,6 +976,7 @@ def _validated_matchup_history(value: object) -> dict | None:
             "detail": str(row.get("detail") or "")[:2000],
             "tone": str(row.get("tone") or "baseline")[:40],
             "kind": str(row.get("kind") or "score")[:40],
+            "team_id": str(row.get("team_id") or "")[:64],
         })
     probability = []
     for row in raw_probability:
@@ -1015,9 +1016,80 @@ def _validated_matchup_history(value: object) -> dict | None:
             },
             "observed_at": lineup_observed_at,
         }
+    lineup_history = {}
+    raw_history = value.get("lineup_history")
+    if raw_history is not None:
+        if not isinstance(raw_history, dict) or len(raw_history) > 2:
+            return None
+        for team_id, row in raw_history.items():
+            if not isinstance(row, dict):
+                return None
+            initial, current_starters = row.get("initial_starters"), row.get("current_starters")
+            if not isinstance(initial, dict) or not isinstance(current_starters, dict) \
+                    or len(initial) > 64 or len(current_starters) > 64:
+                return None
+            try:
+                initial_at = float(row.get("initial_observed_at") or 0)
+                observed_at = float(row.get("observed_at") or 0)
+                changes = int(row.get("changes") or 0)
+            except (TypeError, ValueError, OverflowError):
+                return None
+            if not all(math.isfinite(item) and item > 0 for item in (initial_at, observed_at)) \
+                    or not 0 <= changes <= 100:
+                return None
+            lineup_history[str(team_id)[:64].zfill(4)] = {
+                "team_id": str(row.get("team_id") or team_id)[:64].zfill(4),
+                "team_name": str(row.get("team_name") or "Team")[:160],
+                "initial_starters": {str(key)[:64]: str(name)[:160] for key, name in initial.items()},
+                "current_starters": {
+                    str(key)[:64]: str(name)[:160] for key, name in current_starters.items()
+                },
+                "initial_observed_at": initial_at, "observed_at": observed_at,
+                "changes": changes,
+            }
+    snapshot = None
+    raw_snapshot = value.get("snapshot")
+    if raw_snapshot is not None:
+        raw_teams = raw_snapshot.get("teams") if isinstance(raw_snapshot, dict) else None
+        if not isinstance(raw_teams, list) or len(raw_teams) > 2:
+            return None
+        teams = []
+        for team in raw_teams:
+            raw_players = team.get("players") if isinstance(team, dict) else None
+            if not isinstance(raw_players, dict) or len(raw_players) > 128:
+                return None
+            try:
+                score = round(float(team.get("score") or 0), 2)
+            except (TypeError, ValueError, OverflowError):
+                return None
+            players = {}
+            for player_id, player in raw_players.items():
+                if not isinstance(player, dict):
+                    return None
+                try:
+                    player_score = round(float(player.get("score") or 0), 2)
+                except (TypeError, ValueError, OverflowError):
+                    return None
+                players[str(player_id)[:64]] = {
+                    "name": str(player.get("name") or player_id)[:160],
+                    "score": player_score, "starter": bool(player.get("starter", False)),
+                }
+            teams.append({
+                "id": str(team.get("id") or "")[:64], "name": str(team.get("name") or "Team")[:160],
+                "score": score, "players": players,
+            })
+        try:
+            snapshot_at = float(raw_snapshot.get("observed_at") or 0)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        if not math.isfinite(snapshot_at) or snapshot_at <= 0:
+            return None
+        snapshot = {"teams": teams, "observed_at": snapshot_at}
     return {
         "events": events, "probability": probability,
         **({"lineup_snapshot": lineup_snapshot} if lineup_snapshot else {}),
+        **({"lineup_history": lineup_history} if lineup_history else {}),
+        **({"snapshot": snapshot} if snapshot else {}),
     }
 
 
@@ -2578,6 +2650,15 @@ def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
     seeds = intelligence["playoff_seeds"]
     playoff_rounds = intelligence["playoff_rounds"]
     playoff_games = list(playoff_rounds[0].games) if playoff_rounds else []
+    observed_what_ifs = _lineup_what_if_history(
+        current, selected, (), current_week,
+    )
+    own_what_ifs = _lineup_what_if_history(
+        current, selected, schedule, current_week, franchise_id=own_id,
+    )
+    lineup_what_ifs = {
+        (row.get("week"), row["team_id"]): row for row in (*observed_what_ifs, *own_what_ifs)
+    }
     result = {
         "details": details,
         "teams": details.franchises,
@@ -2599,6 +2680,10 @@ def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
         "playoff_games": playoff_games,
         "playoff_rounds": playoff_rounds,
         "playoff_seeds": seeds,
+        "lineup_what_ifs": tuple(sorted(
+            lineup_what_ifs.values(),
+            key=lambda row: (row.get("week") or 0, row["team_name"]), reverse=True,
+        )[:12]),
         "errors": errors,
     }
     current.read_cache[cache_key] = (time.monotonic() + min(90, daily_ttl), result)
@@ -3708,12 +3793,15 @@ def _observe_gameday_timeline(
             "events": (state or {}).get("events", []),
             "probability": (state or {}).get("probability", []),
             "lineup_snapshot": (state or {}).get("lineup_snapshot"),
+            "lineup_history": (state or {}).get("lineup_history"),
+            "snapshot": ((state or {}).get("snapshot") or {}).get("teams"),
         }, sort_keys=True, separators=(",", ":"), default=str)
         if head_to_head.current_week == week:
             state = observe_scoring(
                 state, payload, percentages,
-                observed_at=time.time(), timezone=_APP_TIME_ZONE, record_events=False,
+                observed_at=time.time(), timezone=_APP_TIME_ZONE, record_events=True,
                 tracked_lineup_team_id=opponent.franchise_id if opponent else "",
+                tracked_lineup_team_ids=(team.franchise_id for team in head_to_head.teams),
             )
         else:
             state = dict(state or {})
@@ -3722,6 +3810,8 @@ def _observe_gameday_timeline(
             "events": state.get("events", []),
             "probability": state.get("probability", []),
             "lineup_snapshot": state.get("lineup_snapshot"),
+            "lineup_history": state.get("lineup_history"),
+            "snapshot": (state.get("snapshot") or {}).get("teams"),
         }, sort_keys=True, separators=(",", ":"), default=str)
         if after != before:
             _save_database_report_snapshot(
@@ -3731,8 +3821,19 @@ def _observe_gameday_timeline(
     probability = list(state.get("probability") or ())
     lineup_events = [
         event for event in (state.get("events") or ())
-        if event.get("kind") == "lineup"
+        if event.get("kind") == "lineup" and (
+            not event.get("team_id")
+            or not opponent
+            or str(event.get("team_id")).zfill(4) == opponent.franchise_id.zfill(4)
+        )
     ]
+    final = bool(forecast and forecast.get("final"))
+    what_ifs = tuple(
+        result for result in (
+            lineup_what_if(state, team.franchise_id, week=week, final=final)
+            for team in head_to_head.teams
+        ) if result
+    )
     opening = probability[0] if probability else None
     latest = probability[-1] if probability else None
     return {
@@ -3747,7 +3848,65 @@ def _observe_gameday_timeline(
         "left_swing": round(latest["left"] - opening["left"], 2) if opening and latest else None,
         "opponent_name": opponent.name if opponent else "Opponent",
         "lineup_observations": len(lineup_events),
+        "what_ifs": what_ifs,
     }
+
+
+def _lineup_what_if_history(
+    current: BrowserSession,
+    league: MFLLeague,
+    schedule: tuple[MFLFantasyGame, ...],
+    current_week: int,
+    *,
+    franchise_id: str = "",
+) -> tuple[dict, ...]:
+    """Return recent observed lineup decisions without claiming unobserved history."""
+    wanted = franchise_id.zfill(4) if franchise_id else ""
+    states: dict[tuple[int, str], dict] = {}
+    prefix = f"{league.id}:"
+    for key, state in current.live_timelines.items():
+        if not key.startswith(prefix) or not isinstance(state, dict):
+            continue
+        parts = key.split(":", 2)
+        try:
+            week = int(parts[1])
+        except (IndexError, TypeError, ValueError):
+            continue
+        states[(week, parts[2] if len(parts) > 2 else "")] = state
+    recent_games = [
+        game for game in schedule
+        if max(1, current_week - 5) <= game.week <= current_week
+        and (not wanted or wanted in {team_id.zfill(4) for team_id in game.team_ids})
+    ]
+    for game in recent_games:
+        team_key = "-".join(game.team_ids)
+        state_key = (game.week, team_key)
+        if state_key in states:
+            continue
+        for candidate in (team_key, "-".join(reversed(game.team_ids))):
+            stored = _load_database_report_snapshot(
+                current, league.id, f"matchup-history:{game.week}:{candidate}",
+                stale_ttl=21 * 86400,
+            )
+            value = stored.get("value") if stored else None
+            if isinstance(value, dict):
+                states[state_key] = value
+                break
+    results: dict[tuple[int, str], dict] = {}
+    for (week, _), state in states.items():
+        history = state.get("lineup_history")
+        if not isinstance(history, dict):
+            continue
+        team_ids = (wanted,) if wanted else tuple(history)
+        for team_id in team_ids:
+            result = lineup_what_if(
+                state, team_id, week=week, final=week < current_week,
+            )
+            if result:
+                results[(week, result["team_id"])] = result
+    return tuple(sorted(
+        results.values(), key=lambda row: (row.get("week") or 0, row["team_name"]), reverse=True,
+    )[:12])
 
 
 def _check_csrf(current: BrowserSession, token: str) -> None:
@@ -5488,8 +5647,13 @@ def manager_page(request: Request, franchise_id: str, league: str):
     team = context["teams"].get(franchise_id)
     if not team:
         raise HTTPException(status_code=404, detail="That manager is not in this league")
+    profile_what_ifs = _lineup_what_if_history(
+        current, selected, context.get("schedule", ()), context.get("current_week", 1),
+        franchise_id=franchise_id,
+    )
     context.update(session=current, league=selected, active_tool="league", team=team,
                    ranking=context["rank_by_team"].get(franchise_id),
+                   lineup_what_ifs=profile_what_ifs,
                    history_rows=_database_history_summary(current, selected.id))
     return templates.TemplateResponse(request=request, name="manager.html", context=context)
 

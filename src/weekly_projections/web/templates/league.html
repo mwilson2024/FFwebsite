@@ -7,7 +7,7 @@
   <title>{{ league.name }} · League HQ</title>
   <link rel="stylesheet" href="/static/app.css?v=league-1">
   <link rel="stylesheet" href="/static/hub.css?v=20261002-navigation">
-  <link rel="stylesheet" href="/static/league.css?v=20261002-navigation">
+  <link rel="stylesheet" href="/static/league.css?v=20261002-lineup-what-if">
   <link rel="stylesheet" href="/static/lions.css?v=1">
   <script src="/static/diagnostics.js" defer></script>
   {% include '_theme_assets.html' %}
@@ -40,6 +40,7 @@
         <div class="team-actions"><a href="/manager/{{ league.franchise_id }}?league={{ league.id }}">Open profile</a><a href="/lineup?league={{ league.id }}">Set lineup</a></div>
       </article>
     </section>
+    {% include '_lineup_what_if.html' %}
 
     <section class="league-card last-results-card" id="results">
       <div class="league-section-heading"><div><span class="card-kicker">OFFICIAL MFL</span><h2>{% if last_results_week %}Week {{ last_results_week }} results{% else %}Last week results{% endif %}</h2></div>{% if last_results_week %}<a href="/scores?league={{ league.id }}&week={{ last_results_week }}">Open all scoring details →</a>{% endif %}</div>

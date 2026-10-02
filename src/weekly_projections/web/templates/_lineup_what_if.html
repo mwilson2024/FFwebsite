@@ -1,0 +1,19 @@
+<details class="lineup-what-if league-card">
+  <summary>
+    <span><small>LINEUP DECISION REVIEW</small><strong>What if the initial lineup stayed unchanged?</strong></span>
+    <span>{{ lineup_what_ifs|default(())|length }} graded decision{{ '' if lineup_what_ifs|default(())|length == 1 else 's' }}</span>
+  </summary>
+  <div class="what-if-content">
+    <p class="data-note">Fantasy HQ compares the first lineup it observed with the latest observed starters. It can grade only weeks opened in Live Scoring while lineup tracking was active.</p>
+    {% if lineup_what_ifs|default(()) %}<div class="what-if-grid">
+      {% for row in lineup_what_ifs %}<article class="what-if-card {{ row.tone }}">
+        <header><div><small>WEEK {{ row.week or '—' }} · {{ 'FINAL' if row.final else 'IN PROGRESS' }}</small><h3>{{ row.team_name }}</h3></div><strong>{{ '%+.2f'|format(row.delta) }}</strong></header>
+        <p class="what-if-verdict">{{ row.verdict }}</p>
+        <dl><div><dt>Initial lineup</dt><dd>{{ '%.2f'|format(row.initial_total) }}</dd></div><div><dt>Changed lineup</dt><dd>{{ '%.2f'|format(row.current_total) }}</dd></div><div><dt>Official MFL total</dt><dd>{{ '%.2f'|format(row.official_total) }}</dd></div></dl>
+        {% if row.started %}<p><b>Started:</b> {{ row.started|join(', ') }}</p>{% endif %}
+        {% if row.benched %}<p><b>Benched:</b> {{ row.benched|join(', ') }}</p>{% endif %}
+        <small>{{ row.changes }} observed lineup change{{ '' if row.changes == 1 else 's' }}. The comparison uses official MFL player totals; the official team total remains authoritative.</small>
+      </article>{% endfor %}
+    </div>{% else %}<p class="empty-state">No gradeable lineup change has been observed yet. Open Live Scoring before and after a lineup changes; the result appears here once both lineups and player totals are available.</p>{% endif %}
+  </div>
+</details>

@@ -1444,6 +1444,7 @@ def test_persistent_report_codecs_restore_domain_shapes() -> None:
                 "detail": "1 starters · Player Two",
                 "tone": "lineup-baseline",
                 "kind": "lineup",
+                "team_id": "0002",
             }],
             "probability": [{
                 "observed_at": 1_800_000_000.0,
@@ -1456,6 +1457,28 @@ def test_persistent_report_codecs_restore_domain_shapes() -> None:
                 "team_name": "Two",
                 "starters": {"202": "Player Two"},
                 "observed_at": 1_800_000_000.0,
+            },
+            "lineup_history": {
+                "0002": {
+                    "team_id": "0002",
+                    "team_name": "Two",
+                    "initial_starters": {"202": "Player Two"},
+                    "current_starters": {"202": "Player Two"},
+                    "initial_observed_at": 1_800_000_000.0,
+                    "observed_at": 1_800_000_000.0,
+                    "changes": 0,
+                },
+            },
+            "snapshot": {
+                "observed_at": 1_800_000_000.0,
+                "teams": [{
+                    "id": "0002",
+                    "name": "Two",
+                    "score": 9.5,
+                    "players": {
+                        "202": {"name": "Player Two", "score": 9.5, "starter": True},
+                    },
+                }],
             },
         },
     }
@@ -1528,6 +1551,7 @@ def test_matchup_history_tracks_opponent_lineup_and_saves_only_real_changes(monk
     assert changed["lineup_observations"] == 2
     assert "Started Second QB" in changed["events"][0]["detail"]
     assert "Benched First QB" in changed["events"][0]["detail"]
+    assert changed["what_ifs"][0]["verdict"] == "No scoring difference yet"
     assert len(saves) == 2
 
 
@@ -2056,7 +2080,8 @@ def test_league_hq_renders_intelligence_and_tracks_session_side_bets(monkeypatch
     assert response.status_code == 200
     assert "Power rankings &amp; luck index" in response.text
     assert "Waiver wire intelligence" not in response.text
-    assert "/static/league.css?v=20261002-navigation" in response.text
+    assert "/static/league.css?v=20261002-lineup-what-if" in response.text
+    assert "What if the initial lineup stayed unchanged?" in response.text
     assert "/static/interface.js?v=4" in response.text
     assert 'class="bracket-round bracket-round-3"' in response.text
     assert "Championship" in response.text

@@ -1,7 +1,7 @@
 from datetime import timezone
 
 from weekly_projections.decision_simulator import simulate_decision
-from weekly_projections.gameday import chart_points, observe_scoring
+from weekly_projections.gameday import chart_points, lineup_what_if, observe_scoring
 from weekly_projections.mfl.client import MFLPlayer
 
 
@@ -72,6 +72,35 @@ def test_gameday_records_only_observed_opponent_starter_changes():
     assert unchanged["events"] == second["events"]
     assert unchanged["probability"] == second["probability"]
     assert unchanged["lineup_snapshot"]["observed_at"] == 1060
+
+
+def test_gameday_grades_changed_lineup_against_initial_starters():
+    first = observe_scoring(
+        None, _teams(), (55.0, 45.0), observed_at=1000, timezone=timezone.utc,
+        record_events=False, tracked_lineup_team_ids=("0001", "0002"),
+    )
+    changed = _teams(right=12.0)
+    changed[1]["players"] = [
+        {"id": "2", "name": "Passer, Two", "score": 7.0, "starter": False},
+        {"id": "3", "name": "Runner, Three", "score": 12.0, "starter": True},
+    ]
+    second = observe_scoring(
+        first, changed, (50.0, 50.0), observed_at=1060, timezone=timezone.utc,
+        record_events=False, tracked_lineup_team_ids=("0001", "0002"),
+    )
+
+    result = lineup_what_if(second, "0002", week=3, final=True)
+
+    assert result is not None
+    assert result["team_name"] == "Gold"
+    assert result["initial_total"] == 7.0
+    assert result["current_total"] == 12.0
+    assert result["delta"] == 5.0
+    assert result["tone"] == "positive"
+    assert result["verdict"] == "The lineup change was right"
+    assert result["started"] == ("Runner, Three",)
+    assert result["benched"] == ("Passer, Two",)
+    assert lineup_what_if(first, "0002", week=3, final=False) is None
 
 
 def test_week_odds_chart_uses_elapsed_time_and_can_render_both_teams():
