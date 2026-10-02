@@ -2558,11 +2558,12 @@ def _build_league_intelligence_snapshot(
 
 
 def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
+    """Build League HQ data without exposing the mutable cached container."""
     cache_key = f"{current.year}:{selected.id}:league-hq"
     now = time.monotonic()
     cached = current.read_cache.get(cache_key)
     if cached and cached[0] > now:
-        return cached[1]
+        return dict(cached[1])
     client = _client(current, selected)
     errors: dict[str, str] = {}
     details = _cached_session_read(
@@ -2687,7 +2688,7 @@ def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
         "errors": errors,
     }
     current.read_cache[cache_key] = (time.monotonic() + min(90, daily_ttl), result)
-    return result
+    return dict(result)
 
 
 def _load_player_score_summaries(

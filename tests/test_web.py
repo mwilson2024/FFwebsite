@@ -2230,6 +2230,11 @@ def test_local_playoff_projection_builds_full_three_round_bracket(monkeypatch) -
         "Quarterfinals", "Semifinals", "Championship",
     ]
     assert [item.id for item in hq["chat_messages"]] == ["public", "private-own"]
+    original_threads = hq["message_threads"]
+    hq["message_threads"] = ({"author": "display-only row"},)
+    cached_hq = web_app._league_hq(current, league)
+    assert cached_hq["message_threads"] == original_threads
+    assert cached_hq is not hq
 
 
 def test_kickoff_locks_are_enforced_server_side() -> None:
