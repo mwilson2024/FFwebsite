@@ -469,6 +469,94 @@ class EncryptedSessionStore:
                 (user_id, int(year)),
             )
 
+    def load_emergency_lineup_preferences(
+        self, owner_fingerprint: str, *, year: int,
+    ) -> set[str]:
+        """Return leagues with explicit five-minute lineup automation enabled."""
+        if not self.database_url or not owner_fingerprint:
+            return set()
+        with self._connect_postgres() as connection:
+            rows = connection.execute(
+                "SELECT preference.league_id "
+                "FROM fantasy_hq.app_user AS app_user "
+                "JOIN fantasy_hq.emergency_lineup_preference AS preference "
+                "ON preference.user_id = app_user.id "
+                "WHERE app_user.owner_fingerprint_hash = %s "
+                "AND preference.season = %s AND preference.enabled = true "
+                "ORDER BY preference.league_id",
+                (self._digest_bytes(owner_fingerprint), int(year)),
+            ).fetchall()
+        return {str(row[0]) for row in rows}
+
+    def save_emergency_lineup_preference(
+        self,
+        owner_fingerprint: str,
+        *,
+        year: int,
+        league_id: str,
+        enabled: bool,
+    ) -> None:
+        if not self.database_url:
+            raise RuntimeError("PostgreSQL is required for emergency lineup automation")
+        if not str(league_id).isdecimal() or not 2020 <= int(year) <= 2100:
+            raise ValueError("A valid MFL league and season are required")
+        with self._connect_postgres() as connection:
+            user_id = self._postgres_user_id(connection, owner_fingerprint)
+            connection.execute(
+                "INSERT INTO fantasy_hq.emergency_lineup_preference "
+                "(user_id, season, league_id, enabled, updated_at) "
+                "VALUES (%s, %s, %s, %s, now()) "
+                "ON CONFLICT (user_id, season, league_id) DO UPDATE SET "
+                "enabled = excluded.enabled, updated_at = now()",
+                (user_id, int(year), str(league_id), bool(enabled)),
+            )
+
+    def claim_emergency_lineup_action(
+        self,
+        owner_fingerprint: str,
+        *,
+        action_key: str,
+        year: int,
+        league_id: str,
+        week: int,
+        kickoff: int,
+        changed_player_count: int,
+    ) -> bool:
+        """Atomically reserve a single no-retry MFL lineup write."""
+        if not re.fullmatch(r"[0-9a-f]{64}", str(action_key)):
+            raise ValueError("A valid emergency action key is required")
+        with self._connect_postgres() as connection:
+            user_id = self._postgres_user_id(connection, owner_fingerprint)
+            row = connection.execute(
+                "INSERT INTO fantasy_hq.emergency_lineup_action "
+                "(user_id, action_key, season, league_id, week, kickoff_at, changed_player_count) "
+                "VALUES (%s, %s, %s, %s, %s, to_timestamp(%s), %s) "
+                "ON CONFLICT (user_id, action_key) DO NOTHING RETURNING action_key",
+                (
+                    user_id, str(action_key), int(year), str(league_id), int(week),
+                    int(kickoff), int(changed_player_count),
+                ),
+            ).fetchone()
+        return bool(row)
+
+    def finish_emergency_lineup_action(
+        self,
+        owner_fingerprint: str,
+        *,
+        action_key: str,
+        outcome: str,
+    ) -> None:
+        if outcome not in {"submitted", "verified", "failed", "uncertain"}:
+            raise ValueError("Choose a valid emergency lineup outcome")
+        with self._connect_postgres() as connection:
+            user_id = self._postgres_user_id(connection, owner_fingerprint)
+            connection.execute(
+                "UPDATE fantasy_hq.emergency_lineup_action "
+                "SET outcome = %s, updated_at = now() "
+                "WHERE user_id = %s AND action_key = %s",
+                (outcome, user_id, str(action_key)),
+            )
+
     def load_watchlists(self, owner_fingerprint: str, year: int) -> dict[str, set[str]]:
         if not self.database_url or not owner_fingerprint:
             return {}

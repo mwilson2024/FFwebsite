@@ -975,6 +975,10 @@
       target.addEventListener('drop', (event) => { if (draggedRow) { event.preventDefault(); dropOn(event.target); } });
     });
     document.querySelector("#use-recommended")?.addEventListener("click", () => applyLineup("recommended"));
+    document.querySelector("#use-emergency-lineup")?.addEventListener("click", () => {
+      applyLineup("emergency");
+      if (dragStatus) dragStatus.textContent = "Emergency replacements applied to this draft. Review before saving.";
+    });
     document.querySelector("#restore-current")?.addEventListener("click", () => applyLineup("current"));
     document.querySelector("#editor-league")?.addEventListener("change", (event) => {
       const week = document.querySelector("#lineup-week")?.value || "1";

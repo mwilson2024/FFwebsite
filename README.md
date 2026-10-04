@@ -91,7 +91,7 @@ WP_SESSION_SECRET=<your generated Fernet key>
 ## Supabase PostgreSQL on Azure App Service
 
 The application can use the free Supabase PostgreSQL project instead of the
-SQLite remembered-session file. The database must contain schema migrations 1–9 in
+SQLite remembered-session file. The database must contain schema migrations 1–10 in
 the private `fantasy_hq` schema. When `WP_DATABASE_URL` is absent, local and
 existing Railway deployments continue to use SQLite without any behavior change.
 
@@ -204,14 +204,30 @@ environment variables:
 WP_VAPID_PUBLIC_KEY=<public application server key>
 WP_VAPID_PRIVATE_KEY=<private VAPID key>
 WP_VAPID_SUBJECT=mailto:<your contact email>
-WP_PUSH_POLL_SECONDS=600
+WP_PUSH_POLL_SECONDS=60
 ```
 
-The polling interval is bounded to 5–60 minutes. It runs only after an authenticated
-user opts in and only while that single-worker app process retains an active MFL
-session. Azure Free/Student plans may suspend an idle app; no web process can send
-while the host is asleep. The Settings panel includes a real background test button
-so deployment can be verified without exposing league content.
+The worker heartbeat is bounded to 30–60 seconds so it can enter a five-minute
+pregame window reliably. Provider reads remain separately deduplicated and are not
+made on every heartbeat. It runs only while that single-worker app process retains
+an active MFL session. Azure Free/Student plans may suspend an idle app; no web
+process can scan or send while the host is asleep. The Settings panel includes a
+real background test button so deployment can be verified without exposing league
+content.
+
+Apply [`supabase/migrations/010_emergency_lineup_guard.sql`](supabase/migrations/010_emergency_lineup_guard.sql)
+to enable the optional per-league emergency lineup safeguard. It is off by default.
+The worker checks injury designations at 60, 30, and 5 minutes before each kickoff;
+the first two windows only send an opted-in generic Web Push alert. At five minutes,
+an explicitly enabled league may replace a saved, unlocked starter who is still
+listed Out or Inactive with the highest-projected legal MFL bench player. Every
+other saved starter is required to remain unchanged. Roster ownership, saved
+status, injury designation, kickoff locks, projections, and lineup legality are
+read again immediately before the write. The MFL POST is attempted once and never
+retried. A private idempotency row is claimed first, so an uncertain response or
+app restart cannot repeat the transaction; a safe readback may verify the saved
+starters. Player identities are not stored in that audit row. This safeguard also
+requires the host to be awake and the authenticated MFL session to still be active.
 
 The same private cache also stores two league-independent public feeds: the
 detailed MFL player catalog and each week's NFL kickoff/opponent schedule. Those

@@ -39,6 +39,28 @@ class LineupRecommendation:
     used_league_rules: bool
 
 
+@dataclass(frozen=True)
+class InjuryReplacementCandidate:
+    player: MFLPlayer
+    projection: float | None
+
+
+@dataclass(frozen=True)
+class InjuryReplacement:
+    player: MFLPlayer
+    candidates: tuple[InjuryReplacementCandidate, ...]
+
+
+@dataclass(frozen=True)
+class InjuryReplacementPlan:
+    """A legal rescue that may remove only the named unavailable starters."""
+
+    unavailable: tuple[InjuryReplacement, ...]
+    starter_ids: frozenset[str]
+    projected_total: float
+    projected_gain: float
+
+
 def _position_tokens(rule_name: str) -> set[str]:
     normalized = rule_name.upper().replace("D/ST", "DEF")
     tokens = set(re.findall(r"[A-Z]+", normalized))
@@ -211,6 +233,91 @@ def lineup_is_legal(players: Iterable[MFLPlayer], settings: MFLLineupSettings) -
         excluded_players=set(),
     )
     return assigned == selected_ids
+
+
+def injury_replacement_plan(
+    recommendation: LineupRecommendation,
+    settings: MFLLineupSettings,
+    unavailable_starter_ids: Iterable[str],
+) -> InjuryReplacementPlan | None:
+    """Return the best legal replacements without optimizing healthy starters.
+
+    This is deliberately stricter than :func:`recommend_lineup`. Every current
+    starter not explicitly named as unavailable is required to remain in place.
+    Locked, IR/taxi, and severely injured bench players cannot be promoted.
+    """
+    unavailable_ids = set(unavailable_starter_ids) & set(recommendation.current_starters)
+    unavailable_ids = {
+        item.player.id
+        for item in recommendation.players
+        if item.player.id in unavailable_ids and not item.locked
+    }
+    if not unavailable_ids:
+        return None
+
+    roster = [item.player for item in recommendation.players]
+    row_by_id = {item.player.id: item for item in recommendation.players}
+    projections = {
+        item.player.id: item.projection
+        for item in recommendation.players
+        if item.projection is not None
+    }
+    healthy_current = set(recommendation.current_starters) - unavailable_ids
+    excluded = {
+        item.player.id
+        for item in recommendation.players
+        if (
+            item.roster_status in {"IR", "TS"}
+            or (item.locked and not item.currently_starting)
+            or _injury_penalty(item.injury) >= 1000
+        )
+    }
+    selected = _solve_lineup(
+        [item.player for item in recommendation.players if item.roster_status not in {"IR", "TS"}],
+        settings,
+        {player.id: projections.get(player.id, -25.0) for player in roster},
+        set(recommendation.current_starters),
+        required_starters=healthy_current,
+        excluded_players=excluded,
+    )
+    if selected is None or selected & unavailable_ids or not healthy_current <= selected:
+        return None
+
+    unavailable: list[InjuryReplacement] = []
+    for player_id in sorted(unavailable_ids):
+        out_row = row_by_id[player_id]
+        candidates: list[InjuryReplacementCandidate] = []
+        for candidate in recommendation.players:
+            if (
+                candidate.player.id in recommendation.current_starters
+                or candidate.player.id in excluded
+                or candidate.locked
+            ):
+                continue
+            one_for_one = (
+                set(recommendation.current_starters) - {player_id}
+            ) | {candidate.player.id}
+            if lineup_is_legal(
+                [row_by_id[item].player for item in one_for_one], settings,
+            ):
+                candidates.append(
+                    InjuryReplacementCandidate(candidate.player, candidate.projection)
+                )
+        candidates.sort(
+            key=lambda item: (
+                -(item.projection if item.projection is not None else -999.0),
+                item.player.name.casefold(),
+            )
+        )
+        unavailable.append(InjuryReplacement(out_row.player, tuple(candidates)))
+
+    projected_total = sum(projections.get(player_id, 0.0) for player_id in selected)
+    return InjuryReplacementPlan(
+        unavailable=tuple(unavailable),
+        starter_ids=frozenset(selected),
+        projected_total=projected_total,
+        projected_gain=projected_total - recommendation.current_projection,
+    )
 
 
 def recommend_lineup(

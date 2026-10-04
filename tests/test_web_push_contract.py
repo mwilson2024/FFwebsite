@@ -13,6 +13,17 @@ def test_push_migration_keeps_capability_endpoint_encrypted_and_private():
     assert " endpoint text" not in sql
 
 
+def test_emergency_lineup_migration_requires_opt_in_and_guards_duplicate_writes():
+    sql = (ROOT / "supabase" / "migrations" / "010_emergency_lineup_guard.sql").read_text(encoding="utf-8")
+    assert "emergency_lineup_preference" in sql
+    assert "enabled boolean not null default false" in sql
+    assert "primary key (user_id, season, league_id)" in sql
+    assert "primary key (user_id, action_key)" in sql
+    assert "enable row level security" in sql
+    assert sql.count("revoke all") == 2
+    assert "values (10, 'Emergency lineup opt-in and idempotency guard')" in sql
+
+
 def test_service_worker_handles_background_push_and_safe_internal_navigation():
     script = (ROOT / "src" / "weekly_projections" / "web" / "static" / "service-worker.js").read_text(encoding="utf-8")
     assert "addEventListener('push'" in script

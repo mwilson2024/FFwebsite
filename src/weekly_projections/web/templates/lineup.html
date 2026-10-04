@@ -8,10 +8,10 @@
   <title>{{ league.name }} · Lineup</title>
   <link rel="stylesheet" href="/static/app.css?v=20260915-matchup-context">
   <link rel="stylesheet" href="/static/workspace.css?v=2">
-  <link rel="stylesheet" href="/static/fantasy.css?v=20260921-leaders">
+  <link rel="stylesheet" href="/static/fantasy.css?v=20261004-emergency-lineup">
   <link rel="stylesheet" href="/static/lions.css?v=1">
   <script src="/static/diagnostics.js" defer></script>
-  <script src="/static/app.js?v=20260921-leaders" defer></script>
+  <script src="/static/app.js?v=20261004-emergency-lineup" defer></script>
   {% include '_theme_assets.html' %}
 </head>
 <body class="lineup-editor-page">
@@ -25,11 +25,32 @@
       </form>
     </div>
     {% if error %}<div class="error" role="alert">{{ error }}{% include '_error_reference.html' %}</div>{% endif %}
+    {% if emergency_message %}<div class="success" role="status">Emergency lineup protection is now {{ 'on for this league' if emergency_message == 'enabled' else 'off for this league' }}.</div>{% endif %}
+    <section class="emergency-lineup-setting" aria-labelledby="emergency-lineup-setting-title">
+      <div><span class="card-kicker">PREGAME SAFEGUARD</span><h2 id="emergency-lineup-setting-title">Emergency Out/Inactive replacement</h2><p>Fantasy HQ scans at 60, 30, and 5 minutes before kickoff. The first two checks alert only. At five minutes, this optional safeguard may submit one legal replacement without another review.</p></div>
+      <form method="post" action="/preferences/emergency-lineup" class="emergency-lineup-toggle">
+        <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+        <input type="hidden" name="league" value="{{ league.id }}">
+        <input type="hidden" name="week" value="{{ week or 1 }}">
+        <label><input type="checkbox" name="enabled" value="1" {% if emergency_auto_enabled %}checked{% endif %}> Allow silent five-minute replacement for this league</label>
+        <button type="submit" class="secondary-button">Save safeguard</button>
+      </form>
+      <p class="editor-note"><strong>Strict limit:</strong> only an unlocked saved starter newly listed Out or Inactive can be removed. Every healthy starter stays put, the highest-projected legal MFL bench option is used, and the write is attempted once with no retry.</p>
+    </section>
     {% if recommendation and settings %}
     <form method="post" action="/lineup/preview" id="lineup-form" data-starter-count="{{ settings.starter_count }}" data-slot-specs='{{ slot_specs|tojson }}' data-saved-visible="{{ 'true' if lineup_visible else 'false' }}">
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
       <input type="hidden" name="league_id" value="{{ league.id }}">
       <input type="hidden" name="week" value="{{ week }}">
+      {% if emergency_plan %}
+      <section class="emergency-lineup-plan" role="alert" aria-labelledby="emergency-lineup-plan-title">
+        <div><span class="card-kicker">KICKOFF WITHIN 60 MINUTES</span><h2 id="emergency-lineup-plan-title">An unavailable starter has a legal replacement</h2><p>Apply the suggested rescue to your local draft, then review it normally. {% if emergency_auto_enabled %}If the player is still Out/Inactive at five minutes, the saved safeguard can submit this narrow replacement automatically.{% endif %}</p></div>
+        {% for replacement in emergency_plan.unavailable %}
+        <div class="emergency-replacement-ranking"><strong>Replace {{ replacement.player.name }}</strong>{% if replacement.candidates %}<ol>{% for candidate in replacement.candidates[:5] %}<li><span>{{ candidate.player.name }} · {{ candidate.player.position }}</span><b>{% if candidate.projection is not none %}{{ '%.1f'|format(candidate.projection) }} projected{% else %}Projection unavailable{% endif %}</b></li>{% endfor %}</ol>{% else %}<p>No legal one-for-one bench option is available.</p>{% endif %}</div>
+        {% endfor %}
+        <button type="button" class="secondary-button accent" id="use-emergency-lineup">Apply emergency replacements</button>
+      </section>
+      {% endif %}
       <div class="editor-layout">
         <aside class="lineup-control-panel">
           <div class="control-panel-heading"><span>WEEK {{ week }}</span><span class="draft-badge" id="lineup-draft-status">Saved lineup</span></div>
@@ -58,7 +79,7 @@
           <h3 class="roster-section-title" data-roster-target="{{ group }}">{{ 'Starters' if group == 'starters' else 'Bench / Reserve' }}</h3>
           <div class="editor-player-list" data-roster-section="{{ group }}">
             {% for item in recommendation.players|sort(attribute='player.position') if item.currently_starting == (group == 'starters') %}
-            <article class="editor-player {% if item.locked %}player-locked{% endif %}" data-lineup-player data-position="{{ item.player.position|upper }}" draggable="{{ 'false' if item.locked or item.roster_status in ['IR','TS'] else 'true' }}" data-current="{{ 'true' if item.currently_starting else 'false' }}" data-recommended="{{ 'true' if item.recommended_start else 'false' }}" data-projection="{{ item.projection if item.projection is not none else '' }}">
+            <article class="editor-player {% if item.locked %}player-locked{% endif %}" data-lineup-player data-position="{{ item.player.position|upper }}" draggable="{{ 'false' if item.locked or item.roster_status in ['IR','TS'] else 'true' }}" data-current="{{ 'true' if item.currently_starting else 'false' }}" data-recommended="{{ 'true' if item.recommended_start else 'false' }}" data-emergency="{{ 'true' if emergency_plan and item.player.id in emergency_plan.starter_ids else 'false' }}" data-projection="{{ item.projection if item.projection is not none else '' }}">
               <div class="roster-position"><button type="button" class="drag-handle" aria-label="Drag {{ item.player.name }}" {% if item.locked or item.roster_status in ['IR','TS'] %}disabled{% endif %}>⠿</button><span data-slot-label>{{ current_slots.get(item.player.id, 'BN') if item.currently_starting else 'BN' }}</span></div>
               <div class="editor-player-info">
                 <div>{% set player = item.player %}{% include '_player_identity.html' %}

@@ -1,4 +1,8 @@
-from weekly_projections.lineup import lineup_is_legal, recommend_lineup
+from weekly_projections.lineup import (
+    injury_replacement_plan,
+    lineup_is_legal,
+    recommend_lineup,
+)
 from weekly_projections.mfl.client import (
     MFLInjury,
     MFLLineupRule,
@@ -95,3 +99,51 @@ def test_infeasible_recommendation_preserves_saved_locked_lineup():
     )
     assert not result.used_league_rules
     assert result.recommended_starters == {"a"}
+
+
+def test_emergency_plan_replaces_only_out_starter_with_highest_legal_bench_player():
+    settings = MFLLineupSettings(
+        3,
+        (
+            MFLLineupRule("QB", 1, 1),
+            MFLLineupRule("RB", 1, 1),
+            MFLLineupRule("WR", 1, 1),
+        ),
+    )
+    roster = [
+        MFLPlayer("qb", "Saved QB", "QB"),
+        MFLPlayer("rb", "Saved RB", "RB"),
+        MFLPlayer("out", "Out Receiver", "WR"),
+        MFLPlayer("high", "High Receiver", "WR"),
+        MFLPlayer("low", "Low Receiver", "WR"),
+        MFLPlayer("tempting", "Tempting RB", "RB"),
+    ]
+    recommendation = recommend_lineup(
+        roster=roster,
+        settings=settings,
+        projections={"qb": 15, "rb": 5, "out": 18, "high": 12, "low": 8, "tempting": 30},
+        roster_statuses={
+            "qb": "S", "rb": "S", "out": "S", "high": "NS", "low": "NS", "tempting": "NS",
+        },
+        injuries={"out": MFLInjury("out", "Out", "Hamstring")},
+    )
+
+    plan = injury_replacement_plan(recommendation, settings, {"out"})
+
+    assert plan is not None
+    assert plan.starter_ids == {"qb", "rb", "high"}
+    assert [item.player.id for item in plan.unavailable[0].candidates] == ["high", "low"]
+
+
+def test_emergency_plan_fails_closed_when_only_replacement_is_locked():
+    settings = MFLLineupSettings(1, (MFLLineupRule("WR", 1, 1),))
+    recommendation = recommend_lineup(
+        roster=[MFLPlayer("out", "Out", "WR"), MFLPlayer("locked", "Locked", "WR")],
+        settings=settings,
+        projections={"out": 12, "locked": 10},
+        roster_statuses={"out": "S", "locked": "NS"},
+        injuries={"out": MFLInjury("out", "Inactive", "")},
+        locked_player_ids={"locked"},
+    )
+
+    assert injury_replacement_plan(recommendation, settings, {"out"}) is None

@@ -194,6 +194,17 @@
 .other-matchup-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.8rem; padding:0 1rem 1rem; }
 .other-matchup-grid article { padding:1rem; background:#14223b; border-radius:8px; }
 .other-matchup-grid article > div { display:flex; justify-content:space-between; gap:1rem; font-size:.875rem; padding:.4rem 0; }
+.emergency-lineup-setting,.emergency-lineup-plan { display:grid; gap:.85rem; margin:0 0 1rem; padding:1.1rem 1.2rem; border:1px solid var(--site-line,#365f8d); border-left:5px solid var(--site-accent,#ffcb05); border-radius:14px; background:var(--site-panel,#0c2f50); color:var(--site-text,#fff); }
+.emergency-lineup-setting h2,.emergency-lineup-plan h2 { margin:.12rem 0 .35rem; font-size:1.15rem; }
+.emergency-lineup-setting p,.emergency-lineup-plan p { margin:.2rem 0; color:var(--site-muted,#add5ff); line-height:1.5; }
+.emergency-lineup-toggle { display:flex; flex-wrap:wrap; align-items:center; gap:.75rem 1rem; }
+.emergency-lineup-toggle label { display:flex; align-items:flex-start; gap:.6rem; flex:1 1 380px; font-weight:800; line-height:1.4; }
+.emergency-lineup-toggle input { width:1.2rem; height:1.2rem; margin-top:.08rem; accent-color:var(--site-accent,#ffcb05); }
+.emergency-replacement-ranking { padding:.85rem; border:1px solid var(--site-line,#365f8d); border-radius:10px; background:var(--site-raised,#103b61); }
+.emergency-replacement-ranking ol { display:grid; gap:.45rem; margin:.65rem 0 0; padding-left:1.5rem; }
+.emergency-replacement-ranking li { padding-left:.2rem; }
+.emergency-replacement-ranking li span { display:inline; }
+.emergency-replacement-ranking li b { float:right; margin-left:1rem; color:var(--site-link,#ffdf68); font-variant-numeric:tabular-nums; }
 @media(min-width:701px) and (max-width:950px) {
   .lineup-editor-page .editor-shell { padding-inline:1rem; }
   .lineup-editor-page .editor-player,.roster-column-head { grid-template-columns:30px minmax(160px,1fr) 105px 90px 55px 80px; gap:.5rem; }
@@ -205,6 +216,10 @@
   .lineup-editor-page .editor-projected { font-size:.8125rem; }
   .lineup-editor-page .lineup-control-panel #review-lineup { width:100%; }
   .lineup-editor-page .lineup-control-panel .secondary-button { flex:1; }
+  .emergency-lineup-toggle { align-items:stretch; }
+  .emergency-lineup-toggle .secondary-button { width:100%; }
+  .emergency-replacement-ranking li { display:grid; gap:.12rem; }
+  .emergency-replacement-ranking li b { float:none; margin-left:0; }
   .roster-column-head { display:none; }
   .lineup-editor-page .editor-player { grid-template-columns:28px minmax(0,1fr) 88px; gap:.3rem .45rem; padding:.75rem; }
   .lineup-empty-slot .lineup-empty-copy { grid-column:2; }

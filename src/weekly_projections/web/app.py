@@ -51,8 +51,10 @@ from weekly_projections.mfl.client import (
 )
 from weekly_projections.history import build_historical_season
 from weekly_projections.lineup import (
+    InjuryReplacementPlan,
     LineupRecommendation,
     assign_lineup_slots,
+    injury_replacement_plan,
     lineup_slots,
     lineup_is_legal,
     recommend_lineup,
@@ -554,6 +556,7 @@ class BrowserSession:
     theme: str = ""
     theme_scope: str = "global"
     league_themes: dict[str, str] = field(default_factory=dict)
+    emergency_lineup_leagues: set[str] = field(default_factory=set)
     default_league_id: str = ""
     onboarding_complete: bool = False
     ranking_setup_complete: bool = False
@@ -582,6 +585,8 @@ shared_read_lock = RLock()
 push_worker_lock = Lock()
 push_worker_stop = Event()
 push_worker: Thread | None = None
+injury_scan_lock = Lock()
+injury_scan_receipts: dict[str, float] = {}
 initialize_log()
 app = FastAPI(title="Weekly Projections · MFL Moves", docs_url=None, redoc_url=None)
 
@@ -756,6 +761,22 @@ def _database_league_themes(owner_fingerprint: str, year: int) -> dict[str, str]
         # working even if per-league persistence has not been installed yet.
         log_error("league_theme_restore_failed", error)
         return {}
+
+
+def _database_emergency_lineup_preferences(
+    owner_fingerprint: str, year: int,
+) -> set[str]:
+    if not owner_fingerprint or not os.environ.get("WP_DATABASE_URL", "").strip():
+        return set()
+    try:
+        return _persistent_store().load_emergency_lineup_preferences(
+            owner_fingerprint, year=year,
+        )
+    except Exception as error:
+        # This automation must fail closed when migration 010 is absent or the
+        # database cannot provide its durable no-retry guard.
+        log_error("emergency_lineup_preference_restore_failed", error)
+        return set()
 
 
 def _database_watchlists(owner_fingerprint: str, year: int) -> dict[str, set[str]]:
@@ -1886,6 +1907,9 @@ def _session(request: Request) -> BrowserSession | None:
                 cookie_ranking=cookie_preference,
                 cookie_league=request.cookies.get("wp_last_league", ""),
                 league_themes=_database_league_themes(restored.owner_fingerprint, restored.year),
+            )
+            restored.emergency_lineup_leagues = _database_emergency_lineup_preferences(
+                restored.owner_fingerprint, restored.year,
             )
             restored.watchlists = _database_watchlists(restored.owner_fingerprint, restored.year)
             restored.remember_token = remember_token
@@ -3585,6 +3609,70 @@ def _locked_player_ids(
     }
 
 
+def _is_out_designation(status: str) -> bool:
+    normalized = " ".join(str(status or "").casefold().replace("-", " ").split())
+    return any(
+        re.search(pattern, normalized)
+        for pattern in (
+            r"\bout\b", r"\binactive\b", r"\bsuspended?\b",
+            r"\binjured reserve\b", r"\breserve\b", r"\bir\b",
+        )
+    )
+
+
+def _upcoming_out_starter_ids(
+    lineup: LineupRecommendation,
+    games: dict[str, dict],
+    *,
+    now: int | None = None,
+    maximum_seconds: int = 3600,
+    kickoff: int | None = None,
+) -> set[str]:
+    current_time = int(time.time()) if now is None else int(now)
+    urgent: set[str] = set()
+    for item in lineup.players:
+        game = games.get(item.player.team.upper(), {})
+        try:
+            player_kickoff = int(game.get("kickoff") or 0)
+        except (TypeError, ValueError):
+            continue
+        remaining = player_kickoff - current_time
+        if (
+            item.currently_starting
+            and not item.locked
+            and item.injury is not None
+            and _is_out_designation(item.injury.status)
+            and 0 < remaining <= maximum_seconds
+            and (kickoff is None or player_kickoff == int(kickoff))
+        ):
+            urgent.add(item.player.id)
+    return urgent
+
+
+def _injury_scan_phase(kickoff: int, *, now: int | None = None) -> int | None:
+    """Return the first due pregame scan window for one kickoff."""
+    remaining = int(kickoff) - (int(time.time()) if now is None else int(now))
+    if 30 * 60 < remaining <= 60 * 60:
+        return 60
+    if 5 * 60 < remaining <= 30 * 60:
+        return 30
+    if 0 < remaining <= 5 * 60:
+        return 5
+    return None
+
+
+def _claim_injury_scan(key: str, *, now: float | None = None) -> bool:
+    current_time = time.time() if now is None else float(now)
+    with injury_scan_lock:
+        expired = [item for item, expiry in injury_scan_receipts.items() if expiry <= current_time]
+        for item in expired:
+            injury_scan_receipts.pop(item, None)
+        if key in injury_scan_receipts:
+            return False
+        injury_scan_receipts[key] = current_time + 2 * 86400
+        return True
+
+
 def _check_locked_players_unchanged(
     *,
     selected_ids: set[str],
@@ -4077,6 +4165,9 @@ def login(
             cookie_league=request.cookies.get("wp_last_league", ""),
             league_themes=_database_league_themes(current.owner_fingerprint, current.year),
         )
+        current.emergency_lineup_leagues = _database_emergency_lineup_preferences(
+            current.owner_fingerprint, current.year,
+        )
         current.watchlists = _database_watchlists(current.owner_fingerprint, current.year)
         persistent_leagues = [
             {"id": item.id, "franchise_id": item.franchise_id, "name": item.name, "url": item.url}
@@ -4368,10 +4459,187 @@ def command_center_queue(request: Request, league_id: str):
     }
 
 
+def _submit_emergency_lineup(
+    current: BrowserSession,
+    league: MFLLeague,
+    *,
+    week: int,
+    kickoff: int,
+) -> dict[str, str]:
+    """Make one guarded five-minute write for an explicitly opted-in league."""
+    if league.id not in current.emergency_lineup_leagues:
+        return {"status": "disabled", "message": "Emergency lineup automation is off."}
+    client = _client(current, league)
+    action_key = ""
+    claimed = False
+    write_attempted = False
+    try:
+        roster_ids = client.roster_ids()
+        roster = client.named_players(roster_ids)
+        statuses = client.player_roster_statuses(roster_ids, week=week)
+        settings = client.lineup_settings()
+        kickoffs = client.nfl_team_kickoffs(week=week)
+        locked_ids = _locked_player_ids(roster, kickoffs)
+        _check_locked_players_unchanged(
+            selected_ids={player_id for player_id, status in statuses.items() if status == "S"},
+            statuses=statuses,
+            locked_ids=locked_ids,
+        )
+        injuries = client.injuries(week=week)
+        projections = client.projected_scores(week=week, player_ids=roster_ids)
+        recommendation = recommend_lineup(
+            roster=roster,
+            settings=settings,
+            projections=projections,
+            roster_statuses=statuses,
+            injuries=injuries,
+            locked_player_ids=locked_ids,
+        )
+        games = {
+            team.upper(): {"kickoff": value}
+            for team, value in kickoffs.items()
+        }
+        unavailable = _upcoming_out_starter_ids(
+            recommendation, games, maximum_seconds=5 * 60, kickoff=kickoff,
+        )
+        plan = injury_replacement_plan(recommendation, settings, unavailable)
+        if plan is None:
+            return {"status": "none", "message": "No legal emergency replacement was needed."}
+        removed = set(recommendation.current_starters) - set(plan.starter_ids)
+        added = set(plan.starter_ids) - set(recommendation.current_starters)
+        if removed != unavailable or len(added) != len(removed):
+            raise ValueError("The emergency plan would change more than the unavailable starters")
+        if any(player_id not in projections for player_id in added):
+            raise ValueError("MFL has no projection for a legal emergency replacement")
+
+        # Re-read every mutable safety input immediately before claiming the
+        # one-attempt write. A changed roster, designation, or kickoff stops it.
+        fresh_roster_ids = client.roster_ids()
+        if fresh_roster_ids != roster_ids:
+            raise ValueError("The MFL roster changed during the emergency check")
+        fresh_statuses = client.player_roster_statuses(fresh_roster_ids, week=week)
+        fresh_injuries = client.injuries(week=week)
+        fresh_kickoffs = client.nfl_team_kickoffs(week=week)
+        fresh_locked_ids = _locked_player_ids(roster, fresh_kickoffs)
+        fresh_current = {
+            player_id for player_id, status in fresh_statuses.items() if status == "S"
+        }
+        if fresh_current != set(recommendation.current_starters):
+            raise ValueError("The saved MFL lineup changed during the emergency check")
+        if any(
+            not _is_out_designation(getattr(fresh_injuries.get(player_id), "status", ""))
+            for player_id in removed
+        ):
+            raise ValueError("The Out/Inactive designation changed before submission")
+        if any(fresh_statuses.get(player_id) != "NS" for player_id in added):
+            raise ValueError("A replacement is no longer confirmed on the MFL bench")
+        for player_id in removed:
+            player = next(item for item in roster if item.id == player_id)
+            remaining = fresh_kickoffs.get(player.team.upper(), 0) - int(time.time())
+            if not 0 < remaining <= 5 * 60:
+                raise ValueError("The emergency replacement is outside the five-minute window")
+        _check_locked_players_unchanged(
+            selected_ids=set(plan.starter_ids),
+            statuses=fresh_statuses,
+            locked_ids=fresh_locked_ids,
+        )
+        if not lineup_is_legal(client.named_players(plan.starter_ids), settings):
+            raise ValueError("The emergency replacement no longer meets the league lineup rules")
+
+        action_key = hashlib.sha256(
+            "|".join((
+                current.owner_fingerprint, str(current.year), league.id, str(week),
+                str(kickoff), ",".join(sorted(removed)), ",".join(sorted(added)),
+            )).encode("utf-8")
+        ).hexdigest()
+        store = _persistent_store()
+        claimed = store.claim_emergency_lineup_action(
+            current.owner_fingerprint,
+            action_key=action_key,
+            year=current.year,
+            league_id=league.id,
+            week=week,
+            kickoff=kickoff,
+            changed_player_count=len(removed),
+        )
+        if not claimed:
+            return {"status": "duplicate", "message": "This emergency action was already attempted."}
+
+        try:
+            write_attempted = True
+            client.submit_lineup(
+                week=week,
+                starter_ids=plan.starter_ids,
+                comments="Fantasy HQ emergency Out/Inactive replacement",
+            )
+            outcome = "submitted"
+            message = f"Emergency Week {week} lineup submitted to MFL."
+        except MFLWriteUncertainError as write_error:
+            # Readback is safe. The ambiguous POST itself is never retried.
+            try:
+                saved = client.player_roster_statuses(roster_ids, week=week)
+                saved_starters = {
+                    player_id for player_id, status in saved.items() if status == "S"
+                }
+            except MFLApiError as verify_error:
+                log_error("emergency_lineup_readback_failed", verify_error)
+                saved_starters = set()
+            if saved_starters == set(plan.starter_ids):
+                outcome = "verified"
+                message = f"Emergency Week {week} lineup verified after MFL's unclear receipt."
+            else:
+                outcome = "uncertain"
+                message = (
+                    f"Emergency Week {week} lineup result is uncertain. Check MFL before submitting again."
+                )
+                log_error("emergency_lineup_submit_uncertain", write_error)
+        store.finish_emergency_lineup_action(
+            current.owner_fingerprint, action_key=action_key, outcome=outcome,
+        )
+        _clear_report_cache(
+            current, league.id,
+            f"live-scoring:{week}",
+            f"roster-status:{league.franchise_id}:{week}",
+            "home-briefing",
+        )
+        _record_operation(
+            current, league_id=league.id, kind="lineup",
+            title=f"Week {week} emergency lineup", status=outcome, message=message,
+        )
+        log_event(
+            "emergency_lineup_result", league_id=league.id, week=week,
+            outcome=outcome, changed_player_count=len(removed),
+        )
+        return {"status": outcome, "message": message}
+    except Exception as error:
+        log_error("emergency_lineup_failed", error)
+        if claimed and action_key:
+            try:
+                _persistent_store().finish_emergency_lineup_action(
+                    current.owner_fingerprint, action_key=action_key,
+                    outcome="uncertain" if write_attempted else "failed",
+                )
+            except Exception as store_error:
+                log_error("emergency_lineup_outcome_save_failed", store_error)
+        message = (
+            "Emergency lineup protection attempted a change but its final state is uncertain. Check MFL before submitting again."
+            if write_attempted else
+            "Emergency lineup protection could not safely make a change. Review the lineup now."
+        )
+        _record_operation(
+            current, league_id=league.id, kind="lineup",
+            title=f"Week {week} emergency lineup",
+            status="uncertain" if write_attempted else "failed",
+            message=message,
+        )
+        return {"status": "uncertain" if write_attempted else "failed", "message": message}
+
+
 def _background_push_cycle() -> None:
-    """Send generic opted-in wake-ups; private league details stay in the app."""
-    if not push_configured() or not os.environ.get("WP_DATABASE_URL", "").strip():
+    """Run pregame scans and send generic opted-in wake-ups when available."""
+    if not os.environ.get("WP_DATABASE_URL", "").strip():
         return
+    cycle_time = int(time.time())
     with sessions_lock:
         active = sorted(sessions.values(), key=lambda item: item.created_at, reverse=True)
     seen: set[str] = set()
@@ -4381,49 +4649,142 @@ def _background_push_cycle() -> None:
             continue
         seen.add(current.owner_fingerprint)
         try:
-            subscriptions = _persistent_store().load_push_subscriptions(current.owner_fingerprint)
+            subscriptions = (
+                _persistent_store().load_push_subscriptions(current.owner_fingerprint)
+                if push_configured() else []
+            )
         except Exception as error:
             log_error("push_subscription_load_failed", error)
-            continue
-        for stored in subscriptions:
-            league = next((item for item in current.leagues if item.id == stored["league_id"]), None)
+            subscriptions = []
+        default_league = next(
+            (item for item in current.leagues if item.id == current.default_league_id),
+            current.leagues[0],
+        )
+        subscription_leagues = {
+            str(item.get("league_id") or default_league.id) for item in subscriptions
+        }
+        target_league_ids = subscription_leagues | set(current.emergency_lineup_leagues)
+        for league_id in target_league_ids:
+            league = next((item for item in current.leagues if item.id == league_id), None)
             if league is None:
-                league = next((item for item in current.leagues if item.id == current.default_league_id), current.leagues[0])
+                continue
             try:
-                insight = _load_insights(current, league, include_external=False, include_accuracy=False)
-                urgent = [item for item in insight["actions"] if item["tone"] in {"danger", "warning"}]
-                if not urgent:
+                client = _client(current, league)
+                week = _cached_current_week(current, client)
+                if week is None:
                     continue
-                signature = hashlib.sha256("|".join(item["title"] for item in urgent).encode("utf-8")).hexdigest()[:32]
-                if stored["last_signature"] == signature:
+                kickoffs = _cached_session_read(
+                    current, "mfl-global", f"nfl-kickoffs:{week}",
+                    lambda: client.nfl_team_kickoffs(week=week),
+                    ttl=300, stale_ttl=3600,
+                )
+                due = []
+                for kickoff in sorted(set(kickoffs.values())):
+                    phase = _injury_scan_phase(kickoff, now=cycle_time)
+                    if phase is None:
+                        continue
+                    scan_key = (
+                        f"injury:{current.owner_fingerprint}:{current.year}:"
+                        f"{league.id}:{week}:{kickoff}:{phase}"
+                    )
+                    if _claim_injury_scan(scan_key, now=cycle_time):
+                        due.append((kickoff, phase))
+
+                general_due = bool(subscriptions) and _claim_injury_scan(
+                    f"briefing:{current.owner_fingerprint}:{league.id}:{cycle_time // 600}",
+                    now=cycle_time,
+                )
+                if not due and not general_due:
                     continue
-                # The push service sees only generic copy and an internal route;
-                # names, scores, injuries, league IDs, and MFL data stay server-side.
-                send_web_push(
-                    stored["subscription"], title="Fantasy HQ update",
-                    body="A roster item needs your attention. Open Fantasy HQ for details.",
-                    url="/dashboard?source=pwa-briefing", tag="fantasy-hq-briefing",
+
+                # A scheduled scan must not reuse a five-minute-old injury row.
+                if due:
+                    current.read_cache.pop(
+                        f"{current.year}:mfl-global:report:injuries:{week}", None,
+                    )
+                insight = _load_insights(
+                    current, league, include_external=False, include_accuracy=False,
                 )
-                _persistent_store().mark_push_sent(
-                    current.owner_fingerprint, stored["endpoint_hash"], signature,
-                )
+                urgent = [
+                    item for item in insight["actions"]
+                    if item["tone"] in {"danger", "warning"}
+                ]
+                notification_parts: list[str] = []
+                notification_body = "A roster item needs your attention. Open Fantasy HQ for details."
+                for kickoff, phase in due:
+                    scan_rows = []
+                    for row in insight["rows"]:
+                        item = row["item"]
+                        game = getattr(client, "week_games", {}).get(item.player.team.upper(), {})
+                        if (
+                            item.currently_starting
+                            and not item.locked
+                            and item.injury is not None
+                            and int(game.get("kickoff") or 0) == kickoff
+                        ):
+                            scan_rows.append(row)
+                    if not scan_rows:
+                        continue
+                    notification_parts.extend(
+                        f"{phase}:{row['item'].player.id}:{row['injury_status']}"
+                        for row in scan_rows
+                    )
+                    if phase == 5 and any(
+                        _is_out_designation(row["injury_status"]) for row in scan_rows
+                    ):
+                        result = _submit_emergency_lineup(
+                            current, league, week=week, kickoff=kickoff,
+                        )
+                        if result["status"] in {"submitted", "verified"}:
+                            notification_body = (
+                                "Emergency lineup protection made a change. Open Fantasy HQ to review it."
+                            )
+                        elif result["status"] in {"failed", "uncertain"}:
+                            notification_body = (
+                                "Emergency lineup protection needs immediate review. Open Fantasy HQ now."
+                            )
+
+                if general_due:
+                    notification_parts.extend(item["title"] for item in urgent)
+                if not notification_parts:
+                    continue
+                signature = hashlib.sha256(
+                    "|".join(notification_parts).encode("utf-8")
+                ).hexdigest()[:32]
+                for stored in subscriptions:
+                    stored_league = str(stored.get("league_id") or default_league.id)
+                    if stored_league != league.id or stored["last_signature"] == signature:
+                        continue
+                    # The push service sees only generic copy and an internal
+                    # route; player, league, and MFL details stay server-side.
+                    send_web_push(
+                        stored["subscription"], title="Fantasy HQ update",
+                        body=notification_body,
+                        url="/dashboard?source=pwa-briefing", tag="fantasy-hq-briefing",
+                    )
+                    _persistent_store().mark_push_sent(
+                        current.owner_fingerprint, stored["endpoint_hash"], signature,
+                    )
             except Exception as error:
                 log_error("background_push_failed", error)
 
 
 def _push_worker_loop() -> None:
     try:
-        interval = int(os.environ.get("WP_PUSH_POLL_SECONDS", "600"))
+        interval = int(os.environ.get("WP_PUSH_POLL_SECONDS", "60"))
     except ValueError:
-        interval = 600
-    interval = max(300, min(3600, interval))
+        interval = 60
+    # The loop itself is cheap; provider reads remain deduplicated below. Keep
+    # this cadence tight enough that a five-minute safeguard never wakes at the
+    # final few seconds because an old deployment still has a 600s setting.
+    interval = max(30, min(60, interval))
     while not push_worker_stop.wait(interval):
         _background_push_cycle()
 
 
 def _ensure_push_worker() -> None:
     global push_worker
-    if not push_configured():
+    if not os.environ.get("WP_DATABASE_URL", "").strip():
         return
     with push_worker_lock:
         if push_worker and push_worker.is_alive():
@@ -4493,6 +4854,57 @@ def save_ranking_preference(
         samesite="strict", secure=_secure_cookies(request),
     )
     return response
+
+
+@app.post("/preferences/emergency-lineup")
+def save_emergency_lineup_preference(
+    request: Request,
+    league: str = Form(...),
+    week: int = Form(...),
+    enabled: str = Form(""),
+    csrf_token: str = Form(...),
+):
+    current = _require_session(request)
+    _check_csrf(current, csrf_token)
+    selected = _league(current, league)
+    if not 1 <= week <= 18:
+        raise HTTPException(status_code=400, detail="Choose a valid week")
+    turn_on = enabled == "1"
+    try:
+        store = _persistent_store()
+        if int(store.connection_status().get("schema_version") or 0) < 10:
+            raise RuntimeError("Apply Supabase migration 010 before enabling emergency lineups")
+        store.save_emergency_lineup_preference(
+            current.owner_fingerprint,
+            year=current.year,
+            league_id=selected.id,
+            enabled=turn_on,
+        )
+    except Exception as error:
+        log_error("emergency_lineup_preference_save_failed", error)
+        query = urlencode({
+            "league": selected.id,
+            "week": week,
+            "error": "Emergency lineup protection could not be saved. Apply migration 010 and try again.",
+            "ref": request.state.error_reference,
+        })
+        return RedirectResponse(f"/lineup?{query}", status_code=303)
+    if turn_on:
+        current.emergency_lineup_leagues.add(selected.id)
+        _ensure_push_worker()
+    else:
+        current.emergency_lineup_leagues.discard(selected.id)
+    log_event(
+        "emergency_lineup_preference_changed",
+        league_id=selected.id,
+        enabled=turn_on,
+    )
+    query = urlencode({
+        "league": selected.id,
+        "week": week,
+        "emergency": "enabled" if turn_on else "disabled",
+    })
+    return RedirectResponse(f"/lineup?{query}", status_code=303)
 
 
 @app.post("/preferences/theme", status_code=204)
@@ -6289,7 +6701,13 @@ def moves(request: Request, league: str, q: str = "", error: str = ""):
 
 
 @app.get("/lineup", response_class=HTMLResponse)
-def lineup_page(request: Request, league: str, error: str = "", week: int | None = None):
+def lineup_page(
+    request: Request,
+    league: str,
+    error: str = "",
+    emergency: str = "",
+    week: int | None = None,
+):
     current = _session(request)
     if not current:
         return RedirectResponse("/", status_code=303)
@@ -6300,12 +6718,19 @@ def lineup_page(request: Request, league: str, error: str = "", week: int | None
     recommendation: LineupRecommendation | None = None
     settings = None
     blend = ProjectionBlend(scores={}, mfl_scores={}, ml_scores={}, ml_matched=0)
+    emergency_plan: InjuryReplacementPlan | None = None
     try:
         week, recommendation, settings, blend = (
             _load_lineup(client, requested_week=requested_week, current=current)
             if requested_week is not None else _load_lineup(client, current=current)
         )
         _remember_catalog(current, client)
+        unavailable = _upcoming_out_starter_ids(
+            recommendation, getattr(client, "week_games", {}), maximum_seconds=3600,
+        )
+        emergency_plan = injury_replacement_plan(
+            recommendation, settings, unavailable,
+        )
     except MFLApiError as caught:
         _log_provider_error_once(
             current,
@@ -6347,6 +6772,9 @@ def lineup_page(request: Request, league: str, error: str = "", week: int | None
             "locked_count": sum(
                 item.locked for item in recommendation.players
             ) if recommendation else 0,
+            "emergency_plan": emergency_plan,
+            "emergency_auto_enabled": selected.id in current.emergency_lineup_leagues,
+            "emergency_message": emergency if emergency in {"enabled", "disabled"} else "",
             "error": api_error,
         },
     )

@@ -18,6 +18,7 @@ from weekly_projections.mfl.client import (
     MFLLeagueDetails,
     MFLFantasyGame,
     MFLHistoricalLeague,
+    MFLInjury,
     MFLTransaction,
     MFLLiveFranchise,
     MFLLiveMatchup,
@@ -2399,3 +2400,73 @@ def test_live_scores_page_renders_mfl_matchup(monkeypatch) -> None:
     monkeypatch.setattr(web_app, "_load_live_scoring_week", lambda client, requested_week=None, **kwargs: (requested_week, 2, live, {}, head_to_head))
     returned = client.get("/scores?league=11111")
     assert "Week 1 Scores" in returned.text
+
+
+def test_pregame_injury_scan_windows_are_60_30_and_5_minutes_only():
+    now = 1_000_000
+    assert web_app._injury_scan_phase(now + 3600, now=now) == 60
+    assert web_app._injury_scan_phase(now + 1800, now=now) == 30
+    assert web_app._injury_scan_phase(now + 300, now=now) == 5
+    assert web_app._injury_scan_phase(now + 3601, now=now) is None
+    assert web_app._injury_scan_phase(now, now=now) is None
+
+
+def test_injury_scan_claim_is_idempotent():
+    web_app.injury_scan_receipts.clear()
+    assert web_app._claim_injury_scan("owner:league:week:kickoff:5", now=100)
+    assert not web_app._claim_injury_scan("owner:league:week:kickoff:5", now=101)
+    assert web_app._claim_injury_scan("owner:league:week:kickoff:5", now=200_000)
+
+
+def test_five_minute_emergency_submit_changes_only_out_starter(monkeypatch):
+    now = 2_000_000
+    kickoff = now + 240
+    league = MFLLeague("11111", "0001", "Home League")
+    current = web_app.BrowserSession(
+        "cookie", 2026, [league], "csrf", owner_fingerprint="account:owner",
+    )
+    current.emergency_lineup_leagues.add(league.id)
+    roster = {
+        "qb": MFLPlayer("qb", "Healthy QB", "QB", "BUF"),
+        "out": MFLPlayer("out", "Out Receiver", "WR", "DET"),
+        "backup": MFLPlayer("backup", "Healthy Backup", "WR", "DET"),
+        "otherqb": MFLPlayer("otherqb", "Tempting QB", "QB", "KC"),
+    }
+
+    class EmergencyClient:
+        config = MFLConfig(2026, league.id, league.franchise_id)
+        submitted = []
+        def roster_ids(self): return set(roster)
+        def named_players(self, ids): return [roster[player_id] for player_id in ids]
+        def player_roster_statuses(self, ids, *, week):
+            return {"qb": "S", "out": "S", "backup": "NS", "otherqb": "NS"}
+        def lineup_settings(self):
+            return MFLLineupSettings(2, (MFLLineupRule("QB", 1, 1), MFLLineupRule("WR", 1, 1)))
+        def nfl_team_kickoffs(self, *, week):
+            return {"DET": kickoff, "BUF": now + 3600, "KC": now + 3600}
+        def injuries(self, *, week): return {"out": MFLInjury("out", "Out", "Inactive")}
+        def projected_scores(self, *, week, player_ids):
+            return {"qb": 12, "out": 18, "backup": 9, "otherqb": 40}
+        def submit_lineup(self, *, week, starter_ids, comments):
+            self.submitted.append(set(starter_ids))
+            return {"status": "OK"}
+
+    class EmergencyStore:
+        outcomes = []
+        def claim_emergency_lineup_action(self, owner, **kwargs): return True
+        def finish_emergency_lineup_action(self, owner, **kwargs): self.outcomes.append(kwargs["outcome"])
+
+    client = EmergencyClient()
+    store = EmergencyStore()
+    monkeypatch.setattr(web_app, "_client", lambda *args: client)
+    monkeypatch.setattr(web_app, "_persistent_store", lambda: store)
+    monkeypatch.setattr(web_app.time, "time", lambda: now)
+    monkeypatch.setattr(web_app, "_delete_database_report_snapshot", lambda *args: None)
+
+    result = web_app._submit_emergency_lineup(
+        current, league, week=3, kickoff=kickoff,
+    )
+
+    assert result["status"] == "submitted"
+    assert client.submitted == [{"qb", "backup"}]
+    assert store.outcomes == ["submitted"]
