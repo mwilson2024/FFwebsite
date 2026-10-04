@@ -95,7 +95,13 @@ from weekly_projections.web.diagnostics import (
 )
 from weekly_projections.web.session_store import EncryptedSessionStore
 from weekly_projections.web_push import configured as push_configured, public_key as push_public_key, send_web_push
-from weekly_projections.gameday import chart_points, lineup_what_if, observe_scoring
+from weekly_projections.gameday import (
+    chart_markers,
+    chart_points,
+    chart_time_ticks,
+    lineup_what_if,
+    observe_scoring,
+)
 from weekly_projections.decision_simulator import simulate_decision
 
 
@@ -3963,6 +3969,8 @@ def _observe_gameday_timeline(
         "probability": tuple(probability),
         "chart_points": chart_points(probability),
         "right_chart_points": chart_points(probability, field="right"),
+        "time_ticks": chart_time_ticks(probability),
+        "chart_markers": chart_markers(probability),
         "left_name": head_to_head.teams[0].name,
         "right_name": head_to_head.teams[1].name,
         "opening": opening,

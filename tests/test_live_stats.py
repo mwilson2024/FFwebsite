@@ -372,6 +372,14 @@ def test_matchup_header_switches_all_leagues_and_separates_stats_from_points():
             "latest": {"left": 61.0, "right": 39.0, "time": "Sun 2:24 PM"},
             "left_name": "Team", "right_name": "Opponent", "left_swing": 15.0,
             "end_label": "LIVE",
+            "time_ticks": (
+                {"x": 0.0, "label": "Thu 8:15 PM"},
+                {"x": 100.0, "label": "Sun 2:24 PM"},
+            ),
+            "chart_markers": (
+                {"x": 0.0, "y": 97.2, "value": 46.0, "time": "Thu 8:15 PM"},
+                {"x": 720.0, "y": 70.2, "value": 61.0, "time": "Sun 2:24 PM"},
+            ),
         },
     )
     soup = BeautifulSoup(html, 'html.parser')
@@ -385,7 +393,13 @@ def test_matchup_header_switches_all_leagues_and_separates_stats_from_points():
     assert [item.get_text(strip=True) for item in soup.select('.week-odds-chart .odds-scale span')] == [
         '100%', '75%', '50%', '25%', '0%',
     ]
-    assert soup.select_one('.chart-axis span:last-child b').get_text(strip=True) == 'LIVE'
+    assert [item.get_text(strip=True) for item in soup.select('.week-odds-chart .odds-time-ticks time')] == [
+        'Thu 8:15 PM', 'Sun 2:24 PM',
+    ]
+    assert soup.select_one('.chart-axis span:first-child b').get_text(strip=True) == 'BEGINNING'
+    assert soup.select_one('.chart-axis span:last-child b').get_text(strip=True) == 'CURRENT'
+    assert len(soup.select('.week-odds-chart .observation-point')) == 2
+    assert soup.select('.week-odds-chart .observation-point title')[1].get_text(strip=True) == 'Sun 2:24 PM · 61.00%'
     assert soup.select_one('.week-picker input[name="league"]')['value'] == '1'
     identity = soup.select_one('.matchup-identity-line')
     assert identity.select_one('.player-identity') and identity.select_one('.game-status-badge')

@@ -179,7 +179,7 @@ def observe_scoring(
         last_observation = float(probability[-1].get("observed_at") or 0) if probability else 0
         if not probability or probability[-1]["left"] != point["left"] \
                 or probability[-1]["right"] != point["right"] \
-                or observed_at - last_observation >= 30 * 60:
+                or observed_at - last_observation >= 10 * 60:
             probability.append(point)
     state["snapshot"] = {"teams": normalized, "observed_at": observed_at}
     state["events"] = events[-200:]
@@ -264,3 +264,55 @@ def chart_points(
         xs = [(timestamp - observed[0]) * width / elapsed for timestamp in observed]
     ys = [height - max(0.0, min(100.0, float(point[field]))) * height / 100 for point in points]
     return " ".join(f"{x:.1f},{y:.1f}" for x, y in zip(xs, ys))
+
+
+def chart_time_ticks(
+    points: list[dict[str, Any]], *, maximum: int = 5,
+) -> tuple[dict[str, Any], ...]:
+    """Return bounded, elapsed-time-positioned labels from observed chart points."""
+    if not points:
+        return ()
+    if len(points) == 1:
+        return (
+            {"x": 0.0, "label": str(points[0].get("time") or "Beginning")},
+            {"x": 100.0, "label": str(points[0].get("time") or "Current")},
+        )
+    count = min(max(2, maximum), len(points))
+    indexes = tuple(dict.fromkeys(
+        round(step * (len(points) - 1) / (count - 1)) for step in range(count)
+    ))
+    start = float(points[0].get("observed_at") or 0)
+    end = float(points[-1].get("observed_at") or start)
+    elapsed = end - start
+    return tuple({
+        "x": round(
+            ((float(points[index].get("observed_at") or start) - start) / elapsed * 100)
+            if elapsed > 0 else index / (len(points) - 1) * 100,
+            2,
+        ),
+        "label": str(points[index].get("time") or ""),
+    } for index in indexes)
+
+
+def chart_markers(
+    points: list[dict[str, Any]], *, field: str = "left", width: int = 720, height: int = 180,
+) -> tuple[dict[str, Any], ...]:
+    """Place one visible chart marker at every recorded probability observation."""
+    if not points:
+        return ()
+    if field not in {"left", "right"}:
+        raise ValueError("Choose the left or right win-probability series")
+    observed = [float(point.get("observed_at", index)) for index, point in enumerate(points)]
+    elapsed = observed[-1] - observed[0]
+    if len(points) == 1:
+        xs = [0.0]
+    elif elapsed > 0:
+        xs = [(timestamp - observed[0]) * width / elapsed for timestamp in observed]
+    else:
+        xs = [index * width / (len(points) - 1) for index in range(len(points))]
+    return tuple({
+        "x": round(x, 1),
+        "y": round(height - max(0.0, min(100.0, float(point[field]))) * height / 100, 1),
+        "value": round(float(point[field]), 2),
+        "time": str(point.get("time") or ""),
+    } for x, point in zip(xs, points))
