@@ -456,6 +456,49 @@ class HeadToHeadView:
         return "Scheduled"
 
 
+def _projected_live_finish(team: LiveTeamView | None) -> float | None:
+    if team is None or not team.starters:
+        return None
+    total = float(team.score)
+    for player in team.starters:
+        remaining = min(1.0, max(0.0, player.game_seconds_remaining / 3600))
+        if not remaining:
+            continue
+        if player.projection is None or not math.isfinite(player.projection):
+            return None
+        total += player.projection * remaining
+    return round(total, 2)
+
+
+def _live_team_payload(team: LiveTeamView | None, own_franchise_id: str = "") -> dict | None:
+    if team is None:
+        return None
+    own_id = own_franchise_id.zfill(4) if own_franchise_id else ""
+    return {
+        "franchise_id": team.franchise_id,
+        "name": team.name,
+        "is_own": bool(own_id and team.franchise_id.zfill(4) == own_id),
+        "score": round(float(team.score), 2),
+        "projected_score": _projected_live_finish(team),
+        "playing": team.starters_playing,
+        "left": team.starters_left,
+        "final": max(0, len(team.starters) - team.starters_playing - team.starters_left),
+        "players": [{
+            "id": player.player.id,
+            "name": player.player.name,
+            "position": _board_position(player.player),
+            "nfl_team": player.player.team or "FA",
+            "score": round(float(player.score), 2),
+            "projection": (
+                round(float(player.projection), 2)
+                if player.projection is not None and math.isfinite(player.projection)
+                else None
+            ),
+            "game_state": player.game_state,
+        } for player in team.starters],
+    }
+
+
 @dataclass
 class TradeDraft:
     league_id: str
@@ -4373,19 +4416,6 @@ def command_center_league(request: Request, league_id: str):
         open_slots = max(0, settings.starter_count - len(lineup.current_starters))
         changes = sum(item.action in {"START", "SIT"} for item in lineup.players)
 
-        def projected_finish(team):
-            if team is None or not team.starters:
-                return None
-            total = float(team.score)
-            for player in team.starters:
-                remaining = min(1.0, max(0.0, player.game_seconds_remaining / 3600))
-                if not remaining:
-                    continue
-                if player.projection is None or not math.isfinite(player.projection):
-                    return None
-                total += player.projection * remaining
-            return round(total, 2)
-
         standings_error = False
         try:
             standings = _cached_session_read(
@@ -4409,39 +4439,25 @@ def command_center_league(request: Request, league_id: str):
         danger_count = sum(item["tone"] == "danger" for item in alerts)
         warning_count = sum(item["tone"] == "warning" for item in alerts)
         game_state = matchup.game_state if matchup else "Unavailable"
-
-        def live_team_payload(team):
-            if team is None:
-                return None
-            return {
-                "franchise_id": team.franchise_id,
-                "name": team.name,
-                "is_own": team is own_team,
-                "score": round(float(team.score), 2),
-                "projected_score": projected_finish(team),
-                "playing": team.starters_playing,
-                "left": team.starters_left,
-                "final": max(0, len(team.starters) - team.starters_playing - team.starters_left),
-                "players": [{
-                    "id": player.player.id,
-                    "name": player.player.name,
-                    "position": _board_position(player.player),
-                    "nfl_team": player.player.team or "FA",
-                    "score": round(float(player.score), 2),
-                    "projection": (
-                        round(float(player.projection), 2)
-                        if player.projection is not None and math.isfinite(player.projection)
-                        else None
-                    ),
-                    "game_state": player.game_state,
-                } for player in team.starters],
-            }
-
+        win_probability_change = None
+        win_probability_opening = None
+        if game_state == "Live" and matchup and own_team and chance is not None:
+            timeline = _observe_gameday_timeline(current, selected, week, matchup)
+            probability = timeline.get("probability") or ()
+            if probability:
+                field = "left" if matchup.teams.index(own_team) == 0 else "right"
+                win_probability_opening = probability[0].get(field)
+                latest_probability = probability[-1].get(field)
+                if win_probability_opening is not None and latest_probability is not None:
+                    win_probability_change = round(
+                        float(latest_probability) - float(win_probability_opening), 2,
+                    )
         live_teams = []
         if game_state == "Live":
             live_teams = [
                 payload for payload in (
-                    live_team_payload(own_team), live_team_payload(opponent),
+                    _live_team_payload(own_team, selected.franchise_id),
+                    _live_team_payload(opponent, selected.franchise_id),
                 ) if payload is not None
             ]
         if open_slots or danger_count:
@@ -4471,8 +4487,10 @@ def command_center_league(request: Request, league_id: str):
             "opponent_score": opponent.score if opponent else None,
             "win_probability": chance,
             "game_state": game_state,
-            "projected_score": projected_finish(own_team),
-            "opponent_projected_score": projected_finish(opponent),
+            "projected_score": _projected_live_finish(own_team),
+            "opponent_projected_score": _projected_live_finish(opponent),
+            "win_probability_change": win_probability_change,
+            "win_probability_opening": win_probability_opening,
             "playing": own_team.starters_playing if own_team else 0,
             "left": own_team.starters_left if own_team else 0,
             "final": max(0, len(own_team.starters) - own_team.starters_playing - own_team.starters_left) if own_team else 0,
@@ -6934,14 +6952,82 @@ def lineup_page(
     )
 
 
+@app.get("/api/multi-scores/{league_id}")
+def multi_scores_league(request: Request, league_id: str, week: int | None = None):
+    """Return every matchup in one league for the cross-league live board."""
+    current = _require_session(request)
+    selected = _league(current, league_id)
+    client = _client(current, selected)
+    try:
+        selected_week, current_week, live, _, _ = _load_live_scoring_week(
+            client, requested_week=week, current=current, include_reference=False,
+        )
+        matchups = []
+        for index in range(len(live.matchups)):
+            _, _, _, _, view = _load_live_scoring_week(
+                client, requested_week=selected_week, matchup_index=index,
+                current=current, include_reference=False,
+            )
+            if view is None:
+                continue
+            forecast = view.forecast
+            percentages = forecast.get("percentages", ()) if forecast else ()
+            teams = []
+            for team_index, team in enumerate(view.teams):
+                payload = _live_team_payload(team, selected.franchise_id)
+                if payload is None:
+                    continue
+                payload["win_probability"] = (
+                    percentages[team_index] if team_index < len(percentages) else None
+                )
+                teams.append(payload)
+            matchups.append({
+                "index": index,
+                "game_state": view.game_state,
+                "is_own_matchup": any(team.get("is_own") for team in teams),
+                "teams": teams,
+                "href": f"/scores?league={selected.id}&week={selected_week}&matchup={index}",
+            })
+        return {
+            "league_id": selected.id,
+            "name": selected.name,
+            "week": selected_week,
+            "current_week": current_week,
+            "matchups": matchups,
+            "live": any(item["game_state"] == "Live" for item in matchups),
+            "updated_at": int(time.time()),
+        }
+    except (MFLApiError, ValueError) as error:
+        if isinstance(error, MFLApiError):
+            _log_provider_error_once(current, selected.id, "multi_scores_league_unavailable", error)
+        else:
+            log_error("multi_scores_league_unavailable", error)
+        return JSONResponse({
+            "league_id": selected.id,
+            "name": selected.name,
+            "error": "This league's live scores could not refresh.",
+        }, status_code=503)
+
+
 @app.get("/scores", response_class=HTMLResponse)
 def scores_page(request: Request, league: str, week: int | None = None, matchup: str = "", view: str = "matchup"):
     current = _session(request)
     if not current:
         return RedirectResponse("/", status_code=303)
     selected = _league(current, league)
-    if view not in {"matchup", "all"}:
+    if view not in {"matchup", "all", "multi"}:
         raise HTTPException(status_code=400, detail="Choose matchup or league scoreboard")
+    if view == "multi":
+        return templates.TemplateResponse(
+            request=request,
+            name="multi_scores.html",
+            context={
+                "session": current,
+                "league": selected,
+                "leagues": current.leagues,
+                "active_tool": "scores",
+            },
+        )
     try:
         matchup_index = int(matchup) if matchup else None
     except ValueError:

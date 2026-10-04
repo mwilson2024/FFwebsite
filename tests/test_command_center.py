@@ -78,6 +78,8 @@ def test_command_center_core_is_an_actionable_cross_league_brief(monkeypatch):
     }
     assert data["projected_score"] == 22.0
     assert data["opponent_projected_score"] == 18.0
+    assert data["win_probability_opening"] == data["win_probability"]
+    assert data["win_probability_change"] == 0.0
     assert [team["name"] for team in data["live_teams"]] == ["Mine", "Theirs"]
     assert data["live_teams"][0]["is_own"] is True
     assert data["live_teams"][0]["players"] == [{
@@ -125,5 +127,7 @@ def test_command_center_client_renders_both_live_team_panels():
     assert "Live starters" in script and "Full box score" in script
     assert ".command-live-teams" in styles
     assert ".command-live-players li.is-live" in styles
-    assert "/static/command-center-live.css?v=1" in template
-    assert "/static/command-center.js?v=3" in template
+    assert "pts from opening" in script
+    assert ".chance-change.is-up" in styles and ".chance-change.is-down" in styles
+    assert "/static/command-center-live.css?v=2" in template
+    assert "/static/command-center.js?v=4" in template

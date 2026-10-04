@@ -94,7 +94,15 @@
     const scoreLine = element('div', 'command-score-line'); scoreLine.append(element('strong', '', formatPoints(data.score)), element('span', '', 'vs'), element('strong', '', formatPoints(data.opponent_score)));
     const projection = element('p', 'command-projected', data.projected_score == null || data.opponent_projected_score == null ? 'Projected finish unavailable' : `Projected finish ${formatPoints(data.projected_score)} – ${formatPoints(data.opponent_projected_score)}`);
     const chanceLabel = data.win_probability == null ? 'Win estimate unavailable' : `${Number(data.win_probability).toFixed(2)}% estimated win`;
-    const chance = element('div', 'command-chance'); chance.append(element('span', '', chanceLabel));
+    const chance = element('div', 'command-chance');
+    const chanceCopy = element('div', 'command-chance-copy'); chanceCopy.append(element('span', '', chanceLabel));
+    if (data.win_probability_change != null) {
+      const movement = Number(data.win_probability_change);
+      const direction = movement > 0 ? 'up' : movement < 0 ? 'down' : 'even';
+      const marker = movement > 0 ? '▲' : movement < 0 ? '▼' : '•';
+      chanceCopy.append(element('small', `chance-change is-${direction}`, `${marker} ${movement > 0 ? '+' : ''}${movement.toFixed(2)} pts from opening`));
+    }
+    chance.append(chanceCopy);
     if (data.win_probability != null) { const track = element('i'); const fill = element('b'); fill.style.width = `${Math.max(0, Math.min(100, Number(data.win_probability)))}%`; track.append(fill); chance.append(track); }
     const gameCounts = element('div', 'command-game-counts'); [['playing', data.playing], ['left', data.left], ['final', data.final]].forEach(([label,value]) => gameCounts.append(element('span', '', `${value} ${label}`)));
     matchup.append(scoreHead, scoreLine, projection, chance, gameCounts); body.append(matchup);

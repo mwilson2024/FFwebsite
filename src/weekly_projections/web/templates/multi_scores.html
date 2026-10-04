@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="csrf-token" content="{{ session.csrf_token }}">
+  <title>Multi-league live scores</title>
+  <link rel="stylesheet" href="/static/app.css?v=20260927-command">
+  <link rel="stylesheet" href="/static/workspace.css?v=3">
+  <link rel="stylesheet" href="/static/multi-scores.css?v=1">
+  <link rel="stylesheet" href="/static/lions.css?v=1">
+  <script src="/static/multi-scores.js?v=1" defer></script>
+  {% include '_theme_assets.html' %}
+</head>
+<body class="gameday-page">
+  {% set active_tool = 'scores' %}{% include '_league_header.html' %}
+  <main class="multi-score-shell" id="main-content" data-multi-score-board>
+    <section class="multi-score-hero">
+      <div>
+        <p class="eyebrow">EVERY LEAGUE · LIVE TOGETHER</p>
+        <h1>Multi-league live scores</h1>
+        <p>Track your matchups—or every matchup—from all connected leagues in one window.</p>
+        <nav class="score-view-switch" aria-label="Score view">
+          <a href="/scores?league={{ league.id }}">Matchup</a>
+          <a href="/scores?league={{ league.id }}&amp;view=all">League scores</a>
+          <a class="active" href="/scores?league={{ league.id }}&amp;view=multi">Multi-league</a>
+        </nav>
+      </div>
+      <div class="multi-score-live-status" aria-live="polite">
+        <strong id="multi-live-count">—</strong>
+        <span>live matchups</span>
+        <small id="multi-score-status">Loading leagues…</small>
+      </div>
+    </section>
+    <div class="multi-score-toolbar">
+      <div role="group" aria-label="Choose games to display">
+        <button type="button" class="active" data-multi-scope="mine" aria-pressed="true">My matchups</button>
+        <button type="button" data-multi-scope="all" aria-pressed="false">All league matchups</button>
+      </div>
+      <button type="button" class="multi-score-refresh" id="multi-score-refresh">Refresh scores</button>
+    </div>
+    <div class="multi-score-leagues">
+      {% for item in leagues %}
+      <section class="multi-score-league is-loading" data-multi-league="{{ item.id }}">
+        <header><div><p>LEAGUE {{ item.id }}</p><h2>{{ item.name }}</h2></div><span>Loading…</span></header>
+        <div class="multi-score-matchups"><div class="multi-score-skeleton" aria-label="Loading live scores"></div></div>
+      </section>
+      {% endfor %}
+    </div>
+    <p class="multi-score-empty" id="multi-score-empty" hidden>No matchups match this view.</p>
+    <p class="multi-score-disclosure">Scores and player totals are official MFL league scoring. Win percentages and projected finishes are Fantasy HQ estimates. Live leagues refresh once per minute while this tab is visible.</p>
+  </main>
+</body>
+</html>

@@ -5,6 +5,20 @@
   background: rgba(255, 255, 255, .035);
 }
 
+.command-chance-copy {
+  display: grid;
+  gap: .12rem;
+}
+
+.chance-change {
+  color: var(--muted, #91a9cb);
+  font-size: .62rem;
+  font-weight: 800;
+}
+
+.chance-change.is-up { color: #25cf83; }
+.chance-change.is-down { color: #ff7d86; }
+
 .command-live-teams {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

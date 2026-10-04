@@ -51,3 +51,18 @@ def test_command_center_loads_leagues_sequentially():
     assert "data-command-filter" in template
     assert "command-action-count" in template
     assert "Core data loads first; transaction queues follow." in template
+
+
+def test_multi_scores_loads_leagues_sequentially_and_pauses_hidden_tabs():
+    script = (ROOT / "src" / "weekly_projections" / "web" / "static" / "multi-scores.js").read_text(
+        encoding="utf-8"
+    )
+    template = (ROOT / "src" / "weekly_projections" / "web" / "templates" / "multi_scores.html").read_text(
+        encoding="utf-8"
+    )
+    assert "for (const league of leagues)" in script
+    assert "Promise.all" not in script
+    assert "document.hidden" in script and "visibilitychange" in script
+    assert "window.setTimeout(loadAll, 60000)" in script
+    assert "data-multi-scope=\"mine\"" in template
+    assert "data-multi-scope=\"all\"" in template

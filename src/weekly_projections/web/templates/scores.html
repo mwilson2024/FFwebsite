@@ -16,7 +16,7 @@
   {% set active_tool = 'scores' %}{% include '_league_header.html' %}
   <main class="gameday-shell" id="main-content">
     <div class="gameday-toolbar">
-      <div><p class="eyebrow">GAME DAY</p><h1>{{ 'League scoreboard' if score_view == 'all' else 'Matchup' }}</h1><nav class="score-view-switch" aria-label="Score view"><a class="{{ 'active' if score_view == 'matchup' else '' }}" href="/scores?league={{ league.id }}&week={{ week }}">Matchup</a><a class="{{ 'active' if score_view == 'all' else '' }}" href="/scores?league={{ league.id }}&week={{ week }}&view=all">All scores</a></nav></div>
+      <div><p class="eyebrow">GAME DAY</p><h1>{{ 'League scoreboard' if score_view == 'all' else 'Matchup' }}</h1><nav class="score-view-switch" aria-label="Score view"><a class="{{ 'active' if score_view == 'matchup' else '' }}" href="/scores?league={{ league.id }}&week={{ week }}">Matchup</a><a class="{{ 'active' if score_view == 'all' else '' }}" href="/scores?league={{ league.id }}&week={{ week }}&view=all">League scores</a><a href="/scores?league={{ league.id }}&view=multi">Multi-league</a></nav></div>
       <form class="week-picker score-filters" method="get" action="/scores">
         <input type="hidden" name="league" value="{{ league.id }}">
         <input type="hidden" name="view" value="{{ score_view }}">
