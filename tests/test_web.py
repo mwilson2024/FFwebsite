@@ -1886,6 +1886,18 @@ def test_lineup_page_shows_start_sit_recommendations(monkeypatch) -> None:
     assert 'data-player-card="p1"' in response.text
     assert 'id="use-recommended"' in response.text
     assert "20260915-matchup-context" in response.text
+    assert "ONE-TIME QUESTION" in response.text
+    assert "Yes, protect my lineup" in response.text
+
+    current = web_app.sessions[session_id]
+    current.emergency_lineup_prompted.add(league.id)
+    current.emergency_lineup_modes[league.id] = "priority"
+    current.emergency_lineup_priorities[league.id] = ("p1",)
+    answered = client.get("/lineup?league=11111")
+    assert "ONE-TIME QUESTION" not in answered.text
+    assert "PREGAME SAFEGUARD" in answered.text
+    assert "Preferred replacement order" in answered.text
+    assert 'value="p1"' in answered.text
 
 
 def test_incomplete_lineup_preview_url_redirects_safely() -> None:
@@ -1899,6 +1911,41 @@ def test_incomplete_lineup_preview_url_redirects_safely() -> None:
     response = client.get("/lineup/preview", follow_redirects=False)
     assert response.status_code == 303
     assert response.headers["location"] == "/dashboard"
+
+
+def test_emergency_lineup_question_saves_once_and_moves_to_persistent_settings(monkeypatch) -> None:
+    web_app.sessions.clear()
+    league = MFLLeague("11111", "0001", "Home League")
+    current = web_app.BrowserSession(
+        "cookie", 2026, [league], "csrf", owner_fingerprint="account:owner",
+    )
+    web_app.sessions["emergency-choice-session"] = current
+    saved = {}
+
+    class ChoiceStore:
+        def connection_status(self): return {"schema_version": 11}
+        def save_emergency_lineup_preference(self, owner, **values): saved.update(values)
+
+    monkeypatch.setattr(web_app, "_persistent_store", lambda: ChoiceStore())
+    monkeypatch.setattr(web_app, "_ensure_push_worker", lambda: None)
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", "emergency-choice-session")
+
+    response = client.post(
+        "/preferences/emergency-lineup",
+        data={
+            "csrf_token": "csrf", "league": league.id, "week": "3",
+            "decision": "yes", "replacement_mode": "projection",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert league.id in current.emergency_lineup_leagues
+    assert league.id in current.emergency_lineup_prompted
+    assert saved["enabled"] is True
+    assert saved["prompt_answered"] is True
+    assert saved["replacement_mode"] == "projection"
 
 
 def test_lineup_global_reads_are_shared_across_leagues(monkeypatch) -> None:
@@ -2426,10 +2473,13 @@ def test_five_minute_emergency_submit_changes_only_out_starter(monkeypatch):
         "cookie", 2026, [league], "csrf", owner_fingerprint="account:owner",
     )
     current.emergency_lineup_leagues.add(league.id)
+    current.emergency_lineup_modes[league.id] = "priority"
+    current.emergency_lineup_priorities[league.id] = ("backup", "higher")
     roster = {
         "qb": MFLPlayer("qb", "Healthy QB", "QB", "BUF"),
         "out": MFLPlayer("out", "Out Receiver", "WR", "DET"),
         "backup": MFLPlayer("backup", "Healthy Backup", "WR", "DET"),
+        "higher": MFLPlayer("higher", "Higher Projection", "WR", "DET"),
         "otherqb": MFLPlayer("otherqb", "Tempting QB", "QB", "KC"),
     }
 
@@ -2439,14 +2489,14 @@ def test_five_minute_emergency_submit_changes_only_out_starter(monkeypatch):
         def roster_ids(self): return set(roster)
         def named_players(self, ids): return [roster[player_id] for player_id in ids]
         def player_roster_statuses(self, ids, *, week):
-            return {"qb": "S", "out": "S", "backup": "NS", "otherqb": "NS"}
+            return {"qb": "S", "out": "S", "backup": "NS", "higher": "NS", "otherqb": "NS"}
         def lineup_settings(self):
             return MFLLineupSettings(2, (MFLLineupRule("QB", 1, 1), MFLLineupRule("WR", 1, 1)))
         def nfl_team_kickoffs(self, *, week):
             return {"DET": kickoff, "BUF": now + 3600, "KC": now + 3600}
         def injuries(self, *, week): return {"out": MFLInjury("out", "Out", "Inactive")}
         def projected_scores(self, *, week, player_ids):
-            return {"qb": 12, "out": 18, "backup": 9, "otherqb": 40}
+            return {"qb": 12, "out": 18, "backup": 9, "higher": 15, "otherqb": 40}
         def submit_lineup(self, *, week, starter_ids, comments):
             self.submitted.append(set(starter_ids))
             return {"status": "OK"}

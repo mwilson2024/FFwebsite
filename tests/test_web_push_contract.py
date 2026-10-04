@@ -24,6 +24,17 @@ def test_emergency_lineup_migration_requires_opt_in_and_guards_duplicate_writes(
     assert "values (10, 'Emergency lineup opt-in and idempotency guard')" in sql
 
 
+def test_emergency_choice_migration_is_private_and_preserves_order():
+    sql = (ROOT / "supabase" / "migrations" / "011_emergency_lineup_choices.sql").read_text(encoding="utf-8")
+    assert "prompt_answered boolean not null default false" in sql
+    assert "replacement_mode text not null default 'projection'" in sql
+    assert "primary key (user_id, season, league_id, player_id)" in sql
+    assert "unique (user_id, season, league_id, priority)" in sql
+    assert "enable row level security" in sql
+    assert "revoke all" in sql
+    assert "values (11, 'Emergency lineup onboarding and player priority')" in sql
+
+
 def test_service_worker_handles_background_push_and_safe_internal_navigation():
     script = (ROOT / "src" / "weekly_projections" / "web" / "static" / "service-worker.js").read_text(encoding="utf-8")
     assert "addEventListener('push'" in script

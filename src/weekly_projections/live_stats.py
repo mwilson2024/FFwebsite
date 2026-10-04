@@ -35,6 +35,9 @@ EVENTS = {
     "FC": ("teamDefense", "fumblesRecovered", "Fumbles recovered"),
     "IC": ("teamDefense", "interceptions", "Interceptions caught"),
     "SK": ("teamDefense", "sacks", "Sacks"),
+    "SF": ("teamDefense", "safeties", "Safeties"),
+    "PA": ("teamDefense", "pointsAllowed", "Points allowed"),
+    "#DT": ("teamDefense", "touchdowns", "Defensive/special-teams TDs"),
 }
 STAT_FIELDS = {
     "passing": [("completions/passingAttempts", "C/ATT"), ("passingYards", "pass yds"), ("passingTouchdowns", "pass TD"), ("interceptions", "INT")],
@@ -47,6 +50,42 @@ STAT_FIELDS = {
     "kickReturns": [("kickReturnYards", "kick ret yds"), ("kickReturnTouchdowns", "kick ret TD")],
     "puntReturns": [("puntReturnYards", "punt ret yds"), ("puntReturnTouchdowns", "punt ret TD")],
 }
+
+
+def _is_team_defense(player: MFLPlayer) -> bool:
+    return player.position.upper().replace("D/ST", "DEF") in {"DEF", "DST"}
+
+
+def _play_team(play: dict) -> str:
+    team = play.get("team") if isinstance(play.get("team"), dict) else {}
+    return str(team.get("abbreviation") or "").upper()
+
+
+def _scoring_play_text(play: dict) -> str:
+    scoring = play.get("scoringType") if isinstance(play.get("scoringType"), dict) else {}
+    play_type = play.get("type") if isinstance(play.get("type"), dict) else {}
+    return " ".join((
+        str(scoring.get("name") or ""),
+        str(scoring.get("abbreviation") or ""),
+        str(play_type.get("text") or ""),
+        str(play_type.get("abbreviation") or ""),
+        str(play.get("text") or ""),
+    )).casefold()
+
+
+def _is_touchdown(play: dict) -> bool:
+    text = _scoring_play_text(play)
+    return "touchdown" in text or bool(re.search(r"(?:^|\s)td(?:\s|$)", text))
+
+
+def _is_defense_or_special_teams_touchdown(play: dict) -> bool:
+    if not _is_touchdown(play):
+        return False
+    text = _scoring_play_text(play)
+    return any(marker in text for marker in (
+        "interception", "fumble return", "kickoff return", "kick return",
+        "punt return", "blocked punt", "blocked field goal", "missed field goal return",
+    ))
 
 
 @lru_cache(maxsize=128)
@@ -81,9 +120,10 @@ def parse_boxscore(payload: dict, player: MFLPlayer, year: int, week: int) -> di
         parts = [f"{values[key]} {label}" for key, label in fields if key in values and values[key] not in {"--", "-", ""}]
         if parts:
             lines.append(" · ".join(parts))
-    # D/ST has no athlete ID. Show team-game facts, without treating opponent
-    # points as fantasy points allowed (MFL can exclude offensive return TDs).
-    if player.position.upper() in {"DEF", "DST"}:
+    # D/ST has no athlete ID. Build its supported live scoring inputs from the
+    # opponent team stats, scoreboard and ESPN scoring plays. MFL remains the
+    # final authority and the endpoint reports any postgame discrepancy.
+    if _is_team_defense(player):
         team_code = TEAM_ALIASES.get(player.team.upper(), player.team.upper())
         competitors = competitions[0].get("competitors", [])
         own = next((t for t in competitors if t.get("team", {}).get("abbreviation") == team_code), None)
@@ -100,8 +140,28 @@ def parse_boxscore(payload: dict, player: MFLPlayer, year: int, week: int) -> di
             sacks = re.fullmatch(r"(\d+(?:\.\d+)?)-\d+", opponent_stats.get("sacksYardsLost", ""))
             if sacks:
                 defense["sacks"] = sacks[1]
+            opponent_score = str(other.get("score", "")).strip()
+            if re.fullmatch(r"\d+", opponent_score):
+                defense["pointsAllowed"] = opponent_score
+            own_scoring_plays = [
+                play for play in payload.get("scoringPlays", [])
+                if isinstance(play, dict) and _play_team(play) == team_code
+            ]
+            defense["safeties"] = str(sum(
+                "safety" in _scoring_play_text(play) for play in own_scoring_plays
+            ))
+            defense["touchdowns"] = str(sum(
+                _is_defense_or_special_teams_touchdown(play) for play in own_scoring_plays
+            ))
             categories["teamDefense"] = defense
-            parts = [f"{defense[key]} {label}" for key, label in [("sacks", "sacks"), ("interceptions", "INT"), ("fumblesRecovered", "fumbles recovered")] if key in defense]
+            parts = [f"{defense[key]} {label}" for key, label in [
+                ("sacks", "sacks"),
+                ("interceptions", "INT"),
+                ("fumblesRecovered", "fumbles recovered"),
+                ("safeties", "safeties"),
+                ("touchdowns", "D/ST TD"),
+                ("pointsAllowed", "points allowed"),
+            ] if key in defense]
             if parts:
                 lines.insert(0, " · ".join(parts))
     if not lines:
@@ -113,7 +173,7 @@ def parse_boxscore(payload: dict, player: MFLPlayer, year: int, week: int) -> di
 
 
 def weekly_boxscore(player: MFLPlayer, year: int, week: int) -> dict | None:
-    if not player.espn_id.isdecimal() and player.position.upper() not in {"DEF", "DST"}:
+    if not player.espn_id.isdecimal() and not _is_team_defense(player):
         return None
     bucket = int(time.monotonic() // 60)
     board = _public_json("scoreboard", (("dates", year), ("seasontype", 2), ("week", week)), bucket)
@@ -186,13 +246,9 @@ def _touchdown_matches_player(play: dict, player: MFLPlayer) -> bool:
         or "touchdown" in str(play_type.get("text", "")).casefold()
     ):
         return False
-    if player.position.upper() in {"DEF", "DST", "D/ST"}:
+    if _is_team_defense(player):
         team = TEAM_ALIASES.get(player.team.upper(), player.team.upper())
-        play_team = play.get("team") if isinstance(play.get("team"), dict) else {}
-        kind = str(play_type.get("text", "")).casefold()
-        return play_team.get("abbreviation") == team and any(
-            marker in kind for marker in ("interception", "fumble", "return", "blocked")
-        )
+        return _play_team(play) == team and _is_defense_or_special_teams_touchdown(play)
     athlete_ids = set()
     for involved in play.get("athletesInvolved") or []:
         if not isinstance(involved, dict):
@@ -279,7 +335,7 @@ def parse_touchdown_clips(
 
 def weekly_touchdown_clips(player: MFLPlayer, year: int, week: int) -> dict | None:
     """Load touchdown cards lazily for one player and week."""
-    if not player.espn_id.isdecimal() and player.position.upper() not in {"DEF", "DST", "D/ST"}:
+    if not player.espn_id.isdecimal() and not _is_team_defense(player):
         return None
     bucket = int(time.monotonic() // 60)
     board = _public_json("scoreboard", (("dates", year), ("seasontype", 2), ("week", week)), bucket)
@@ -311,7 +367,8 @@ def scoring_components(boxscore: dict, rules: dict, position: str) -> list[dict]
     groups = rules.get("positionRules", [])
     if isinstance(groups, dict):
         groups = [groups]
-    position = {"K": "PK", "DST": "DEF"}.get(position.upper(), position.upper())
+    normalized_position = position.upper().replace("D/ST", "DEF")
+    position = {"K": "PK", "DST": "DEF"}.get(normalized_position, normalized_position)
     result = []
     for group in groups:
         if position not in _text(group.get("positions", "")).upper().split("|"):

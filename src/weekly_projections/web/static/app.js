@@ -812,6 +812,34 @@
     }, { rootMargin: "0px 0px -150px 0px" }).observe(moveBuilder);
   }
 
+  const emergencyPriority = document.querySelector('[data-emergency-priority]');
+  const emergencyModeInputs = [...document.querySelectorAll('input[name="replacement_mode"]')];
+  const syncEmergencyPriority = () => {
+    if (!emergencyPriority) return;
+    emergencyPriority.hidden = !emergencyModeInputs.some(input => input.checked && input.value === 'priority');
+    const rows = [...emergencyPriority.querySelectorAll('[data-priority-player]')];
+    rows.forEach((row, index) => {
+      const up = row.querySelector('[data-priority-up]');
+      const down = row.querySelector('[data-priority-down]');
+      if (up) up.disabled = index === 0;
+      if (down) down.disabled = index === rows.length - 1;
+    });
+  };
+  emergencyModeInputs.forEach(input => input.addEventListener('change', syncEmergencyPriority));
+  emergencyPriority?.addEventListener('click', event => {
+    const button = event.target.closest('[data-priority-up],[data-priority-down]');
+    if (!button) return;
+    const row = button.closest('[data-priority-player]');
+    if (button.hasAttribute('data-priority-up') && row.previousElementSibling) {
+      row.parentElement.insertBefore(row, row.previousElementSibling);
+    } else if (button.hasAttribute('data-priority-down') && row.nextElementSibling) {
+      row.parentElement.insertBefore(row.nextElementSibling, row);
+    }
+    syncEmergencyPriority();
+    button.focus();
+  });
+  syncEmergencyPriority();
+
   const lineupForm = document.querySelector("#lineup-form");
   if (lineupForm) {
     const requiredStarters = Number(lineupForm.dataset.starterCount || 0);

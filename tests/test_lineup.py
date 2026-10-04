@@ -147,3 +147,70 @@ def test_emergency_plan_fails_closed_when_only_replacement_is_locked():
     )
 
     assert injury_replacement_plan(recommendation, settings, {"out"}) is None
+
+
+def test_emergency_plan_uses_owner_priority_before_projection():
+    settings = MFLLineupSettings(1, (MFLLineupRule("WR", 1, 1),))
+    recommendation = recommend_lineup(
+        roster=[
+            MFLPlayer("out", "Out", "WR"),
+            MFLPlayer("favorite", "Preferred Backup", "WR"),
+            MFLPlayer("higher", "Higher Projection", "WR"),
+        ],
+        settings=settings,
+        projections={"out": 18, "favorite": 7, "higher": 14},
+        roster_statuses={"out": "S", "favorite": "NS", "higher": "NS"},
+        injuries={"out": MFLInjury("out", "Out", "")},
+    )
+
+    plan = injury_replacement_plan(
+        recommendation, settings, {"out"}, ["favorite", "higher"],
+    )
+
+    assert plan is not None
+    assert plan.starter_ids == {"favorite"}
+    assert [item.player.id for item in plan.unavailable[0].candidates] == ["favorite", "higher"]
+
+
+def test_emergency_plan_reassigns_healthy_flex_rb_to_replace_out_rb():
+    settings = MFLLineupSettings(
+        starter_count=3,
+        rules=(
+            MFLLineupRule("RB", 1, 2),
+            MFLLineupRule("WR", 1, 2),
+        ),
+    )
+    recommendation = recommend_lineup(
+        roster=[
+            MFLPlayer("out-rb", "Out Starting Runner", "RB"),
+            MFLPlayer("flex-rb", "Healthy Flex Runner", "RB"),
+            MFLPlayer("starting-wr", "Healthy Starting Receiver", "WR"),
+            MFLPlayer("bench-wr", "Preferred Bench Receiver", "WR"),
+            MFLPlayer("bench-rb", "Lower Rated Bench Runner", "RB"),
+        ],
+        settings=settings,
+        projections={
+            "out-rb": 18,
+            "flex-rb": 15,
+            "starting-wr": 14,
+            "bench-wr": 13,
+            "bench-rb": 8,
+        },
+        roster_statuses={
+            "out-rb": "S",
+            "flex-rb": "S",
+            "starting-wr": "S",
+            "bench-wr": "NS",
+            "bench-rb": "NS",
+        },
+        injuries={"out-rb": MFLInjury("out-rb", "Out", "")},
+    )
+
+    plan = injury_replacement_plan(recommendation, settings, {"out-rb"})
+
+    assert plan is not None
+    assert plan.starter_ids == {"flex-rb", "starting-wr", "bench-wr"}
+    assert [item.player.id for item in plan.unavailable[0].candidates] == [
+        "bench-wr",
+        "bench-rb",
+    ]

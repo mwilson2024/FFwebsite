@@ -557,6 +557,9 @@ class BrowserSession:
     theme_scope: str = "global"
     league_themes: dict[str, str] = field(default_factory=dict)
     emergency_lineup_leagues: set[str] = field(default_factory=set)
+    emergency_lineup_prompted: set[str] = field(default_factory=set)
+    emergency_lineup_modes: dict[str, str] = field(default_factory=dict)
+    emergency_lineup_priorities: dict[str, tuple[str, ...]] = field(default_factory=dict)
     default_league_id: str = ""
     onboarding_complete: bool = False
     ranking_setup_complete: bool = False
@@ -763,20 +766,44 @@ def _database_league_themes(owner_fingerprint: str, year: int) -> dict[str, str]
         return {}
 
 
-def _database_emergency_lineup_preferences(
+def _database_emergency_lineup_settings(
     owner_fingerprint: str, year: int,
-) -> set[str]:
+) -> dict[str, dict]:
     if not owner_fingerprint or not os.environ.get("WP_DATABASE_URL", "").strip():
-        return set()
+        return {}
     try:
-        return _persistent_store().load_emergency_lineup_preferences(
+        return _persistent_store().load_emergency_lineup_settings(
             owner_fingerprint, year=year,
         )
     except Exception as error:
         # This automation must fail closed when migration 010 is absent or the
         # database cannot provide its durable no-retry guard.
         log_error("emergency_lineup_preference_restore_failed", error)
-        return set()
+        return {}
+
+
+def _apply_emergency_lineup_settings(
+    current: BrowserSession, settings: dict[str, dict],
+) -> None:
+    available = {league.id for league in current.leagues}
+    current.emergency_lineup_leagues = {
+        league_id for league_id, preference in settings.items()
+        if league_id in available and bool(preference.get("enabled"))
+    }
+    current.emergency_lineup_prompted = {
+        league_id for league_id, preference in settings.items()
+        if league_id in available and bool(preference.get("prompt_answered"))
+    }
+    current.emergency_lineup_modes = {
+        league_id: str(preference.get("mode") or "projection")
+        for league_id, preference in settings.items()
+        if league_id in available and str(preference.get("mode") or "projection") in {"projection", "priority"}
+    }
+    current.emergency_lineup_priorities = {
+        league_id: tuple(str(player_id) for player_id in preference.get("priority", ()))
+        for league_id, preference in settings.items()
+        if league_id in available
+    }
 
 
 def _database_watchlists(owner_fingerprint: str, year: int) -> dict[str, set[str]]:
@@ -1908,8 +1935,11 @@ def _session(request: Request) -> BrowserSession | None:
                 cookie_league=request.cookies.get("wp_last_league", ""),
                 league_themes=_database_league_themes(restored.owner_fingerprint, restored.year),
             )
-            restored.emergency_lineup_leagues = _database_emergency_lineup_preferences(
-                restored.owner_fingerprint, restored.year,
+            _apply_emergency_lineup_settings(
+                restored,
+                _database_emergency_lineup_settings(
+                    restored.owner_fingerprint, restored.year,
+                ),
             )
             restored.watchlists = _database_watchlists(restored.owner_fingerprint, restored.year)
             restored.remember_token = remember_token
@@ -4165,8 +4195,11 @@ def login(
             cookie_league=request.cookies.get("wp_last_league", ""),
             league_themes=_database_league_themes(current.owner_fingerprint, current.year),
         )
-        current.emergency_lineup_leagues = _database_emergency_lineup_preferences(
-            current.owner_fingerprint, current.year,
+        _apply_emergency_lineup_settings(
+            current,
+            _database_emergency_lineup_settings(
+                current.owner_fingerprint, current.year,
+            ),
         )
         current.watchlists = _database_watchlists(current.owner_fingerprint, current.year)
         persistent_leagues = [
@@ -4502,14 +4535,24 @@ def _submit_emergency_lineup(
         unavailable = _upcoming_out_starter_ids(
             recommendation, games, maximum_seconds=5 * 60, kickoff=kickoff,
         )
-        plan = injury_replacement_plan(recommendation, settings, unavailable)
+        replacement_mode = current.emergency_lineup_modes.get(league.id, "projection")
+        priority = (
+            current.emergency_lineup_priorities.get(league.id, ())
+            if replacement_mode == "priority" else ()
+        )
+        plan = injury_replacement_plan(
+            recommendation, settings, unavailable, priority,
+        )
         if plan is None:
             return {"status": "none", "message": "No legal emergency replacement was needed."}
         removed = set(recommendation.current_starters) - set(plan.starter_ids)
         added = set(plan.starter_ids) - set(recommendation.current_starters)
         if removed != unavailable or len(added) != len(removed):
             raise ValueError("The emergency plan would change more than the unavailable starters")
-        if any(player_id not in projections for player_id in added):
+        if any(
+            player_id not in projections and player_id not in priority
+            for player_id in added
+        ):
             raise ValueError("MFL has no projection for a legal emergency replacement")
 
         # Re-read every mutable safety input immediately before claiming the
@@ -4862,6 +4905,9 @@ def save_emergency_lineup_preference(
     league: str = Form(...),
     week: int = Form(...),
     enabled: str = Form(""),
+    decision: str = Form(""),
+    replacement_mode: str = Form("projection"),
+    priority_ids: list[str] = Form(default=[]),
     csrf_token: str = Form(...),
 ):
     current = _require_session(request)
@@ -4869,23 +4915,40 @@ def save_emergency_lineup_preference(
     selected = _league(current, league)
     if not 1 <= week <= 18:
         raise HTTPException(status_code=400, detail="Choose a valid week")
-    turn_on = enabled == "1"
+    if decision not in {"", "yes", "no"}:
+        raise HTTPException(status_code=400, detail="Choose yes or no")
+    if replacement_mode not in {"projection", "priority"}:
+        raise HTTPException(status_code=400, detail="Choose a valid replacement mode")
+    turn_on = decision == "yes" or (not decision and enabled == "1")
+    prompt_answered = bool(decision) or selected.id in current.emergency_lineup_prompted
     try:
         store = _persistent_store()
-        if int(store.connection_status().get("schema_version") or 0) < 10:
-            raise RuntimeError("Apply Supabase migration 010 before enabling emergency lineups")
+        if int(store.connection_status().get("schema_version") or 0) < 11:
+            raise RuntimeError("Apply Supabase migration 011 before saving emergency lineup choices")
+        if priority_ids:
+            client = _client(current, selected)
+            roster_ids = _cached_session_read(
+                current, selected.id, f"roster:{selected.franchise_id}",
+                client.roster_ids, ttl=30, stale_ttl=300,
+            )
+            priority_ids = list(dict.fromkeys(priority_ids))
+            if not set(priority_ids) <= set(roster_ids):
+                raise ValueError("The emergency priority contains a player who is no longer on the roster")
         store.save_emergency_lineup_preference(
             current.owner_fingerprint,
             year=current.year,
             league_id=selected.id,
             enabled=turn_on,
+            prompt_answered=prompt_answered,
+            replacement_mode=replacement_mode,
+            priority_player_ids=priority_ids,
         )
     except Exception as error:
         log_error("emergency_lineup_preference_save_failed", error)
         query = urlencode({
             "league": selected.id,
             "week": week,
-            "error": "Emergency lineup protection could not be saved. Apply migration 010 and try again.",
+            "error": "Emergency lineup protection could not be saved. Apply migration 011 and try again.",
             "ref": request.state.error_reference,
         })
         return RedirectResponse(f"/lineup?{query}", status_code=303)
@@ -4894,10 +4957,16 @@ def save_emergency_lineup_preference(
         _ensure_push_worker()
     else:
         current.emergency_lineup_leagues.discard(selected.id)
+    if prompt_answered:
+        current.emergency_lineup_prompted.add(selected.id)
+    current.emergency_lineup_modes[selected.id] = replacement_mode
+    current.emergency_lineup_priorities[selected.id] = tuple(priority_ids)
     log_event(
         "emergency_lineup_preference_changed",
         league_id=selected.id,
         enabled=turn_on,
+        replacement_mode=replacement_mode,
+        priority_count=len(priority_ids),
     )
     query = urlencode({
         "league": selected.id,
@@ -6719,6 +6788,7 @@ def lineup_page(
     settings = None
     blend = ProjectionBlend(scores={}, mfl_scores={}, ml_scores={}, ml_matched=0)
     emergency_plan: InjuryReplacementPlan | None = None
+    emergency_priority_players = []
     try:
         week, recommendation, settings, blend = (
             _load_lineup(client, requested_week=requested_week, current=current)
@@ -6728,8 +6798,24 @@ def lineup_page(
         unavailable = _upcoming_out_starter_ids(
             recommendation, getattr(client, "week_games", {}), maximum_seconds=3600,
         )
+        replacement_mode = current.emergency_lineup_modes.get(selected.id, "projection")
+        saved_priority = current.emergency_lineup_priorities.get(selected.id, ())
         emergency_plan = injury_replacement_plan(
             recommendation, settings, unavailable,
+            saved_priority if replacement_mode == "priority" else (),
+        )
+        priority_rank = {player_id: index for index, player_id in enumerate(saved_priority)}
+        emergency_priority_players = sorted(
+            (
+                item for item in recommendation.players
+                if not item.currently_starting and item.roster_status not in {"IR", "TS"}
+            ),
+            key=lambda item: (
+                0 if item.player.id in priority_rank else 1,
+                priority_rank.get(item.player.id, 10_000),
+                -(item.projection if item.projection is not None else -999.0),
+                item.player.name.casefold(),
+            ),
         )
     except MFLApiError as caught:
         _log_provider_error_once(
@@ -6774,6 +6860,9 @@ def lineup_page(
             ) if recommendation else 0,
             "emergency_plan": emergency_plan,
             "emergency_auto_enabled": selected.id in current.emergency_lineup_leagues,
+            "emergency_prompt_answered": selected.id in current.emergency_lineup_prompted,
+            "emergency_replacement_mode": current.emergency_lineup_modes.get(selected.id, "projection"),
+            "emergency_priority_players": emergency_priority_players,
             "emergency_message": emergency if emergency in {"enabled", "disabled"} else "",
             "error": api_error,
         },

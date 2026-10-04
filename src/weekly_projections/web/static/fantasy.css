@@ -200,6 +200,23 @@
 .emergency-lineup-toggle { display:flex; flex-wrap:wrap; align-items:center; gap:.75rem 1rem; }
 .emergency-lineup-toggle label { display:flex; align-items:flex-start; gap:.6rem; flex:1 1 380px; font-weight:800; line-height:1.4; }
 .emergency-lineup-toggle input { width:1.2rem; height:1.2rem; margin-top:.08rem; accent-color:var(--site-accent,#ffcb05); }
+.emergency-lineup-choice { display:flex; flex-wrap:wrap; gap:.65rem; }
+.emergency-lineup-bottom { margin-top:1.25rem; }
+.emergency-lineup-settings-form { display:grid; gap:1rem; }
+.emergency-enabled-choice { display:flex; align-items:flex-start; gap:.6rem; font-weight:800; line-height:1.4; }
+.emergency-enabled-choice input,.emergency-mode-options input { width:1.15rem; height:1.15rem; accent-color:var(--site-accent,#ffcb05); }
+.emergency-mode-options { display:flex; flex-wrap:wrap; gap:.65rem 1.25rem; margin:0; padding:.85rem; border:1px solid var(--site-line,#365f8d); border-radius:10px; }
+.emergency-mode-options legend { padding:0 .35rem; font-weight:900; }
+.emergency-mode-options label { display:flex; align-items:center; gap:.45rem; }
+.emergency-priority-editor { display:grid; gap:.7rem; }
+.emergency-priority-editor[hidden] { display:none; }
+.emergency-priority-editor ol { display:grid; gap:.45rem; margin:0; padding:0; list-style:none; }
+.emergency-priority-editor li { display:flex; align-items:center; justify-content:space-between; gap:.75rem; min-height:54px; padding:.6rem .7rem; border:1px solid var(--site-line,#365f8d); border-radius:9px; background:var(--site-raised,#103b61); }
+.emergency-priority-editor li span:first-of-type { display:grid; gap:.15rem; }
+.emergency-priority-editor li small { color:var(--site-muted,#add5ff); }
+.priority-order-actions { display:flex; gap:.35rem; }
+.priority-order-actions button { width:42px; min-height:42px; border:1px solid var(--site-line,#365f8d); border-radius:8px; color:var(--site-text,#fff); background:transparent; font-weight:900; }
+.priority-order-actions button:disabled { opacity:.35; }
 .emergency-replacement-ranking { padding:.85rem; border:1px solid var(--site-line,#365f8d); border-radius:10px; background:var(--site-raised,#103b61); }
 .emergency-replacement-ranking ol { display:grid; gap:.45rem; margin:.65rem 0 0; padding-left:1.5rem; }
 .emergency-replacement-ranking li { padding-left:.2rem; }

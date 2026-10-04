@@ -8,10 +8,10 @@
   <title>{{ league.name }} · Lineup</title>
   <link rel="stylesheet" href="/static/app.css?v=20260915-matchup-context">
   <link rel="stylesheet" href="/static/workspace.css?v=2">
-  <link rel="stylesheet" href="/static/fantasy.css?v=20261004-emergency-lineup">
+  <link rel="stylesheet" href="/static/fantasy.css?v=20261004-emergency-choices">
   <link rel="stylesheet" href="/static/lions.css?v=1">
   <script src="/static/diagnostics.js" defer></script>
-  <script src="/static/app.js?v=20261004-emergency-lineup" defer></script>
+  <script src="/static/app.js?v=20261004-emergency-choices" defer></script>
   {% include '_theme_assets.html' %}
 </head>
 <body class="lineup-editor-page">
@@ -26,17 +26,20 @@
     </div>
     {% if error %}<div class="error" role="alert">{{ error }}{% include '_error_reference.html' %}</div>{% endif %}
     {% if emergency_message %}<div class="success" role="status">Emergency lineup protection is now {{ 'on for this league' if emergency_message == 'enabled' else 'off for this league' }}.</div>{% endif %}
-    <section class="emergency-lineup-setting" aria-labelledby="emergency-lineup-setting-title">
-      <div><span class="card-kicker">PREGAME SAFEGUARD</span><h2 id="emergency-lineup-setting-title">Emergency Out/Inactive replacement</h2><p>Fantasy HQ scans at 60, 30, and 5 minutes before kickoff. The first two checks alert only. At five minutes, this optional safeguard may submit one legal replacement without another review.</p></div>
-      <form method="post" action="/preferences/emergency-lineup" class="emergency-lineup-toggle">
+    {% if not emergency_prompt_answered %}
+    <section class="emergency-lineup-setting emergency-lineup-question" aria-labelledby="emergency-lineup-question-title">
+      <div><span class="card-kicker">ONE-TIME QUESTION</span><h2 id="emergency-lineup-question-title">Turn on emergency lineup protection for {{ league.name }}?</h2><p>Fantasy HQ checks at 60, 30, and 5 minutes before kickoff. At five minutes it can replace only an unlocked saved starter who is still listed Out or Inactive.</p></div>
+      <form method="post" action="/preferences/emergency-lineup" class="emergency-lineup-choice">
         <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
         <input type="hidden" name="league" value="{{ league.id }}">
         <input type="hidden" name="week" value="{{ week or 1 }}">
-        <label><input type="checkbox" name="enabled" value="1" {% if emergency_auto_enabled %}checked{% endif %}> Allow silent five-minute replacement for this league</label>
-        <button type="submit" class="secondary-button">Save safeguard</button>
+        <input type="hidden" name="replacement_mode" value="projection">
+        <button type="submit" name="decision" value="yes" class="editor-primary">Yes, protect my lineup</button>
+        <button type="submit" name="decision" value="no" class="secondary-button">No, not now</button>
       </form>
-      <p class="editor-note"><strong>Strict limit:</strong> only an unlocked saved starter newly listed Out or Inactive can be removed. Every healthy starter stays put, the highest-projected legal MFL bench option is used, and the write is attempted once with no retry.</p>
+      <p class="editor-note">You can change this later at the bottom of this page. Every healthy starter remains untouched and an MFL write is attempted only once.</p>
     </section>
+    {% endif %}
     {% if recommendation and settings %}
     <form method="post" action="/lineup/preview" id="lineup-form" data-starter-count="{{ settings.starter_count }}" data-slot-specs='{{ slot_specs|tojson }}' data-saved-visible="{{ 'true' if lineup_visible else 'false' }}">
       <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
@@ -108,6 +111,24 @@
         </section>
       </div>
     </form>
+    {% endif %}
+    {% if emergency_prompt_answered %}
+    <section class="emergency-lineup-setting emergency-lineup-bottom" aria-labelledby="emergency-lineup-setting-title">
+      <div><span class="card-kicker">PREGAME SAFEGUARD</span><h2 id="emergency-lineup-setting-title">Emergency Out/Inactive replacement</h2><p>60- and 30-minute checks alert only. At five minutes, this can submit one legal replacement without another review.</p></div>
+      <form method="post" action="/preferences/emergency-lineup" class="emergency-lineup-settings-form">
+        <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+        <input type="hidden" name="league" value="{{ league.id }}">
+        <input type="hidden" name="week" value="{{ week or 1 }}">
+        <label class="emergency-enabled-choice"><input type="checkbox" name="enabled" value="1" {% if emergency_auto_enabled %}checked{% endif %}> Allow silent five-minute replacement for this league</label>
+        <fieldset class="emergency-mode-options"><legend>How should Fantasy HQ choose the replacement?</legend><label><input type="radio" name="replacement_mode" value="projection" {% if emergency_replacement_mode != 'priority' %}checked{% endif %}> Highest MFL projection</label><label><input type="radio" name="replacement_mode" value="priority" {% if emergency_replacement_mode == 'priority' %}checked{% endif %}> My player priority</label></fieldset>
+        <div class="emergency-priority-editor" data-emergency-priority {% if emergency_replacement_mode != 'priority' %}hidden{% endif %}>
+          <div><strong>Preferred replacement order</strong><p>Use the arrow buttons to rank your current bench. Fantasy HQ may move an unlocked starter between legal position and FLEX slots to fit your preferred replacement, but every healthy starter stays in the lineup. Locked, unavailable, and illegal players are skipped automatically. New or unlisted players fall back to MFL projection order.</p></div>
+          {% if emergency_priority_players %}<ol>{% for item in emergency_priority_players %}<li data-priority-player><input type="hidden" name="priority_ids" value="{{ item.player.id }}"><span><b>{{ item.player.name }}</b><small>{{ item.player.position }} · {{ item.player.team }}{% if item.projection is not none %} · {{ '%.1f'|format(item.projection) }} projected{% endif %}</small></span><span class="priority-order-actions"><button type="button" data-priority-up aria-label="Move {{ item.player.name }} up">↑</button><button type="button" data-priority-down aria-label="Move {{ item.player.name }} down">↓</button></span></li>{% endfor %}</ol>{% else %}<p>No bench players are currently available to rank.</p>{% endif %}
+        </div>
+        <button type="submit" class="secondary-button">Save safeguard choices</button>
+      </form>
+      <p class="editor-note"><strong>Strict limit:</strong> only an unlocked saved starter listed Out or Inactive can be removed. Every healthy starter stays put, and the write is attempted once with no retry.</p>
+    </section>
     {% endif %}
   </main>
   {% include '_player_card.html' %}

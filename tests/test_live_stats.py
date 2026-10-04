@@ -115,6 +115,69 @@ def test_league_rules_include_receptions_yards_td_and_bonus_not_generic_ppr():
     assert scoring_components({"categories": {}}, sample_rules(), "WR") == []
 
 
+def test_team_defense_live_points_include_every_configured_league_rule():
+    payload = {
+        "header": {
+            "week": 4,
+            "season": {"year": 2026, "type": 2},
+            "competitions": [{
+                "status": {"type": {"state": "in", "completed": False}},
+                "competitors": [
+                    {"team": {"id": "8", "abbreviation": "DET"}, "score": "24"},
+                    {"team": {"id": "3", "abbreviation": "CHI"}, "score": "10"},
+                ],
+            }],
+        },
+        "boxscore": {
+            "players": [],
+            "teams": [{
+                "team": {"id": "3", "abbreviation": "CHI"},
+                "statistics": [
+                    {"name": "interceptions", "displayValue": "2"},
+                    {"name": "fumblesLost", "displayValue": "1"},
+                    {"name": "sacksYardsLost", "displayValue": "3-21"},
+                ],
+            }],
+        },
+        "scoringPlays": [
+            {
+                "text": "Detroit 35-yard interception return touchdown",
+                "type": {"text": "Interception Return Touchdown", "abbreviation": "TD"},
+                "scoringType": {"name": "Touchdown"},
+                "team": {"abbreviation": "DET"},
+            },
+            {
+                "text": "Quarterback tackled in end zone for a safety",
+                "type": {"text": "Safety"},
+                "scoringType": {"name": "Safety"},
+                "team": {"abbreviation": "DET"},
+            },
+        ],
+    }
+    rules = {"positionRules": {"positions": "DEF", "rule": [
+        {"event": "FC", "range": "0-10", "points": "*2"},
+        {"event": "IC", "range": "0-10", "points": "*2"},
+        {"event": "SK", "range": "0-25", "points": "*1"},
+        {"event": "SF", "range": "0-10", "points": "*2"},
+        {"event": "PA", "range": "8-11", "points": "2"},
+        {"event": "#DT", "range": "0-10", "points": "*6"},
+    ]}}
+
+    box = parse_boxscore(payload, MFLPlayer("DET", "Lions Defense", "D/ST", "DET"), 2026, 4)
+    components = scoring_components(box, rules, "D/ST")
+
+    assert box["categories"]["teamDefense"] == {
+        "interceptions": "2",
+        "fumblesRecovered": "1",
+        "sacks": "3",
+        "pointsAllowed": "10",
+        "safeties": "1",
+        "touchdowns": "1",
+    }
+    assert [row["points"] for row in components] == [2, 4, 3, 2, 2, 6]
+    assert sum(row["points"] for row in components) == 19
+
+
 def scoring_client(monkeypatch, status="starter", seconds=0):
     player = MFLPlayer("p", "Starter", "WR", "SEA", "123")
     item = SimpleNamespace(player_id="p", status=status, score=27.2, game_seconds_remaining=seconds)

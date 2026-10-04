@@ -239,11 +239,14 @@ def injury_replacement_plan(
     recommendation: LineupRecommendation,
     settings: MFLLineupSettings,
     unavailable_starter_ids: Iterable[str],
+    priority_player_ids: Iterable[str] = (),
 ) -> InjuryReplacementPlan | None:
     """Return the best legal replacements without optimizing healthy starters.
 
     This is deliberately stricter than :func:`recommend_lineup`. Every current
-    starter not explicitly named as unavailable is required to remain in place.
+    starter not explicitly named as unavailable is required to remain in the
+    starting lineup, although an unlocked healthy starter may be reassigned to
+    another legal position slot so the preferred bench replacement can start.
     Locked, IR/taxi, and severely injured bench players cannot be promoted.
     """
     unavailable_ids = set(unavailable_starter_ids) & set(recommendation.current_starters)
@@ -262,6 +265,17 @@ def injury_replacement_plan(
         for item in recommendation.players
         if item.projection is not None
     }
+    priority = tuple(dict.fromkeys(str(player_id) for player_id in priority_player_ids))
+    priority_rank = {player_id: index for index, player_id in enumerate(priority)}
+    replacement_scores = {
+        player.id: (
+            100_000.0 - priority_rank[player.id] * 1_000.0
+            + projections.get(player.id, -25.0) / 100.0
+            if player.id in priority_rank
+            else projections.get(player.id, -25.0)
+        )
+        for player in roster
+    }
     healthy_current = set(recommendation.current_starters) - unavailable_ids
     excluded = {
         item.player.id
@@ -275,7 +289,7 @@ def injury_replacement_plan(
     selected = _solve_lineup(
         [item.player for item in recommendation.players if item.roster_status not in {"IR", "TS"}],
         settings,
-        {player.id: projections.get(player.id, -25.0) for player in roster},
+        replacement_scores,
         set(recommendation.current_starters),
         required_starters=healthy_current,
         excluded_players=excluded,
@@ -303,12 +317,12 @@ def injury_replacement_plan(
                 candidates.append(
                     InjuryReplacementCandidate(candidate.player, candidate.projection)
                 )
-        candidates.sort(
-            key=lambda item: (
-                -(item.projection if item.projection is not None else -999.0),
-                item.player.name.casefold(),
-            )
-        )
+        candidates.sort(key=lambda item: (
+            0 if item.player.id in priority_rank else 1,
+            priority_rank.get(item.player.id, 10_000),
+            -(item.projection if item.projection is not None else -999.0),
+            item.player.name.casefold(),
+        ))
         unavailable.append(InjuryReplacement(out_row.player, tuple(candidates)))
 
     projected_total = sum(projections.get(player_id, 0.0) for player_id in selected)

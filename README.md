@@ -91,7 +91,7 @@ WP_SESSION_SECRET=<your generated Fernet key>
 ## Supabase PostgreSQL on Azure App Service
 
 The application can use the free Supabase PostgreSQL project instead of the
-SQLite remembered-session file. The database must contain schema migrations 1–10 in
+SQLite remembered-session file. The database must contain schema migrations 1–11 in
 the private `fantasy_hq` schema. When `WP_DATABASE_URL` is absent, local and
 existing Railway deployments continue to use SQLite without any behavior change.
 
@@ -228,6 +228,15 @@ retried. A private idempotency row is claimed first, so an uncertain response or
 app restart cannot repeat the transaction; a safe readback may verify the saved
 starters. Player identities are not stored in that audit row. This safeguard also
 requires the host to be awake and the authenticated MFL session to still be active.
+
+Apply [`supabase/migrations/011_emergency_lineup_choices.sql`](supabase/migrations/011_emergency_lineup_choices.sql)
+to add the one-time per-league yes/no prompt and replacement strategy. Before the
+owner answers, the question appears near the top of the Lineup page. After either
+answer it moves to the bottom as an editable setting. Owners may choose the highest
+MFL-projected legal replacement or maintain a private ordered bench list. A locked,
+injured, ineligible, or position-illegal preference is skipped; players not present
+in an older saved list fall back to projection order. The ordered player IDs stay in
+the private `fantasy_hq` schema and are not exposed to browser Data API roles.
 
 The same private cache also stores two league-independent public feeds: the
 detailed MFL player catalog and each week's NFL kickoff/opponent schedule. Those

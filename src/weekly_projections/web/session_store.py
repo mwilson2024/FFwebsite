@@ -473,20 +473,52 @@ class EncryptedSessionStore:
         self, owner_fingerprint: str, *, year: int,
     ) -> set[str]:
         """Return leagues with explicit five-minute lineup automation enabled."""
+        settings = self.load_emergency_lineup_settings(owner_fingerprint, year=year)
+        return {
+            league_id for league_id, preference in settings.items()
+            if preference["enabled"]
+        }
+
+    def load_emergency_lineup_settings(
+        self, owner_fingerprint: str, *, year: int,
+    ) -> dict[str, dict[str, Any]]:
+        """Load private per-league onboarding, mode, and player priority."""
         if not self.database_url or not owner_fingerprint:
-            return set()
+            return {}
         with self._connect_postgres() as connection:
             rows = connection.execute(
-                "SELECT preference.league_id "
+                "SELECT preference.league_id, preference.enabled, "
+                "preference.prompt_answered, preference.replacement_mode "
                 "FROM fantasy_hq.app_user AS app_user "
                 "JOIN fantasy_hq.emergency_lineup_preference AS preference "
                 "ON preference.user_id = app_user.id "
                 "WHERE app_user.owner_fingerprint_hash = %s "
-                "AND preference.season = %s AND preference.enabled = true "
+                "AND preference.season = %s "
                 "ORDER BY preference.league_id",
                 (self._digest_bytes(owner_fingerprint), int(year)),
             ).fetchall()
-        return {str(row[0]) for row in rows}
+            priority_rows = connection.execute(
+                "SELECT priority.league_id, priority.player_id "
+                "FROM fantasy_hq.app_user AS app_user "
+                "JOIN fantasy_hq.emergency_lineup_priority AS priority "
+                "ON priority.user_id = app_user.id "
+                "WHERE app_user.owner_fingerprint_hash = %s "
+                "AND priority.season = %s "
+                "ORDER BY priority.league_id, priority.priority",
+                (self._digest_bytes(owner_fingerprint), int(year)),
+            ).fetchall()
+        priorities: dict[str, list[str]] = {}
+        for league_id, player_id in priority_rows:
+            priorities.setdefault(str(league_id), []).append(str(player_id))
+        return {
+            str(league_id): {
+                "enabled": bool(enabled),
+                "prompt_answered": bool(prompt_answered),
+                "mode": str(mode),
+                "priority": tuple(priorities.get(str(league_id), [])),
+            }
+            for league_id, enabled, prompt_answered, mode in rows
+        }
 
     def save_emergency_lineup_preference(
         self,
@@ -495,21 +527,48 @@ class EncryptedSessionStore:
         year: int,
         league_id: str,
         enabled: bool,
+        prompt_answered: bool = True,
+        replacement_mode: str = "projection",
+        priority_player_ids: list[str] | tuple[str, ...] = (),
     ) -> None:
         if not self.database_url:
             raise RuntimeError("PostgreSQL is required for emergency lineup automation")
         if not str(league_id).isdecimal() or not 2020 <= int(year) <= 2100:
             raise ValueError("A valid MFL league and season are required")
+        if replacement_mode not in {"projection", "priority"}:
+            raise ValueError("Choose a valid emergency replacement mode")
+        priority = tuple(dict.fromkeys(str(player_id) for player_id in priority_player_ids))
+        if len(priority) > 64 or any(
+            not re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", player_id)
+            for player_id in priority
+        ):
+            raise ValueError("The emergency player priority is invalid")
         with self._connect_postgres() as connection:
             user_id = self._postgres_user_id(connection, owner_fingerprint)
             connection.execute(
                 "INSERT INTO fantasy_hq.emergency_lineup_preference "
-                "(user_id, season, league_id, enabled, updated_at) "
-                "VALUES (%s, %s, %s, %s, now()) "
+                "(user_id, season, league_id, enabled, prompt_answered, replacement_mode, updated_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, now()) "
                 "ON CONFLICT (user_id, season, league_id) DO UPDATE SET "
-                "enabled = excluded.enabled, updated_at = now()",
-                (user_id, int(year), str(league_id), bool(enabled)),
+                "enabled = excluded.enabled, prompt_answered = excluded.prompt_answered, "
+                "replacement_mode = excluded.replacement_mode, updated_at = now()",
+                (
+                    user_id, int(year), str(league_id), bool(enabled),
+                    bool(prompt_answered), replacement_mode,
+                ),
             )
+            connection.execute(
+                "DELETE FROM fantasy_hq.emergency_lineup_priority "
+                "WHERE user_id = %s AND season = %s AND league_id = %s",
+                (user_id, int(year), str(league_id)),
+            )
+            for index, player_id in enumerate(priority, start=1):
+                connection.execute(
+                    "INSERT INTO fantasy_hq.emergency_lineup_priority "
+                    "(user_id, season, league_id, player_id, priority, updated_at) "
+                    "VALUES (%s, %s, %s, %s, %s, now())",
+                    (user_id, int(year), str(league_id), player_id, index),
+                )
 
     def claim_emergency_lineup_action(
         self,
