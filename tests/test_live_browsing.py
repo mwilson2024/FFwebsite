@@ -59,12 +59,15 @@ def test_other_matchup_selection_loads_its_players_and_keeps_week(monkeypatch):
     multi_page = client.get('/scores?league=1&view=multi')
     assert multi_page.status_code == 200
     assert 'Multi-league live scores' in multi_page.text
-    assert '/static/multi-scores.js?v=1' in multi_page.text
+    assert '/static/multi-scores.js?v=2' in multi_page.text
+    assert '/static/multi-scores-follow.css?v=1' in multi_page.text
     multi = client.get('/api/multi-scores/1').json()
     assert multi['name'] == 'League' and multi['week'] == 1
     assert len(multi['matchups']) == 2
     assert [team['name'] for team in multi['matchups'][1]['teams']] == ['Team 3', 'Team 4']
     assert multi['matchups'][1]['teams'][0]['players'][0]['name'] == 'Player 3'
+    assert multi['matchups'][0]['teams'][0]['win_probability'] == 50.0
+    assert multi['matchups'][0]['teams'][1]['win_probability'] == 50.0
     assert multi['matchups'][0]['is_own_matchup'] is True
     assert multi['matchups'][1]['is_own_matchup'] is False
     assert client.get('/scores?league=1&week=1&view=unknown').status_code == 400

@@ -8,13 +8,14 @@
   <link rel="stylesheet" href="/static/app.css?v=20260927-command">
   <link rel="stylesheet" href="/static/workspace.css?v=3">
   <link rel="stylesheet" href="/static/multi-scores.css?v=1">
+  <link rel="stylesheet" href="/static/multi-scores-follow.css?v=1">
   <link rel="stylesheet" href="/static/lions.css?v=1">
-  <script src="/static/multi-scores.js?v=1" defer></script>
+  <script src="/static/multi-scores.js?v=2" defer></script>
   {% include '_theme_assets.html' %}
 </head>
 <body class="gameday-page">
   {% set active_tool = 'scores' %}{% include '_league_header.html' %}
-  <main class="multi-score-shell" id="main-content" data-multi-score-board>
+  <main class="multi-score-shell" id="main-content" data-multi-score-board data-score-season="{{ session.year }}">
     <section class="multi-score-hero">
       <div>
         <p class="eyebrow">EVERY LEAGUE · LIVE TOGETHER</p>
@@ -35,6 +36,7 @@
     <div class="multi-score-toolbar">
       <div role="group" aria-label="Choose games to display">
         <button type="button" class="active" data-multi-scope="mine" aria-pressed="true">My matchups</button>
+        <button type="button" data-multi-scope="following" aria-pressed="false">Following <span id="multi-follow-count">0</span></button>
         <button type="button" data-multi-scope="all" aria-pressed="false">All league matchups</button>
       </div>
       <button type="button" class="multi-score-refresh" id="multi-score-refresh">Refresh scores</button>

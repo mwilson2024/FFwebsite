@@ -65,4 +65,9 @@ def test_multi_scores_loads_leagues_sequentially_and_pauses_hidden_tabs():
     assert "document.hidden" in script and "visibilitychange" in script
     assert "window.setTimeout(loadAll, 60000)" in script
     assert "data-multi-scope=\"mine\"" in template
+    assert "data-multi-scope=\"following\"" in template
     assert "data-multi-scope=\"all\"" in template
+    assert "localStorage.setItem(storageKey" in script
+    assert "data.followKey" not in script
+    assert "card.dataset.followKey" in script
+    assert "renderWinProbability" in script

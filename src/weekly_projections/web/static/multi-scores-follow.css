@@ -1,0 +1,109 @@
+.multi-matchup-card.is-followed {
+  position: relative;
+  order: -1;
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--site-accent) 72%, transparent);
+}
+
+.multi-matchup-card.is-followed::before {
+  content: "FOLLOWING";
+  position: absolute;
+  inset: 0 1rem auto auto;
+  padding: .18rem .42rem;
+  border-radius: 0 0 7px 7px;
+  background: var(--site-accent);
+  color: var(--site-on-accent);
+  font-size: .52rem;
+  font-weight: 900;
+  letter-spacing: .08em;
+}
+
+.multi-matchup-actions {
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+}
+
+.multi-follow-game {
+  min-height: 34px;
+  padding: .35rem .55rem;
+  border: 1px solid var(--site-line);
+  border-radius: 9px;
+  background: var(--site-raised);
+  color: var(--site-link);
+  font: inherit;
+  font-size: .68rem;
+  font-weight: 850;
+  cursor: pointer;
+}
+
+.multi-follow-game.active {
+  border-color: var(--site-accent);
+  background: var(--site-accent);
+  color: var(--site-on-accent);
+}
+
+.multi-win-probability {
+  display: grid;
+  gap: .38rem;
+  margin: 0 0 .7rem;
+  padding: .7rem .8rem;
+  border: 1px solid var(--site-line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--site-raised) 68%, transparent);
+}
+
+.multi-win-probability > strong {
+  font-size: .68rem;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.multi-odds-labels {
+  display: flex;
+  justify-content: space-between;
+  gap: .75rem;
+  color: var(--site-muted);
+  font-size: .64rem;
+  font-weight: 750;
+}
+
+.multi-odds-labels span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.multi-odds-labels span:last-child { text-align: right; }
+
+.multi-odds-track {
+  height: .55rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--odds-secondary, #7db7ff);
+}
+
+.multi-odds-track > span {
+  display: block;
+  height: 100%;
+  border-right: 2px solid var(--site-panel);
+  border-radius: 999px 0 0 999px;
+  background: linear-gradient(90deg, var(--odds-primary, #ffcb05), var(--odds-primary-end, #ff7a18));
+}
+
+.multi-odds-unavailable {
+  color: var(--site-muted);
+  font-size: .68rem;
+}
+
+@media (max-width: 520px) {
+  .multi-matchup-card > header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .multi-matchup-actions {
+    justify-content: space-between;
+    width: 100%;
+  }
+}
