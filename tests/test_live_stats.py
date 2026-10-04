@@ -392,6 +392,10 @@ def test_matchup_header_switches_all_leagues_and_separates_stats_from_points():
     assert len(soup.select('.week-odds-chart .opening-point')) == 1
     assert len(soup.select('.week-odds-chart .latest-point')) == 1
     assert soup.select_one('.week-odds-chart .odds-area') is not None
+    assert soup.select_one('#win-probability-line .odds-line-start') is not None
+    assert soup.select_one('#win-probability-line .odds-line-end') is not None
+    assert soup.select_one('#win-probability-fill .odds-fill-start') is not None
+    assert soup.select_one('#win-probability-fill .odds-fill-end') is not None
     assert [item.get_text(strip=True) for item in soup.select('.week-odds-chart .odds-scale span')] == [
         '100%', '75%', '50%', '25%', '0%',
     ]

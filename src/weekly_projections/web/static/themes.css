@@ -5,12 +5,14 @@
   --site-line:#466580; --site-text:#f5f8fc; --site-muted:#bfd0e2;
   --site-accent:#ffcb05; --site-on-accent:#00274c; --site-link:#ffe278;
   --site-header:#00274c; --site-trim:#ffcb05; --site-input:#0b3155;
+  --odds-primary:#ffcb05; --odds-primary-end:#ff7a18; --odds-secondary:#7db7ff;
 }
 html[data-theme="lions"] {
   --site-bg:#fff; --site-panel:#fff; --site-raised:#edf3f7; --site-hover:#e2f1fa;
   --site-line:#b0bec8; --site-text:#152b3b; --site-muted:#4b6373;
   --site-accent:#0076b6; --site-on-accent:#fff; --site-link:#005c90;
   --site-header:#0076b6; --site-trim:#b0b7bc; --site-input:#fff;
+  --odds-primary:#006bb6; --odds-primary-end:#58b8ee; --odds-secondary:#f26a2e;
 }
 html[data-theme="aurora"] {
   color-scheme:dark;
@@ -18,6 +20,7 @@ html[data-theme="aurora"] {
   --site-line:#385275; --site-text:#f7f9ff; --site-muted:#b3c3da;
   --site-accent:#7157e8; --site-on-accent:#fff; --site-link:#59e1ff;
   --site-header:#091426; --site-trim:#59e1ff; --site-input:#0b192c;
+  --odds-primary:#9b7cff; --odds-primary-end:#ff6fcf; --odds-secondary:#59d8ff;
 }
 html[data-theme="tigers"] {
   color-scheme:dark;
@@ -25,6 +28,7 @@ html[data-theme="tigers"] {
   --site-line:#58738f; --site-text:#f8f7f2; --site-muted:#bccbd8;
   --site-accent:#fa4616; --site-on-accent:#061525; --site-link:#ff9b73;
   --site-header:#0c2340; --site-trim:#fa4616; --site-input:#102e4c;
+  --odds-primary:#ff7a18; --odds-primary-end:#ffc15a; --odds-secondary:#77b9ff;
 }
 html[data-theme="redwings"] {
   color-scheme:light;
@@ -32,6 +36,7 @@ html[data-theme="redwings"] {
   --site-line:#d6a7af; --site-text:#301018; --site-muted:#6f4650;
   --site-accent:#ce1126; --site-on-accent:#fff; --site-link:#a50e1e;
   --site-header:#ce1126; --site-trim:#fff; --site-input:#fff;
+  --odds-primary:#c8102e; --odds-primary-end:#ff5a70; --odds-secondary:#3178c6;
 }
 html[data-theme="pistons"] {
   color-scheme:dark;
@@ -39,6 +44,7 @@ html[data-theme="pistons"] {
   --site-line:#526f95; --site-text:#f7f9fc; --site-muted:#b9c9dd;
   --site-accent:#c8102e; --site-on-accent:#fff; --site-link:#82b5ff;
   --site-header:#1d428a; --site-trim:#c8102e; --site-input:#102d52;
+  --odds-primary:#4f8dff; --odds-primary-end:#8cb8ff; --odds-secondary:#ff5068;
 }
 html[data-theme],html[data-theme] body {
   background:var(--site-bg); color:var(--site-text); color-scheme:dark;

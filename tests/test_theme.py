@@ -12,7 +12,7 @@ def test_all_pages_load_their_requested_theme_last():
         assert "{% include '_theme_assets.html' %}" in source, page.name
         source = source.replace("{% include '_theme_assets.html' %}", (templates / '_theme_assets.html').read_text(encoding='utf-8'))
         soup = BeautifulSoup(source, 'html.parser')
-        assert soup.select('link[rel="stylesheet"]')[-1]['href'] == '/static/themes.css?v=6', page.name
+        assert soup.select('link[rel="stylesheet"]')[-1]['href'] == '/static/themes.css?v=7', page.name
         assert len(soup.select('meta[name="theme-color"]')) == 1
         assert soup.select_one('script[src="/static/theme.js?v=20260924-league-themes"]')
         assert soup.select_one('meta[name="wp-theme-scope"]')
@@ -33,6 +33,21 @@ def test_lions_uses_white_surfaces_and_light_controls():
     palette = css.split('html[data-theme="lions"] {',1)[1].split('}',1)[0]
     assert '--site-bg:#fff;' in palette and '--site-panel:#fff;' in palette
     assert 'color-scheme:light;' in css
+
+
+def test_each_theme_has_a_dedicated_win_probability_palette():
+    css = (Path(__file__).resolve().parents[1] / 'src/weekly_projections/web/static/themes.css').read_text(
+        encoding='utf-8'
+    )
+    palettes = [css.split(':root,html[data-theme="michigan"] {', 1)[1].split('}', 1)[0]]
+    palettes.extend(
+        css.split(f'html[data-theme="{theme}"] {{', 1)[1].split('}', 1)[0]
+        for theme in ('lions', 'aurora', 'tigers', 'redwings', 'pistons')
+    )
+    for palette in palettes:
+        assert '--odds-primary:' in palette
+        assert '--odds-primary-end:' in palette
+        assert '--odds-secondary:' in palette
 
 
 def test_midnight_aurora_theme_is_complete_and_selectable():
