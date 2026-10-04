@@ -379,8 +379,12 @@ def test_matchup_header_switches_all_leagues_and_separates_stats_from_points():
     switcher = soup.select_one('header .header-league-picker')
     assert [o['value'] for o in switcher.select('option')] == ['1','2']
     assert switcher.select_one('input[name="week"]')['value'] == '1'
-    assert len(soup.select('.week-odds-chart .opening-point')) == 2
-    assert len(soup.select('.week-odds-chart .latest-point')) == 2
+    assert len(soup.select('.week-odds-chart .opening-point')) == 1
+    assert len(soup.select('.week-odds-chart .latest-point')) == 1
+    assert soup.select_one('.week-odds-chart .odds-area') is not None
+    assert [item.get_text(strip=True) for item in soup.select('.week-odds-chart .odds-scale span')] == [
+        '100%', '75%', '50%', '25%', '0%',
+    ]
     assert soup.select_one('.chart-axis span:last-child b').get_text(strip=True) == 'LIVE'
     assert soup.select_one('.week-picker input[name="league"]')['value'] == '1'
     identity = soup.select_one('.matchup-identity-line')

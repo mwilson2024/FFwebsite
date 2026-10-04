@@ -31,6 +31,27 @@ def test_gameday_does_not_duplicate_unchanged_snapshots():
     assert len(state["probability"]) == 1
 
 
+def test_gameday_equal_player_deltas_have_a_deterministic_order():
+    teams = _teams()
+    teams[0]["players"].append(
+        {"id": "3", "name": "Receiver, Three", "score": 0.0, "starter": True},
+    )
+    first = observe_scoring(
+        None, teams, (50.0, 50.0), observed_at=1000, timezone=timezone.utc,
+    )
+    teams[0]["players"][0]["score"] = 16.0
+    teams[0]["players"][1]["score"] = 6.0
+
+    second = observe_scoring(
+        first, teams, (60.0, 40.0), observed_at=1060, timezone=timezone.utc,
+    )
+
+    assert [event["title"] for event in second["events"][-2:]] == [
+        "Receiver, Three +6.00 fantasy points",
+        "Runner, One +6.00 fantasy points",
+    ]
+
+
 def test_gameday_can_keep_probability_without_mfl_score_events():
     state = observe_scoring(
         None, _teams(), (55.0, 45.0), observed_at=1000, timezone=timezone.utc,
@@ -41,6 +62,23 @@ def test_gameday_can_keep_probability_without_mfl_score_events():
         timezone=timezone.utc, record_events=False,
     )
     assert state["events"] == []
+    assert len(state["probability"]) == 2
+
+
+def test_gameday_records_flat_probability_at_bounded_time_intervals():
+    state = observe_scoring(
+        None, _teams(), (55.0, 45.0), observed_at=1000, timezone=timezone.utc,
+        record_events=False,
+    )
+    state = observe_scoring(
+        state, _teams(), (55.0, 45.0), observed_at=2799, timezone=timezone.utc,
+        record_events=False,
+    )
+    assert len(state["probability"]) == 1
+    state = observe_scoring(
+        state, _teams(), (55.0, 45.0), observed_at=2800, timezone=timezone.utc,
+        record_events=False,
+    )
     assert len(state["probability"]) == 2
 
 
@@ -111,6 +149,7 @@ def test_week_odds_chart_uses_elapsed_time_and_can_render_both_teams():
     ]
     assert chart_points(points).split()[1].startswith("72.0,")
     assert chart_points(points, field="right").endswith(",126.0")
+    assert chart_points([points[0]]) == "0.0,72.0 720.0,72.0"
 
 
 def test_decision_simulator_reports_week_ros_byes_and_playoffs():

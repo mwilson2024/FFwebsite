@@ -63,7 +63,14 @@ def observe_scoring(
                 delta = round(player["score"] - old_score, 2)
                 if delta:
                     player_changes.append((abs(delta), player, old_score, delta))
-            for _, player, old_score, delta in sorted(player_changes, reverse=True):
+            for _, player, old_score, delta in sorted(
+                player_changes,
+                key=lambda change: (
+                    -change[0],
+                    str(change[1].get("name") or "").casefold(),
+                    -change[3],
+                ),
+            ):
                 events.append({
                     "observed_at": observed_at,
                     "time": stamp,
@@ -169,8 +176,10 @@ def observe_scoring(
             "left": round(float(win_percentages[0]), 2),
             "right": round(float(win_percentages[1]), 2),
         }
+        last_observation = float(probability[-1].get("observed_at") or 0) if probability else 0
         if not probability or probability[-1]["left"] != point["left"] \
-                or probability[-1]["right"] != point["right"]:
+                or probability[-1]["right"] != point["right"] \
+                or observed_at - last_observation >= 30 * 60:
             probability.append(point)
     state["snapshot"] = {"teams": normalized, "observed_at": observed_at}
     state["events"] = events[-200:]
@@ -245,8 +254,11 @@ def chart_points(
     if field not in {"left", "right"}:
         raise ValueError("Choose the left or right win-probability series")
     observed = [float(point.get("observed_at", index)) for index, point in enumerate(points)]
-    if len(points) == 1 or observed[-1] <= observed[0]:
-        xs = [width / 2]
+    if len(points) == 1:
+        value = height - max(0.0, min(100.0, float(points[0][field]))) * height / 100
+        return f"0.0,{value:.1f} {float(width):.1f},{value:.1f}"
+    if observed[-1] <= observed[0]:
+        xs = [index * width / (len(points) - 1) for index in range(len(points))]
     else:
         elapsed = observed[-1] - observed[0]
         xs = [(timestamp - observed[0]) * width / elapsed for timestamp in observed]
