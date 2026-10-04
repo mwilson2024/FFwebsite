@@ -78,6 +78,13 @@ def test_command_center_core_is_an_actionable_cross_league_brief(monkeypatch):
     }
     assert data["projected_score"] == 22.0
     assert data["opponent_projected_score"] == 18.0
+    assert [team["name"] for team in data["live_teams"]] == ["Mine", "Theirs"]
+    assert data["live_teams"][0]["is_own"] is True
+    assert data["live_teams"][0]["players"] == [{
+        "id": "1", "name": "Starter", "position": "QB", "nfl_team": "DET",
+        "score": 12.0, "projection": 20.0, "game_state": "Live",
+    }]
+    assert data["live_teams"][1]["players"][0]["name"] == "Opponent"
     assert data["watchlist_count"] == 2
     assert data["links"]["transactions"].startswith("/transactions?")
     assert "view=pending" in data["links"]["transactions"]
@@ -91,3 +98,32 @@ def test_command_center_queue_loads_after_core_and_splits_trade_direction(monkey
     assert data["outgoing_trades"] == 1
     assert data["pending_total"] == 3
     assert data["errors"] == []
+
+
+def test_command_center_omits_player_boxscore_when_matchup_is_not_live(monkeypatch):
+    client = _session(monkeypatch)
+    future = web.LivePlayerView(MFLPlayer("1", "Starter", "QB", "DET"), 0.0, "starter", 3600, 20.0)
+    other = web.LivePlayerView(MFLPlayer("9", "Opponent", "QB", "GB"), 0.0, "starter", 3600, 18.0)
+    matchup = web.HeadToHeadView((
+        web.LiveTeamView("0001", "Mine", 0.0, True, 1, 0, (future,)),
+        web.LiveTeamView("0002", "Theirs", 0.0, False, 1, 0, (other,)),
+    ), 3, 3, MFLLineupSettings(1, (MFLLineupRule("QB", 1, 1),)))
+    monkeypatch.setattr(web, "_load_live_scoring_week", lambda *args, **kwargs: (3, 3, None, {}, matchup))
+    data = client.get("/api/command-center/league").json()
+    assert data["game_state"] == "Scheduled"
+    assert data["live_teams"] == []
+
+
+def test_command_center_client_renders_both_live_team_panels():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / "src/weekly_projections/web"
+    script = (root / "static/command-center.js").read_text(encoding="utf-8")
+    styles = (root / "static/command-center-live.css").read_text(encoding="utf-8")
+    template = (root / "templates/command_center.html").read_text(encoding="utf-8")
+    assert "data.live_teams.forEach" in script
+    assert "Live starters" in script and "Full box score" in script
+    assert ".command-live-teams" in styles
+    assert ".command-live-players li.is-live" in styles
+    assert "/static/command-center-live.css?v=1" in template
+    assert "/static/command-center.js?v=3" in template

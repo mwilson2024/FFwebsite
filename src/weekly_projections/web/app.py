@@ -4409,6 +4409,41 @@ def command_center_league(request: Request, league_id: str):
         danger_count = sum(item["tone"] == "danger" for item in alerts)
         warning_count = sum(item["tone"] == "warning" for item in alerts)
         game_state = matchup.game_state if matchup else "Unavailable"
+
+        def live_team_payload(team):
+            if team is None:
+                return None
+            return {
+                "franchise_id": team.franchise_id,
+                "name": team.name,
+                "is_own": team is own_team,
+                "score": round(float(team.score), 2),
+                "projected_score": projected_finish(team),
+                "playing": team.starters_playing,
+                "left": team.starters_left,
+                "final": max(0, len(team.starters) - team.starters_playing - team.starters_left),
+                "players": [{
+                    "id": player.player.id,
+                    "name": player.player.name,
+                    "position": _board_position(player.player),
+                    "nfl_team": player.player.team or "FA",
+                    "score": round(float(player.score), 2),
+                    "projection": (
+                        round(float(player.projection), 2)
+                        if player.projection is not None and math.isfinite(player.projection)
+                        else None
+                    ),
+                    "game_state": player.game_state,
+                } for player in team.starters],
+            }
+
+        live_teams = []
+        if game_state == "Live":
+            live_teams = [
+                payload for payload in (
+                    live_team_payload(own_team), live_team_payload(opponent),
+                ) if payload is not None
+            ]
         if open_slots or danger_count:
             priority, priority_rank = "Needs action", 4
         elif warning_count or lineup.projected_gain > .05:
@@ -4441,6 +4476,7 @@ def command_center_league(request: Request, league_id: str):
             "playing": own_team.starters_playing if own_team else 0,
             "left": own_team.starters_left if own_team else 0,
             "final": max(0, len(own_team.starters) - own_team.starters_playing - own_team.starters_left) if own_team else 0,
+            "live_teams": live_teams,
             "alerts": [{
                 "tone": item["tone"], "title": item["title"], "detail": item["detail"],
                 "href": item["href"], "label": item.get("label", "Open"),

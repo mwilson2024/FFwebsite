@@ -10,6 +10,39 @@
   };
   const link = (label, href, className = '') => { const item = element('a', className, label); item.href = href; return item; };
   const formatPoints = value => value == null ? '—' : Number(value).toFixed(2);
+  const renderLiveBoxscore = data => {
+    if (data.game_state !== 'Live' || !Array.isArray(data.live_teams) || !data.live_teams.length) return null;
+    const section = element('section', 'command-live-boxscore');
+    const heading = element('div', 'command-section-title');
+    heading.append(element('strong', '', 'Live starters'), link('Full box score', data.links.scores));
+    section.append(heading);
+    const teams = element('div', 'command-live-teams');
+    data.live_teams.forEach(team => {
+      const panel = element('article', `command-live-team${team.is_own ? ' is-own-team' : ''}`);
+      const header = element('header');
+      const identity = element('div');
+      identity.append(element('small', '', team.is_own ? 'YOUR TEAM' : 'OPPONENT'), element('strong', '', team.name));
+      const total = element('div', 'command-live-total');
+      total.append(element('strong', '', formatPoints(team.score)), element('small', '', team.projected_score == null ? 'Projection unavailable' : `${formatPoints(team.projected_score)} projected`));
+      header.append(identity, total); panel.append(header);
+      const counts = element('div', 'command-live-counts');
+      counts.append(element('span', 'is-live', `${team.playing} playing`), element('span', 'is-upcoming', `${team.left} left`), element('span', 'is-final', `${team.final} final`));
+      panel.append(counts);
+      const players = element('ul', 'command-live-players');
+      team.players.forEach(player => {
+        const state = String(player.game_state || 'Upcoming').toLowerCase();
+        const row = element('li', `is-${['live','upcoming','final'].includes(state) ? state : 'upcoming'}`);
+        const copy = element('div');
+        copy.append(element('strong', '', player.name), element('small', '', `${player.position || '—'} · ${player.nfl_team || 'FA'} · ${state === 'live' ? 'Playing' : state === 'final' ? 'Final' : 'Yet to play'}`));
+        const points = element('div', 'command-live-player-points');
+        points.append(element('strong', '', formatPoints(player.score)), element('small', '', player.projection == null ? '— proj' : `${Number(player.projection).toFixed(1)} proj`));
+        row.append(copy, points); players.append(row);
+      });
+      if (!team.players.length) players.append(element('li', 'command-live-empty', 'MFL has not published this team’s starters.'));
+      panel.append(players); teams.append(panel);
+    });
+    section.append(teams); return section;
+  };
   const updateSummary = () => {
     const values = [...boardData.values()].filter(item => !item.error);
     const actionCount = values.reduce((sum, item) => sum + Number(item.alert_count || 0), 0);
@@ -65,6 +98,7 @@
     if (data.win_probability != null) { const track = element('i'); const fill = element('b'); fill.style.width = `${Math.max(0, Math.min(100, Number(data.win_probability)))}%`; track.append(fill); chance.append(track); }
     const gameCounts = element('div', 'command-game-counts'); [['playing', data.playing], ['left', data.left], ['final', data.final]].forEach(([label,value]) => gameCounts.append(element('span', '', `${value} ${label}`)));
     matchup.append(scoreHead, scoreLine, projection, chance, gameCounts); body.append(matchup);
+    const liveBoxscore = renderLiveBoxscore(data); if (liveBoxscore) body.append(liveBoxscore);
 
     const lineup = element('section', 'command-lineup');
     const lineupHead = element('div', 'command-section-title'); lineupHead.append(element('strong', '', 'Lineup health'), link('Manage', data.links.lineup));
