@@ -17,6 +17,7 @@ def observe_scoring(
     *,
     observed_at: float,
     timezone,
+    progress_percent: float | None = None,
     record_events: bool = True,
     tracked_lineup_team_id: str = "",
     tracked_lineup_team_ids: Iterable[str] = (),
@@ -176,9 +177,12 @@ def observe_scoring(
             "left": round(float(win_percentages[0]), 2),
             "right": round(float(win_percentages[1]), 2),
         }
+        if progress_percent is not None:
+            point["progress"] = round(max(0.0, min(100.0, float(progress_percent))), 2)
         last_observation = float(probability[-1].get("observed_at") or 0) if probability else 0
         if not probability or probability[-1]["left"] != point["left"] \
                 or probability[-1]["right"] != point["right"] \
+                or ("progress" in point and "progress" not in probability[-1]) \
                 or observed_at - last_observation >= 10 * 60:
             probability.append(point)
     state["snapshot"] = {"teams": normalized, "observed_at": observed_at}
@@ -245,23 +249,53 @@ def lineup_what_if(
     }
 
 
+def _chart_x_percentages(points: list[dict[str, Any]]) -> list[float]:
+    """Place observations on matchup completion, with legacy time fallback."""
+    if not points:
+        return []
+    observed = [float(point.get("observed_at", index)) for index, point in enumerate(points)]
+    known = [
+        (index, max(0.0, min(100.0, float(point["progress"]))))
+        for index, point in enumerate(points)
+        if point.get("progress") is not None
+    ]
+    if known:
+        latest_progress = known[-1][1]
+        start, end = observed[0], observed[-1]
+        elapsed = end - start
+        raw = []
+        for point, timestamp in zip(points, observed):
+            if point.get("progress") is not None:
+                raw.append(max(0.0, min(100.0, float(point["progress"]))))
+            elif elapsed > 0:
+                raw.append(max(0.0, (timestamp - start) / elapsed * latest_progress))
+            else:
+                raw.append(0.0)
+        result = []
+        for value in raw:
+            result.append(max(result[-1] if result else 0.0, value))
+        return result
+    if len(points) == 1:
+        return [100.0]
+    if observed[-1] <= observed[0]:
+        return [index * 100 / (len(points) - 1) for index in range(len(points))]
+    elapsed = observed[-1] - observed[0]
+    return [(timestamp - observed[0]) * 100 / elapsed for timestamp in observed]
+
+
 def chart_points(
     points: list[dict[str, Any]], *, field: str = "left", width: int = 720, height: int = 180,
 ) -> str:
-    """Create time-scaled SVG points for either team's estimated win chance."""
+    """Create matchup-progress-scaled SVG points for either team's win chance."""
     if not points:
         return ""
     if field not in {"left", "right"}:
         raise ValueError("Choose the left or right win-probability series")
-    observed = [float(point.get("observed_at", index)) for index, point in enumerate(points)]
+    x_percentages = _chart_x_percentages(points)
+    xs = [percentage * width / 100 for percentage in x_percentages]
     if len(points) == 1:
         value = height - max(0.0, min(100.0, float(points[0][field]))) * height / 100
-        return f"0.0,{value:.1f} {float(width):.1f},{value:.1f}"
-    if observed[-1] <= observed[0]:
-        xs = [index * width / (len(points) - 1) for index in range(len(points))]
-    else:
-        elapsed = observed[-1] - observed[0]
-        xs = [(timestamp - observed[0]) * width / elapsed for timestamp in observed]
+        return f"0.0,{value:.1f} {xs[0]:.1f},{value:.1f}"
     ys = [height - max(0.0, min(100.0, float(point[field]))) * height / 100 for point in points]
     return " ".join(f"{x:.1f},{y:.1f}" for x, y in zip(xs, ys))
 
@@ -269,27 +303,23 @@ def chart_points(
 def chart_time_ticks(
     points: list[dict[str, Any]], *, maximum: int = 5,
 ) -> tuple[dict[str, Any], ...]:
-    """Return bounded, elapsed-time-positioned labels from observed chart points."""
+    """Return bounded, matchup-progress-positioned labels from chart points."""
     if not points:
         return ()
     if len(points) == 1:
-        return (
-            {"x": 0.0, "label": str(points[0].get("time") or "Beginning")},
-            {"x": 100.0, "label": str(points[0].get("time") or "Current")},
-        )
+        return ({
+            "x": round(_chart_x_percentages(points)[0], 2),
+            "label": str(points[0].get("time") or "Current"),
+        },)
     count = min(max(2, maximum), len(points))
+    positions = _chart_x_percentages(points)
+    span = max(0.0, positions[-1] - positions[0])
+    count = min(count, max(2, int(span / 20) + 1))
     indexes = tuple(dict.fromkeys(
         round(step * (len(points) - 1) / (count - 1)) for step in range(count)
     ))
-    start = float(points[0].get("observed_at") or 0)
-    end = float(points[-1].get("observed_at") or start)
-    elapsed = end - start
     return tuple({
-        "x": round(
-            ((float(points[index].get("observed_at") or start) - start) / elapsed * 100)
-            if elapsed > 0 else index / (len(points) - 1) * 100,
-            2,
-        ),
+        "x": round(positions[index], 2),
         "label": str(points[index].get("time") or ""),
     } for index in indexes)
 
@@ -302,14 +332,7 @@ def chart_markers(
         return ()
     if field not in {"left", "right"}:
         raise ValueError("Choose the left or right win-probability series")
-    observed = [float(point.get("observed_at", index)) for index, point in enumerate(points)]
-    elapsed = observed[-1] - observed[0]
-    if len(points) == 1:
-        xs = [0.0]
-    elif elapsed > 0:
-        xs = [(timestamp - observed[0]) * width / elapsed for timestamp in observed]
-    else:
-        xs = [index * width / (len(points) - 1) for index in range(len(points))]
+    xs = [percentage * width / 100 for percentage in _chart_x_percentages(points)]
     return tuple({
         "x": round(x, 1),
         "y": round(height - max(0.0, min(100.0, float(point[field]))) * height / 100, 1),

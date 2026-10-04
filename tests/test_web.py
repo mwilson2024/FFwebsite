@@ -1452,6 +1452,7 @@ def test_persistent_report_codecs_restore_domain_shapes() -> None:
                 "time": "Thu 1:00 PM",
                 "left": 55.25,
                 "right": 44.75,
+                "progress": 0.0,
             }],
             "lineup_snapshot": {
                 "team_id": "0002",
@@ -1548,6 +1549,7 @@ def test_matchup_history_tracks_opponent_lineup_and_saves_only_real_changes(monk
 
     assert first["opponent_name"] == "Opponent"
     assert first["lineup_observations"] == 1
+    assert first["probability"][0]["progress"] == 0.0
     assert unchanged["lineup_observations"] == 1
     assert changed["lineup_observations"] == 2
     assert changed["end_label"] == "LATEST"

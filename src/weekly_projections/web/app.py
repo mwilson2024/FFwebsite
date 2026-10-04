@@ -1045,10 +1045,19 @@ def _validated_matchup_history(value: object) -> dict | None:
         if not all(math.isfinite(item) for item in (observed_at, left, right)) \
                 or observed_at <= 0 or not 0 <= left <= 100 or not 0 <= right <= 100:
             return None
-        probability.append({
+        normalized_probability = {
             "observed_at": observed_at, "time": str(row.get("time") or "")[:80],
             "left": round(left, 2), "right": round(right, 2),
-        })
+        }
+        if row.get("progress") is not None:
+            try:
+                progress = float(row["progress"])
+            except (TypeError, ValueError, OverflowError):
+                return None
+            if not math.isfinite(progress) or not 0 <= progress <= 100:
+                return None
+            normalized_probability["progress"] = round(progress, 2)
+        probability.append(normalized_probability)
     lineup = value.get("lineup_snapshot")
     lineup_snapshot = None
     if lineup is not None:
@@ -3887,6 +3896,14 @@ def _observe_gameday_timeline(
     history_label = f"matchup-history:{week}:{team_ids}"
     forecast = head_to_head.forecast
     percentages = tuple(forecast["percentages"]) if forecast else None
+    starters = [player for team in head_to_head.teams for player in team.starters]
+    progress_percent = (
+        sum(1 - min(1.0, max(0.0, player.game_seconds_remaining / 3600)) for player in starters)
+        / len(starters) * 100
+        if starters else 0.0
+    )
+    if forecast and forecast.get("final"):
+        progress_percent = 100.0
     payload = [
         {
             "id": team.franchise_id,
@@ -3925,6 +3942,7 @@ def _observe_gameday_timeline(
             state = observe_scoring(
                 state, payload, percentages,
                 observed_at=time.time(), timezone=_APP_TIME_ZONE, record_events=True,
+                progress_percent=progress_percent,
                 tracked_lineup_team_id=opponent.franchise_id if opponent else "",
                 tracked_lineup_team_ids=(team.franchise_id for team in head_to_head.teams),
             )
@@ -3964,13 +3982,16 @@ def _observe_gameday_timeline(
     end_label = "FINAL" if final else (
         "LIVE" if any(team.starters_playing for team in head_to_head.teams) else "LATEST"
     )
+    markers = chart_markers(probability)
     return {
         "events": tuple(reversed(lineup_events)),
         "probability": tuple(probability),
         "chart_points": chart_points(probability),
         "right_chart_points": chart_points(probability, field="right"),
         "time_ticks": chart_time_ticks(probability),
-        "chart_markers": chart_markers(probability),
+        "chart_markers": markers,
+        "chart_end_x": markers[-1]["x"] if markers else 0.0,
+        "progress_percent": round(progress_percent, 2),
         "left_name": head_to_head.teams[0].name,
         "right_name": head_to_head.teams[1].name,
         "opening": opening,

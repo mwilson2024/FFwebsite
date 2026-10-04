@@ -380,6 +380,8 @@ def test_matchup_header_switches_all_leagues_and_separates_stats_from_points():
                 {"x": 0.0, "y": 97.2, "value": 46.0, "time": "Thu 8:15 PM"},
                 {"x": 720.0, "y": 70.2, "value": 61.0, "time": "Sun 2:24 PM"},
             ),
+            "chart_end_x": 720.0,
+            "progress_percent": 100.0,
         },
     )
     soup = BeautifulSoup(html, 'html.parser')
@@ -397,7 +399,8 @@ def test_matchup_header_switches_all_leagues_and_separates_stats_from_points():
         'Thu 8:15 PM', 'Sun 2:24 PM',
     ]
     assert soup.select_one('.chart-axis span:first-child b').get_text(strip=True) == 'BEGINNING'
-    assert soup.select_one('.chart-axis span:last-child b').get_text(strip=True) == 'CURRENT'
+    assert soup.select_one('.chart-axis span:last-child b').get_text(strip=True) == 'MATCHUP END'
+    assert 'All starters final' in soup.select_one('.chart-axis span:last-child').get_text(' ', strip=True)
     assert len(soup.select('.week-odds-chart .observation-point')) == 2
     assert soup.select('.week-odds-chart .observation-point title')[1].get_text(strip=True) == 'Sun 2:24 PM · 61.00%'
     assert soup.select_one('.week-picker input[name="league"]')['value'] == '1'

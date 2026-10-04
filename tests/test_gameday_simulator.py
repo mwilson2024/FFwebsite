@@ -88,6 +88,20 @@ def test_gameday_records_flat_probability_at_ten_minute_intervals():
     assert len(state["probability"]) == 2
 
 
+def test_gameday_probability_observation_keeps_matchup_completion():
+    state = observe_scoring(
+        None, _teams(), (55.0, 45.0), observed_at=1000, timezone=timezone.utc,
+        progress_percent=17.5,
+    )
+
+    assert state["probability"][0]["progress"] == 17.5
+    assert chart_points(state["probability"]) == "0.0,81.0 126.0,81.0"
+    assert chart_markers(state["probability"])[0]["x"] == 126.0
+    assert chart_time_ticks(state["probability"]) == ({
+        "x": 17.5, "label": "Thu 12:16:40 AM",
+    },)
+
+
 def test_gameday_records_only_observed_opponent_starter_changes():
     first = observe_scoring(
         None, _teams(), (55.0, 45.0), observed_at=1000, timezone=timezone.utc,
@@ -170,6 +184,12 @@ def test_week_odds_chart_uses_elapsed_time_and_can_render_both_teams():
         {"x": 72.0, "y": 81.0, "value": 55.0, "time": "Sun 1:10 PM"},
         {"x": 720.0, "y": 54.0, "value": 70.0, "time": "Sun 2:40 PM"},
     )
+    progress_points = [
+        {**point, "progress": progress}
+        for point, progress in zip(timed, (0.0, 10.0, 20.0))
+    ]
+    assert chart_points(progress_points).split()[-1].startswith("144.0,")
+    assert chart_markers(progress_points)[1]["x"] == 72.0
 
 
 def test_decision_simulator_reports_week_ros_byes_and_playoffs():

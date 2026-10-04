@@ -73,14 +73,14 @@
               <defs><linearGradient id="win-probability-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="currentColor" stop-opacity=".48"/><stop offset="100%" stop-color="currentColor" stop-opacity=".08"/></linearGradient></defs>
               <g class="odds-grid"><line x1="0" y1="0" x2="720" y2="0"/><line x1="0" y1="45" x2="720" y2="45"/><line class="midline" x1="0" y1="90" x2="720" y2="90"/><line x1="0" y1="135" x2="720" y2="135"/><line x1="0" y1="180" x2="720" y2="180"/></g>
               <g class="odds-boundaries"><line x1="1" y1="0" x2="1" y2="180"/><line x1="719" y1="0" x2="719" y2="180"/></g>
-              <polygon class="odds-area" points="0,180 {{ gameday_timeline.chart_points }} 720,180"/>
+              <polygon class="odds-area" points="0,180 {{ gameday_timeline.chart_points }} {{ gameday_timeline.chart_end_x }},180"/>
               <polyline class="odds-left" points="{{ gameday_timeline.chart_points }}"/>
               {% for marker in gameday_timeline.chart_markers %}<circle class="odds-left observation-point{% if loop.first %} opening-point{% endif %}{% if loop.last %} latest-point{% endif %}" cx="{{ marker.x }}" cy="{{ marker.y }}" r="{{ 6 if loop.last else 3 }}"><title>{{ marker.time }} · {{ '%.2f'|format(marker.value) }}%</title></circle>{% endfor %}
             </svg>
             <div class="odds-scale" aria-hidden="true"><span>100%</span><span>75%</span><span>50%</span><span>25%</span><span>0%</span></div>
           </div>
           <div class="odds-time-ticks" aria-hidden="true">{% for tick in gameday_timeline.time_ticks %}<time style="--tick-position:{{ tick.x }}%">{{ tick.label }}</time>{% endfor %}</div>
-          <div class="chart-axis"><span><b>BEGINNING</b>{{ gameday_timeline.opening.time }}</span><span class="chart-midpoint">50% EVEN</span><span><b>{{ 'END' if gameday_timeline.end_label == 'FINAL' else 'CURRENT' }}</b>{{ gameday_timeline.latest.time }}</span></div>
+          <div class="chart-axis"><span><b>BEGINNING</b>{{ gameday_timeline.opening.time }}</span><span class="chart-midpoint">{{ '%.0f'|format(gameday_timeline.progress_percent) }}% OF MATCHUP COMPLETE · 50% EVEN</span><span>{% if gameday_timeline.end_label == 'FINAL' %}<b>END</b>{{ gameday_timeline.latest.time }}{% else %}<b>MATCHUP END</b>All starters final{% endif %}</span></div>
         </div>
         {% else %}<p class="empty">Week-long odds need complete starter projections. Fantasy HQ will begin the chart as soon as an estimate is available.</p>{% endif %}
         <section class="opponent-lineup-history" aria-labelledby="opponent-lineup-title"><div class="opponent-lineup-heading"><div><p class="eyebrow">OBSERVED MFL LINEUP</p><h3 id="opponent-lineup-title">{{ gameday_timeline.opponent_name }} lineup timeline</h3></div><span>{{ gameday_timeline.lineup_observations }} observations</span></div><ol class="lineup-event-list">{% for event in gameday_timeline.events %}<li class="{{ event.tone }}"><time>{{ event.time }}</time><div><strong>{{ event.title }}</strong><p>{{ event.detail }}</p></div></li>{% else %}<li class="empty">The opponent’s first visible lineup has not been observed yet.</li>{% endfor %}</ol></section>
