@@ -303,6 +303,16 @@ or management; MFL remains the application's only league provider. The player
 market defaults to ESPN's weekly consensus order, with MFL league projections,
 season performance, matchup strength, and recommendation order still available.
 
+The primary-ranking setting also offers three history-aware choices. **Best tracked
+point projection** selects MFL or scaled StatHead ML by the lowest average point
+miss over up to three completed weeks. **Best tracked weekly ranker** selects the
+highest top-half hit rate among the available MFL, StatHead, ESPN PPR, ESPN
+Standard, FantasyPros, CBS, and combined position ranks. **Top tracked ranker
+consensus** averages up to the three best independent rankers, requiring at least
+two sources for each player. Adaptive choices require at least four completed
+comparisons and fall back to the labeled MFL or equal-weight combined rank when
+history is insufficient. MFL scoring and transaction rules remain authoritative.
+
 `WP_FANTASYPROS_SESSION_COOKIE` is optional and is sent only from the server to
 FantasyPros. Treat it like a password: mark the Azure setting as deployment-slot
 specific, never paste it into Git or chat, and rotate/remove it after signing out

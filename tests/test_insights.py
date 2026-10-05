@@ -105,3 +105,32 @@ def test_projection_accuracy_learns_position_weights_without_replacing_mfl():
     assert report.espn_metrics[0].top_half_accuracy == 100
     assert len(report.references) == 2
     assert all(item.low is not None and item.high is not None for item in report.references)
+
+
+def test_projection_accuracy_tracks_every_rank_source_separately():
+    players = {str(index): MFLPlayer(str(index), f"Player {index}", "WR", "DET") for index in range(1, 9)}
+    actual = {str(index): float(40 - index) for index in range(1, 9)}
+    mfl = dict(actual)
+    ml = {player_id: value - 1 for player_id, value in actual.items()}
+    perfect = {str(index): float(index) for index in range(1, 9)}
+    reversed_ranks = {str(index): float(9 - index) for index in range(1, 9)}
+    report = insights.evaluate_projection_accuracy(
+        players,
+        [(1, mfl, ml, {}, {
+            "ESPN PPR": perfect,
+            "ESPN STANDARD": perfect,
+            "FantasyPros": reversed_ranks,
+            "CBS": perfect,
+            "Combined": perfect,
+        }, actual)],
+        current_mfl=mfl,
+        current_ml=ml,
+        current_ids={"1"},
+    )
+    by_source = {metric.source: metric for metric in report.rank_metrics}
+    assert set(by_source) == {
+        "MFL projection", "StatHead ML", "ESPN PPR", "ESPN STANDARD",
+        "FantasyPros", "CBS", "Combined",
+    }
+    assert by_source["ESPN PPR"].top_half_accuracy == 100
+    assert by_source["FantasyPros"].top_half_accuracy == 0

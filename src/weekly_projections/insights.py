@@ -70,6 +70,7 @@ class RankMetric:
     position: str
     samples: int
     top_half_accuracy: float
+    source: str = "ESPN"
 
 
 @dataclass(frozen=True)
@@ -88,6 +89,11 @@ class ProjectionAccuracyReport:
     metrics: tuple[AccuracyMetric, ...]
     espn_metrics: tuple[RankMetric, ...]
     references: tuple[ProjectionReference, ...]
+
+    @property
+    def rank_metrics(self) -> tuple[RankMetric, ...]:
+        """All tracked rank signals (the legacy field name remains compatible)."""
+        return self.espn_metrics
 
 
 _TEAM_ALIASES = {
@@ -372,16 +378,24 @@ def _top_half_accuracy(predicted: Mapping[str, float], actual: Mapping[str, floa
 
 def evaluate_projection_accuracy(
     players: Mapping[str, MFLPlayer],
-    history: Iterable[tuple[int, Mapping[str, float], Mapping[str, float], Mapping[str, float], Mapping[str, float]]],
+    history: Iterable[tuple],
     *,
     current_mfl: Mapping[str, float],
     current_ml: Mapping[str, float],
     current_ids: Iterable[str],
 ) -> ProjectionAccuracyReport:
     errors: dict[tuple[str, str], list[float]] = {}
-    rank_hits: dict[str, list[int]] = {}
+    rank_hits: dict[tuple[str, str], list[int]] = {}
     weeks = []
-    for week, mfl, ml, espn, actual in history:
+    for entry in history:
+        if len(entry) == 5:
+            week, mfl, ml, espn, actual = entry
+            supplied_rank_sources = {"ESPN": espn}
+        elif len(entry) == 6:
+            week, mfl, ml, espn, extra_rank_sources, actual = entry
+            supplied_rank_sources = {"ESPN": espn, **dict(extra_rank_sources)}
+        else:
+            raise ValueError("Projection history rows must contain five or six values")
         weeks.append(week)
         scaled_ml = _scale_ml(players, mfl, ml)
         for source, values in (("MFL", mfl), ("StatHead ML · scaled", scaled_ml)):
@@ -392,12 +406,31 @@ def evaluate_projection_accuracy(
                 errors.setdefault((source, position_bucket(player.position)), []).append(float(projected) - float(actual[player_id]))
         for position in {position_bucket(player.position) for player in players.values()}:
             ids = {player_id for player_id, player in players.items() if position_bucket(player.position) == position}
-            hits, possible = _top_half_accuracy(
-                {player_id: espn[player_id] for player_id in ids if player_id in espn},
-                {player_id: actual[player_id] for player_id in ids if player_id in actual},
-            )
-            if possible:
-                rank_hits.setdefault(position, []).extend([1] * hits + [0] * (possible - hits))
+            point_rank_sources = {
+                "MFL projection": {
+                    player_id: float(rank)
+                    for rank, player_id in enumerate(
+                        sorted((item for item in ids if item in mfl), key=lambda item: (-float(mfl[item]), item)),
+                        1,
+                    )
+                },
+                "StatHead ML": {
+                    player_id: float(rank)
+                    for rank, player_id in enumerate(
+                        sorted((item for item in ids if item in scaled_ml), key=lambda item: (-float(scaled_ml[item]), item)),
+                        1,
+                    )
+                },
+            }
+            for source, predicted in {**point_rank_sources, **dict(supplied_rank_sources)}.items():
+                hits, possible = _top_half_accuracy(
+                    {player_id: predicted[player_id] for player_id in ids if player_id in predicted},
+                    {player_id: actual[player_id] for player_id in ids if player_id in actual},
+                )
+                if possible:
+                    rank_hits.setdefault((str(source), position), []).extend(
+                        [1] * hits + [0] * (possible - hits)
+                    )
     raw_metrics: dict[tuple[str, str], AccuracyMetric] = {}
     for key, residuals in errors.items():
         if not residuals:
@@ -452,13 +485,13 @@ def evaluate_projection_accuracy(
             player_id, round(estimate, 1), round(low, 1) if low is not None else None,
             round(high, 1) if high is not None else None, round(mfl_weight, 2), round(ml_weight, 2),
         ))
-    espn_metrics = tuple(
-        RankMetric(position, len(values), round(100 * statistics.mean(values), 1))
-        for position, values in sorted(rank_hits.items()) if values
+    rank_metrics = tuple(
+        RankMetric(position, len(values), round(100 * statistics.mean(values), 1), source)
+        for (source, position), values in sorted(rank_hits.items()) if values
     )
     return ProjectionAccuracyReport(
         tuple(sorted(set(weeks))),
         tuple(sorted(metrics, key=lambda item: (item.position, item.source))),
-        espn_metrics,
+        rank_metrics,
         tuple(references),
     )

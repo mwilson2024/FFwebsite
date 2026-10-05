@@ -1191,6 +1191,55 @@ def test_projection_tracker_summary_identifies_leaders_and_weighted_rank_signal(
     }
 
 
+def test_adaptive_ranking_choices_use_tracked_results_and_keep_sources_separate() -> None:
+    players = {
+        "a": MFLPlayer("a", "Alpha", "WR", "DET"),
+        "b": MFLPlayer("b", "Beta", "WR", "GB"),
+        "c": MFLPlayer("c", "Gamma", "WR", "MIN"),
+    }
+    blend = ProjectionBlend(
+        scores={"a": 20.0, "b": 15.0, "c": 10.0},
+        mfl_scores={"a": 20.0, "b": 15.0, "c": 10.0},
+        ml_scores={"a": 9.0, "b": 12.0, "c": 18.0},
+        ml_matched=3,
+        espn_ranks={"a": 2.0, "b": 1.0, "c": 3.0},
+        espn_source="ESPN weekly consensus (PPR)",
+        fantasypros_ranks={"a": 1.0, "b": 3.0, "c": 2.0},
+        cbs_ranks={"a": 3.0, "b": 1.0, "c": 2.0},
+        combined_ranks={"a": 2.0, "b": 2.0, "c": 2.0},
+    )
+    report = ProjectionAccuracyReport(
+        (1,),
+        (
+            AccuracyMetric("MFL", "WR", 8, 5.0, 6.0, 0.0),
+            AccuracyMetric("StatHead ML · scaled", "WR", 8, 2.0, 3.0, 0.0),
+        ),
+        (
+            RankMetric("WR", 8, 90.0, "FantasyPros"),
+            RankMetric("WR", 8, 80.0, "ESPN PPR"),
+            RankMetric("WR", 8, 70.0, "CBS"),
+            RankMetric("WR", 8, 60.0, "Combined"),
+        ),
+        (),
+    )
+    current = web_app.BrowserSession("rank-cookie", 2026, [], "csrf")
+
+    current.ranking_preference = "best-projection"
+    ranks, label = web_app._primary_projection_ranks(current, players, blend, report)
+    assert ranks == {"c": 1.0, "b": 2.0, "a": 3.0}
+    assert label.endswith("StatHead ML")
+
+    current.ranking_preference = "best-ranker"
+    ranks, label = web_app._primary_projection_ranks(current, players, blend, report)
+    assert ranks == blend.fantasypros_ranks
+    assert label.endswith("FantasyPros")
+
+    current.ranking_preference = "top-consensus"
+    ranks, label = web_app._primary_projection_ranks(current, players, blend, report)
+    assert ranks == {"a": 2.0, "b": 1.7, "c": 2.3}
+    assert "FantasyPros + ESPN PPR + CBS" in label
+
+
 def test_player_market_loader_merges_all_rosters_and_free_agents(monkeypatch) -> None:
     players = {
         "mine": MFLPlayer("mine", "My Player", "WR", "DET"),

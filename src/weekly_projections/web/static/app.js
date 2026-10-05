@@ -497,6 +497,7 @@
       if (selected === "fantasypros-rank") return number(left, "fantasyprosRank") - number(right, "fantasyprosRank") || number(right, "projection") - number(left, "projection");
       if (selected === "cbs-rank") return number(left, "cbsRank") - number(right, "cbsRank") || number(right, "projection") - number(left, "projection");
       if (selected === "combined-rank") return number(left, "combinedRank") - number(right, "combinedRank") || number(right, "projection") - number(left, "projection");
+      if (selected === "primary-rank") return number(left, "primaryRank") - number(right, "primaryRank") || number(right, "projection") - number(left, "projection");
       if (selected === "projection") return number(right, "projection") - number(left, "projection") || text(left, "name").localeCompare(text(right, "name"));
       if (selected === "ytd") return number(right, "ytd") - number(left, "ytd") || number(right, "avg") - number(left, "avg");
       if (selected === "avg") return number(right, "avg") - number(left, "avg") || number(right, "ytd") - number(left, "ytd");
@@ -646,14 +647,6 @@
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || "Player intelligence is unavailable.");
       if (!applyMarketVerification(data)) return;
-      const preference = data.projection?.ranking_preference || "espn-ppr";
-      const primaryRank = (player) => {
-        if (preference === "mfl") return player.mfl_rank;
-        if (preference === "combined") return player.combined_rank;
-        if (preference === "fantasypros-half") return player.fantasypros_rank;
-        if (preference === "cbs-ppr") return player.cbs_rank;
-        return player.espn_rank;
-      };
       rows.forEach((row) => {
         const player = data.players?.[row.dataset.playerId];
         if (!player) return;
@@ -664,6 +657,7 @@
         row.dataset.fantasyprosRank = String(numberOr(player.fantasypros_rank, 9999));
         row.dataset.cbsRank = String(numberOr(player.cbs_rank, 9999));
         row.dataset.combinedRank = String(numberOr(player.combined_rank, 9999));
+        row.dataset.primaryRank = String(numberOr(player.primary_rank, 9999));
         row.dataset.ytd = String(numberOr(player.ytd, -9999));
         row.dataset.avg = String(numberOr(player.average, -9999));
         row.dataset.median = String(numberOr(player.median, -9999));
@@ -674,7 +668,7 @@
         replaceMetric(row.querySelector(".ytd-cell"), player.ytd === null ? null : Number(player.ytd).toFixed(1));
         replaceMetric(row.querySelector(".median-cell"), player.median === null ? null : Number(player.median).toFixed(1), player.median === null ? "" : `Last ${player.median_window}`);
         replaceMetric(row.querySelector(".avg-cell"), player.average === null ? null : Number(player.average).toFixed(1));
-        const selectedRank = primaryRank(player);
+        const selectedRank = player.primary_rank;
         replaceMetric(row.querySelector(".primary-rank-cell"), selectedRank === null ? null : `#${Number(selectedRank).toFixed(1)}`, data.projection.ranking_label);
         replaceMetric(row.querySelector(".mfl-rank-cell"), player.mfl_rank === null ? null : `#${Number(player.mfl_rank).toFixed(1)}`);
         replaceMetric(row.querySelector(".fantasypros-rank-cell"), player.fantasypros_rank === null ? null : `#${Number(player.fantasypros_rank).toFixed(1)}`);
