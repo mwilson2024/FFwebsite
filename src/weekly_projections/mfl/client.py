@@ -885,10 +885,51 @@ class MFLClient:
         if not isinstance(payload, dict):
             raise MFLApiError("MFL pending waivers are unavailable")
         root = payload.get("pendingWaivers", payload.get("pending_waivers"))
-        if root in (None, ""):
-            return ()
-        if not isinstance(root, (dict, list)):
+        if root not in (None, "") and not isinstance(root, (dict, list)):
             raise MFLApiError("MFL pending waivers are unavailable")
+
+        # Some MFL league servers return an empty pendingWaivers document for
+        # blind-bid leagues even while their owner-only transactions export
+        # includes BBID_WAIVER_REQUEST rows. Use that authenticated feed as a
+        # bounded fallback, never completed WAIVER/BBID_WAIVER transactions.
+        if root in (None, "", {}, []):
+            activity_payload = self.export(
+                "transactions", DAYS=14, COUNT=100, TRANS_TYPE="*",
+            )
+            activity_root = (
+                activity_payload.get("transactions")
+                if isinstance(activity_payload, dict) else None
+            )
+            own_franchise = self.config.franchise_id.zfill(4)
+            pending_rows: list[dict[str, Any]] = []
+            if isinstance(activity_root, dict):
+                for item in _iter_key(activity_root, "transaction"):
+                    if not isinstance(item, dict):
+                        continue
+                    kind = str(
+                        item.get("type") or item.get("transaction_type") or ""
+                    ).upper()
+                    if "WAIVER" not in kind or "REQUEST" not in kind:
+                        continue
+                    raw_franchise = (
+                        item.get("franchise") or item.get("franchise_id") or ""
+                    )
+                    if isinstance(raw_franchise, dict):
+                        raw_franchise = (
+                            raw_franchise.get("$t") or raw_franchise.get("id") or ""
+                        )
+                    franchise_ids = {
+                        candidate.zfill(4)
+                        for candidate in re.findall(r"\d+", str(raw_franchise))
+                        if len(candidate) <= 4
+                    }
+                    if franchise_ids and own_franchise not in franchise_ids:
+                        continue
+                    pending_rows.append(item)
+            root = pending_rows
+
+        if root in (None, "", {}, []):
+            return ()
 
         def values(value: Any) -> list[str]:
             if isinstance(value, dict):
@@ -941,6 +982,11 @@ class MFLClient:
         saw_claim_shape = False
         for item in candidates:
             normalized = {key_name(key): value for key, value in item.items()}
+            request_kind = " ".join(
+                values(normalized.get("type"))
+                + values(normalized.get("transactiontype"))
+            ).upper()
+            blind_bid_request = "BBID" in request_kind or "BLIND" in request_kind
             add_values = [
                 text
                 for key, value in normalized.items()
@@ -977,7 +1023,8 @@ class MFLClient:
                 compact = _compact_roster_move(
                     raw_parts,
                     "BBID_WAIVER_REQUEST"
-                    if bid is not None or any("bbid" in key or "blindbid" in key for key in normalized)
+                    if bid is not None or blind_bid_request
+                    or any("bbid" in key or "blindbid" in key for key in normalized)
                     else "WAIVER_REQUEST",
                 )
                 if compact is not None:
@@ -988,7 +1035,9 @@ class MFLClient:
                 adds = tuple(dict.fromkeys(candidate for value in player_values for candidate in re.findall(r"\d+", value)))
             if not adds and not drops:
                 continue
-            round_number = integer(item, "round", "waiver_round", "round_number")
+            round_number = integer(
+                item, "round", "waiver_round", "round_number", "group",
+            )
             order = integer(item, "order", "priority", "rank")
             signature = (adds, drops, round_number, order, bid)
             if signature in seen_claims:

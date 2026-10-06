@@ -217,8 +217,58 @@ def test_pending_waivers_parse_current_franchise_claims(monkeypatch):
 
 def test_pending_waivers_accept_an_empty_report(monkeypatch):
     client = MFLClient(_config(user_cookie="cookie"))
-    monkeypatch.setattr(client, "export", lambda *args, **kwargs: {"pendingWaivers": {}})
+    calls = []
+
+    def export(kind, **params):
+        calls.append((kind, params))
+        if kind == "pendingWaivers":
+            return {"pendingWaivers": {}}
+        return {"transactions": ""}
+
+    monkeypatch.setattr(client, "export", export)
     assert client.pending_waivers() == ()
+    assert calls == [
+        ("pendingWaivers", {}),
+        ("transactions", {"DAYS": 14, "COUNT": 100, "TRANS_TYPE": "*"}),
+    ]
+
+
+def test_pending_waivers_fall_back_to_owner_pending_transaction_rows(monkeypatch):
+    client = MFLClient(_config(user_cookie="cookie", franchise_id="7"))
+    calls = []
+
+    def export(kind, **params):
+        calls.append((kind, params))
+        if kind == "pendingWaivers":
+            return {"pendingWaivers": ""}
+        return {"transactions": {"transaction": [
+            {
+                "id": "claim-51", "type": "BBID_WAIVER_REQUEST",
+                "franchise": "0007", "group": "1",
+                "transaction": "16102,|51|14218,",
+            },
+            {
+                "id": "other-owner", "type": "BBID_WAIVER_REQUEST",
+                "franchise": "0008", "group": "1",
+                "transaction": "17000,|75|15000,",
+            },
+            {
+                "id": "processed", "type": "BBID_WAIVER",
+                "franchise": "0007", "transaction": "18000,|12|16000,",
+            },
+        ]}}
+
+    monkeypatch.setattr(client, "export", export)
+
+    assert client.pending_waivers() == (
+        MFLPendingWaiver(
+            "claim-51", ("16102",), ("14218",), round=1, bid=51,
+        ),
+    )
+    assert calls == [
+        ("pendingWaivers", {}),
+        ("transactions", {"DAYS": 14, "COUNT": 100, "TRANS_TYPE": "*"}),
+    ]
 
 
 def test_pending_waivers_parse_priority_and_blind_bid_shapes_by_content(monkeypatch):
