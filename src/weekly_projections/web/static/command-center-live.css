@@ -16,7 +16,7 @@
   font-weight: 800;
 }
 
-.chance-change.is-up { color: #25cf83; }
+.chance-change.is-up { color: #7db7ff; }
 .chance-change.is-down { color: #ff7d86; }
 
 .command-live-teams {
@@ -35,7 +35,7 @@
 }
 
 .command-live-team.is-own-team {
-  border-top-color: var(--accent, #52e6d0);
+  border-top-color: #9b8cff;
 }
 
 .command-live-team > header {
@@ -95,8 +95,8 @@
 }
 
 .command-live-counts .is-live {
-  border-color: #25cf83;
-  color: #25cf83;
+  border-color: #ff8d7d;
+  color: #ffb0a5;
 }
 
 .command-live-counts .is-upcoming { color: var(--site-link, #82b5ff); }
@@ -120,8 +120,8 @@
 }
 
 .command-live-players li.is-live {
-  border-left-color: #25cf83;
-  background: rgba(37, 207, 131, .07);
+  border-left-color: #ff8d7d;
+  background: rgba(255, 141, 125, .08);
 }
 
 .command-live-players li.is-upcoming { border-left-color: var(--site-link, #82b5ff); }

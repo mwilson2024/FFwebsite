@@ -2428,10 +2428,44 @@ def _refresh_state_for_week(
 def _cached_current_week(current: BrowserSession | None, client: MFLClient) -> int | None:
     if current is None:
         return client.current_week()
-    return _cached_session_read(
-        current, "mfl-global", "week", client.current_week,
-        ttl=900, stale_ttl=86400, shared=True,
+    reported = _cached_session_read(
+        current, "mfl-global", "provider-week", client.current_week,
+        ttl=300, stale_ttl=3600, shared=True,
     )
+    if reported is None or not 1 <= reported <= 18:
+        return reported
+    if reported >= 18:
+        return reported
+    try:
+        state = _cached_session_read(
+            current,
+            "mfl-global",
+            f"refresh-state:{reported}",
+            lambda: client.nfl_refresh_state(week=reported, now=time.time()),
+            ttl=30,
+            stale_ttl=120,
+            shared=True,
+        )
+    except (MFLApiError, AttributeError):
+        state = None
+    return reported + 1 if isinstance(state, dict) and state.get("complete") is True else reported
+
+
+def _roll_forward_stale_selected_week(
+    current: BrowserSession | None,
+    requested_week: int | None,
+    current_week: int | None,
+) -> int | None:
+    """Move a remembered default forward while preserving explicit older-week browsing."""
+    if (
+        current is not None
+        and requested_week is not None
+        and requested_week == current.selected_week
+        and current_week is not None
+        and requested_week < current_week
+    ):
+        return current_week
+    return requested_week if requested_week is not None else current_week
 
 
 def _log_provider_error_once(
@@ -2676,9 +2710,15 @@ def _build_league_intelligence_snapshot(
         return "Time unavailable"
 
 
-def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
+def _league_hq(
+    current: BrowserSession,
+    selected: MFLLeague,
+    *,
+    view: str = "overview",
+    channel: str = "board",
+) -> dict:
     """Build League HQ data without exposing the mutable cached container."""
-    cache_key = f"{current.year}:{selected.id}:league-hq"
+    cache_key = f"{current.year}:{selected.id}:league-hq:{view}:{channel}"
     now = time.monotonic()
     cached = current.read_cache.get(cache_key)
     if cached and cached[0] > now:
@@ -2706,18 +2746,19 @@ def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
         "week", lambda: _cached_current_week(current, client), None,
     ) or details.start_week
     daily_ttl = _seconds_until_daily_refresh()
+    needs_intelligence = view in {"overview", "community"}
     standings = read(
         "standings", lambda: _cached_session_read(
             current, selected.id, "standings", client.league_standings,
             ttl=daily_ttl, stale_ttl=_LEAGUE_STATIC_STALE_TTL, shared=True,
         ), [],
-    )
+    ) if needs_intelligence else []
     schedule = read(
         "schedule", lambda: _cached_session_read(
             current, selected.id, "schedule", client.fantasy_schedule,
             ttl=daily_ttl, stale_ttl=_LEAGUE_STATIC_STALE_TTL, shared=True,
         ), (),
-    )
+    ) if needs_intelligence else ()
     activity = read(
         "activity",
         lambda: _cached_session_read(
@@ -2725,21 +2766,21 @@ def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
             ttl=90,
         ),
         (),
-    )
+    ) if view == "activity" else ()
     message_threads = read(
         "message_board",
         lambda: _cached_session_read(
             current, selected.id, "message-board", lambda: client.message_board(count=12), ttl=300,
         ),
         (),
-    ) if hasattr(client, "message_board") else ()
+    ) if view == "community" and channel == "board" and hasattr(client, "message_board") else ()
     chat_messages = read(
         "league_chat",
         lambda: _cached_session_read(
             current, selected.id, "league-chat", lambda: client.league_chat(count=30), ttl=300,
         ),
         (),
-    ) if hasattr(client, "league_chat") else ()
+    ) if view == "community" and channel == "chat" and hasattr(client, "league_chat") else ()
     own_id = selected.franchise_id.zfill(4)
     chat_messages = tuple(item for item in chat_messages if not item.to_franchise_id.strip("0")
                           or item.to_franchise_id == own_id or item.franchise_id == own_id)
@@ -2748,21 +2789,32 @@ def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
             current, "mfl-global", "players", client.players,
             ttl=86400, stale_ttl=7 * 86400, shared=True,
         ), {},
-    )
+    ) if view == "activity" else {}
     _remember_catalog(current, client)
     intelligence_label = "league-intelligence:" + _league_intelligence_cache_key(
         details, standings, schedule, current_week,
     )
-    intelligence = _cached_session_read(
-        current,
-        selected.id,
-        intelligence_label,
-        lambda: _build_league_intelligence_snapshot(
-            details, standings, schedule, current_week,
-        ),
-        ttl=daily_ttl,
-        stale_ttl=_LEAGUE_STATIC_STALE_TTL,
-        shared=True,
+    intelligence = (
+        _cached_session_read(
+            current,
+            selected.id,
+            intelligence_label,
+            lambda: _build_league_intelligence_snapshot(
+                details, standings, schedule, current_week,
+            ),
+            ttl=daily_ttl,
+            stale_ttl=_LEAGUE_STATIC_STALE_TTL,
+            shared=True,
+        )
+        if needs_intelligence
+        else {
+            "rankings": (),
+            "recap": LeagueRecap(None, "Weekly recap is unavailable", "Open Overview for completed results.", ()),
+            "playoff_seeds": (),
+            "playoff_rounds": (),
+            "last_results_week": None,
+            "last_week_results": (),
+        }
     )
     rankings = intelligence["rankings"]
     rank_by_team = {row.franchise_id: row for row in rankings}
@@ -2772,10 +2824,10 @@ def _league_hq(current: BrowserSession, selected: MFLLeague) -> dict:
     playoff_games = list(playoff_rounds[0].games) if playoff_rounds else []
     observed_what_ifs = _lineup_what_if_history(
         current, selected, (), current_week,
-    )
+    ) if view == "overview" else ()
     own_what_ifs = _lineup_what_if_history(
         current, selected, schedule, current_week, franchise_id=own_id,
-    )
+    ) if view == "overview" else ()
     lineup_what_ifs = {
         (row.get("week"), row["team_id"]): row for row in (*observed_what_ifs, *own_what_ifs)
     }
@@ -3403,7 +3455,7 @@ def _load_lineup(
         )
 
     current_week = _cached_current_week(current, client)
-    week = requested_week if requested_week is not None else current_week
+    week = _roll_forward_stale_selected_week(current, requested_week, current_week)
     if week is None:
         raise MFLApiError("MFL did not return the current lineup week")
     if not 1 <= week <= 18:
@@ -3992,7 +4044,7 @@ def _load_live_scoring_week(
     current_week = _cached_current_week(current, client)
     if current_week is None:
         raise MFLApiError("MFL did not return the current scoring week")
-    week = requested_week if requested_week is not None else current_week
+    week = _roll_forward_stale_selected_week(current, requested_week, current_week)
     if week < 1 or week > 18:
         raise ValueError("Choose an NFL week from 1 through 18")
     refresh_state = _refresh_state_for_week(
@@ -6222,7 +6274,9 @@ def league_page(request: Request, league: str, view: str = "overview", channel: 
     league_view = view if view in {"overview", "activity", "community"} else "overview"
     league_channel = channel if channel in {"board", "chat"} else "board"
     try:
-        context = _league_hq(current, selected)
+        context = _league_hq(
+            current, selected, view=league_view, channel=league_channel,
+        )
     except (MFLApiError, ValueError, requests.RequestException) as error:
         if isinstance(error, MFLApiError):
             _log_provider_error_once(current, selected.id, "league_hq_unavailable", error)

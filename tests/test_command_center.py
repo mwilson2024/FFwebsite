@@ -129,5 +129,6 @@ def test_command_center_client_renders_both_live_team_panels():
     assert ".command-live-players li.is-live" in styles
     assert "pts from opening" in script
     assert ".chance-change.is-up" in styles and ".chance-change.is-down" in styles
-    assert "/static/command-center-live.css?v=2" in template
+    assert "/static/command-center-live.css?v=3" in template
+    assert "/static/command-center-polish.css?v=1" in template
     assert "/static/command-center.js?v=4" in template

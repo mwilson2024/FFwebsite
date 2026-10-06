@@ -2173,7 +2173,7 @@ def test_league_hq_renders_intelligence_and_tracks_session_side_bets(monkeypatch
         ],
         "errors": {},
     }
-    monkeypatch.setattr(web_app, "_league_hq", lambda current, selected: dict(hq))
+    monkeypatch.setattr(web_app, "_league_hq", lambda current, selected, **kwargs: dict(hq))
     client = TestClient(web_app.app)
     client.cookies.set("wp_session", session_id)
     response = client.get("/league?league=11111")
@@ -2323,7 +2323,7 @@ def test_local_playoff_projection_builds_full_three_round_bracket(monkeypatch) -
         def players(self): return {}
 
     monkeypatch.setattr(web_app, "_client", lambda *args: BracketClient())
-    hq = web_app._league_hq(current, league)
+    hq = web_app._league_hq(current, league, view="community", channel="chat")
     assert [len(round_.games) for round_ in hq["playoff_rounds"]] == [4, 2, 1]
     assert [round_.name for round_ in hq["playoff_rounds"]] == [
         "Quarterfinals", "Semifinals", "Championship",
@@ -2331,9 +2331,38 @@ def test_local_playoff_projection_builds_full_three_round_bracket(monkeypatch) -
     assert [item.id for item in hq["chat_messages"]] == ["public", "private-own"]
     original_threads = hq["message_threads"]
     hq["message_threads"] = ({"author": "display-only row"},)
-    cached_hq = web_app._league_hq(current, league)
+    cached_hq = web_app._league_hq(current, league, view="community", channel="chat")
     assert cached_hq["message_threads"] == original_threads
     assert cached_hq is not hq
+
+
+def test_league_activity_view_skips_unrelated_slow_reports(monkeypatch) -> None:
+    league = MFLLeague("activity-fast", "0001", "Activity")
+    current = web_app.BrowserSession("activity-fast-cookie", 2026, [league], "csrf")
+    calls = []
+
+    class ActivityClient:
+        config = MFLConfig(2026, league.id, league.franchise_id, user_cookie="cookie")
+        _players = {}
+        def league_details(self):
+            calls.append("details")
+            return MFLLeagueDetails((), {"0001": MFLFranchise("0001", "Alpha")})
+        def current_week(self): return 5
+        def transactions(self, **kwargs):
+            calls.append("activity")
+            return ()
+        def players(self):
+            calls.append("players")
+            return {}
+        def league_standings(self): raise AssertionError("activity loaded standings")
+        def fantasy_schedule(self): raise AssertionError("activity loaded schedule")
+        def message_board(self, **kwargs): raise AssertionError("activity loaded message board")
+        def league_chat(self, **kwargs): raise AssertionError("activity loaded chat")
+
+    monkeypatch.setattr(web_app, "_client", lambda *args: ActivityClient())
+    hq = web_app._league_hq(current, league, view="activity")
+    assert calls == ["details", "activity", "players"]
+    assert hq["standings"] == [] and hq["schedule"] == ()
 
 
 def test_kickoff_locks_are_enforced_server_side() -> None:

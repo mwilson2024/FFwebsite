@@ -178,6 +178,29 @@ def test_team_defense_live_points_include_every_configured_league_rule():
     assert sum(row["points"] for row in components) == 19
 
 
+def test_defense_points_allowed_tier_handles_real_world_rule_format_variants():
+    box = {
+        "categories": {
+            "teamDefense": {
+                "fumblesRecovered": "1",
+                "sacks": "2",
+                "pointsAllowed": "10",
+            },
+        },
+    }
+    rules = {"positionRules": {"positions": "Def, D/ST", "rule": [
+        {"event": " fc ", "range": "0-10", "points": "*2"},
+        {"event": "sk", "range": "0-25", "points": "*1"},
+        {"event": "pa", "range": "8 – 11", "points": "+2.00"},
+    ]}}
+
+    components = scoring_components(box, rules, "Def")
+    assert [row["label"] for row in components] == [
+        "Fumbles recovered", "Sacks", "Points allowed tier (8–11)",
+    ]
+    assert sum(row["points"] for row in components) == 6
+
+
 def scoring_client(monkeypatch, status="starter", seconds=0):
     player = MFLPlayer("p", "Starter", "WR", "SEA", "123")
     item = SimpleNamespace(player_id="p", status=status, score=27.2, game_seconds_remaining=seconds)

@@ -371,20 +371,25 @@ def scoring_components(boxscore: dict, rules: dict, position: str) -> list[dict]
     position = {"K": "PK", "DST": "DEF"}.get(normalized_position, normalized_position)
     result = []
     for group in groups:
-        if position not in _text(group.get("positions", "")).upper().split("|"):
+        listed_positions = {
+            {"K": "PK", "DST": "DEF", "D/ST": "DEF"}.get(item, item)
+            for item in re.findall(r"[A-Z]+(?:/[A-Z]+)?", _text(group.get("positions", "")).upper())
+        }
+        if position not in listed_positions:
             continue
         items = group.get("rule", [])
         if isinstance(items, dict):
             items = [items]
         for rule in items:
-            event = _text(rule.get("event", ""))
+            event = _text(rule.get("event", "")).strip().upper()
             if event not in EVENTS:
                 continue
             category, key, label = EVENTS[event]
             raw = boxscore.get("categories", {}).get(category, {}).get(key)
-            bounds = re.fullmatch(r"(-?\d+(?:\.\d+)?)-(-?\d+(?:\.\d+)?)", _text(rule.get("range", "")))
-            expression = _text(rule.get("points", ""))
-            if raw is None or not bounds or not re.fullmatch(r"\*?-?(?:\d+(?:\.\d+)?|\.\d+)", expression):
+            raw_range = _text(rule.get("range", "")).strip().replace("–", "-").replace("—", "-")
+            bounds = re.fullmatch(r"(-?\d+(?:\.\d+)?)\s*-\s*(-?\d+(?:\.\d+)?)", raw_range)
+            expression = _text(rule.get("points", "")).strip().replace("×", "*")
+            if raw is None or not bounds or not re.fullmatch(r"\*?[+-]?(?:\d+(?:\.\d+)?|\.\d+)", expression):
                 continue
             try:
                 amount = Decimal(str(raw))
@@ -395,5 +400,10 @@ def scoring_components(boxscore: dict, rules: dict, position: str) -> list[dict]
             except InvalidOperation:
                 continue
             if points:
-                result.append({"label": label if expression.startswith("*") else f"{label} bonus ({bounds[1]}–{bounds[2]})", "stat": str(amount), "points": float(points), "rule": expression})
+                tier_label = (
+                    f"{label} tier ({bounds[1]}–{bounds[2]})"
+                    if event == "PA"
+                    else f"{label} bonus ({bounds[1]}–{bounds[2]})"
+                )
+                result.append({"label": label if expression.startswith("*") else tier_label, "stat": str(amount), "points": float(points), "rule": expression})
     return result

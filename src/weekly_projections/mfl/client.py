@@ -662,7 +662,10 @@ class MFLClient:
         payload = self.export("nflSchedule", W=week)
         active = False
         future = []
-        for game in _iter_key(payload, "matchup"):
+        games = list(_iter_key(payload, "matchup"))
+        completed = 0
+        valid_games = 0
+        for game in games:
             if not isinstance(game, dict):
                 continue
             try:
@@ -670,6 +673,11 @@ class MFLClient:
                 remaining = int(game.get("gameSecondsRemaining", -1))
             except (TypeError, ValueError):
                 continue
+            if kickoff <= 0 or remaining < 0:
+                continue
+            valid_games += 1
+            if remaining == 0 and kickoff <= now:
+                completed += 1
             if kickoff > now:
                 future.append(kickoff)
             elif kickoff > 0 and (
@@ -681,7 +689,14 @@ class MFLClient:
                 or (remaining == 3600 and 0 <= now - kickoff <= 30 * 60)
             ):
                 active = True
-        return {"active": active, "next_kickoff": min(future) if future else None}
+        # Advance the app only with complete schedule evidence. One malformed
+        # or unpublished matchup keeps the current week in place.
+        complete = bool(games) and valid_games == len(games) and completed == valid_games
+        return {
+            "active": active,
+            "next_kickoff": min(future) if future else None,
+            "complete": complete,
+        }
 
     def trade_block(self) -> dict[str, dict]:
         """Read the complete block, retaining draft picks and blind-bid assets."""

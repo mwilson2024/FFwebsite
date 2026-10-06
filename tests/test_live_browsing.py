@@ -17,7 +17,10 @@ from weekly_projections.web import app as web
 def test_refresh_requires_live_nfl_clock(monkeypatch, clock, kickoff, active, next_time):
     client = MFLClient(MFLConfig(2026,'1','0001'))
     monkeypatch.setattr(client,'export',lambda *a,**k:{'nflSchedule':{'matchup':{'kickoff':kickoff,'gameSecondsRemaining':clock}}})
-    assert client.nfl_refresh_state(week=1,now=1000) == {'active':active,'next_kickoff':next_time}
+    assert client.nfl_refresh_state(week=1,now=1000) == {
+        'active': active, 'next_kickoff': next_time,
+        'complete': clock == '0',
+    }
 
 
 def test_refresh_kickoff_grace_is_bounded(monkeypatch):
@@ -26,8 +29,22 @@ def test_refresh_kickoff_grace_is_bounded(monkeypatch):
         'nflSchedule': {'matchup': {'kickoff': 1000, 'gameSecondsRemaining': '3600'}},
     })
     assert client.nfl_refresh_state(week=1, now=4000) == {
-        'active': False, 'next_kickoff': None,
+        'active': False, 'next_kickoff': None, 'complete': False,
     }
+
+
+def test_completed_nfl_schedule_advances_stale_remembered_week(monkeypatch):
+    league = MFLLeague('rollover', '0001', 'Rollover')
+    current = web.BrowserSession('rollover-cookie', 2026, [league], 'csrf', selected_week=4)
+
+    class WeekClient:
+        def current_week(self): return 4
+        def nfl_refresh_state(self, **kwargs):
+            return {'active': False, 'next_kickoff': None, 'complete': True}
+
+    assert web._cached_current_week(current, WeekClient()) == 5
+    assert web._roll_forward_stale_selected_week(current, 4, 5) == 5
+    assert web._roll_forward_stale_selected_week(current, 3, 5) == 3
 
 
 def test_other_matchup_selection_loads_its_players_and_keeps_week(monkeypatch):

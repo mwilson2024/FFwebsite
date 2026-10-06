@@ -1,0 +1,26 @@
+/* Blue/violet game-day accents replace the former green Command Center palette. */
+.command-overview strong,
+.command-mini-metrics strong {
+  color: #8bbcff;
+}
+
+.command-toolbar button.active,
+.league-badge,
+.command-card nav .primary-action {
+  border-color: #7da8ff;
+  background: #7da8ff;
+  color: #07182f;
+}
+
+.command-live-dot {
+  background: #ff8d7d;
+  box-shadow: 0 0 0 .22rem rgba(255, 141, 125, .16);
+}
+
+.command-card.priority-live::before { background: #ff8d7d; }
+.command-card.priority-ready::before { background: #9b8cff; }
+.priority-pill.priority-live { color: #ffb0a5; }
+.lineup-ready,
+.all-clear { color: #8bbcff; }
+.command-alerts li.tone-strong { border-left-color: #9b8cff; }
+.command-chance b { background: linear-gradient(90deg, #6fa8ff, #a78bfa); }
