@@ -208,7 +208,7 @@ def test_pending_waivers_parse_current_franchise_claims(monkeypatch):
 
     claims = client.pending_waivers()
 
-    assert calls == [("pendingWaivers", {"FRANCHISE_ID": "0007"})]
+    assert calls == [("pendingWaivers", {})]
     assert claims == (
         MFLPendingWaiver("w1", ("100",), ("200",), round=1, order=2),
         MFLPendingWaiver("w2", ("300",), ("400",), round=1, order=3, bid=5),
@@ -221,10 +221,44 @@ def test_pending_waivers_accept_an_empty_report(monkeypatch):
     assert client.pending_waivers() == ()
 
 
+def test_pending_waivers_parse_priority_and_blind_bid_shapes_by_content(monkeypatch):
+    client = MFLClient(_config(user_cookie="cookie"))
+    monkeypatch.setattr(client, "export", lambda *args, **kwargs: {
+        "pendingWaivers": {
+            "waiverRequest": {
+                "request_id": "priority-1", "round_number": "2", "rank": "1",
+                "pick": "100_200",
+            },
+            "blindBidWaiverRequest": [{
+                "waiver_id": "bid-1", "waiver_round": "3", "priority": "2",
+                "picks": {"$t": "300_7_400"},
+            }],
+        }
+    })
+
+    assert client.pending_waivers() == (
+        MFLPendingWaiver("priority-1", ("100",), ("200",), round=2, order=1),
+        MFLPendingWaiver("bid-1", ("300",), ("400",), round=3, order=2, bid=7),
+    )
+
+
+def test_pending_waivers_refuse_false_empty_for_unknown_nonempty_claim_shape(monkeypatch):
+    client = MFLClient(_config(user_cookie="cookie"))
+    monkeypatch.setattr(client, "export", lambda *args, **kwargs: {
+        "pendingWaivers": {"mysteryClaim": {"player": "not-a-player-id"}}
+    })
+
+    with pytest.raises(MFLApiError, match="no empty result was assumed"):
+        client.pending_waivers()
+
+
 def test_pending_trades_parse_incoming_outgoing_players_and_picks(monkeypatch):
     client = MFLClient(_config(franchise_id="0007"))
-    monkeypatch.setattr(client, "export", lambda *args, **kwargs: {
-        "pendingTrades": {"pendingTrade": [
+    calls = []
+
+    def export(kind, **params):
+        calls.append((kind, params))
+        return {"pendingTrades": {"pendingTrade": [
             {
                 "trade_id": "trade-in", "offeringteam": "2", "offeredTo": "7",
                 "willGiveUp": "101,FP_0002_2027_1", "willReceive": "201,BB_5",
@@ -234,8 +268,9 @@ def test_pending_trades_parse_incoming_outgoing_players_and_picks(monkeypatch):
                 "trade_id": "trade-out", "offeringteam": "7", "offeredTo": "3",
                 "willGiveUp": {"$t": "301"}, "willReceive": {"$t": "401,DP_2_05"},
             },
-        ]}
-    })
+        ]}}
+
+    monkeypatch.setattr(client, "export", export)
 
     assert client.pending_trades() == (
         MFLPendingTrade(
@@ -246,6 +281,7 @@ def test_pending_trades_parse_incoming_outgoing_players_and_picks(monkeypatch):
             "trade-out", "0007", "0003", ("301",), ("401", "DP_2_05"), None,
         ),
     )
+    assert calls == [("pendingTrades", {})]
 
 
 def test_revoke_pending_waiver_preserves_other_claims_in_round(monkeypatch):
@@ -262,7 +298,7 @@ def test_revoke_pending_waiver_preserves_other_claims_in_round(monkeypatch):
     client.revoke_pending_waiver(target)
 
     assert calls == [("blindBidWaiverRequest", {
-        "ROUND": 1, "PICKS": "102_5_0000", "REPLACE": 1, "FRANCHISE_ID": "0007",
+        "ROUND": 1, "PICKS": "102_5_0000", "REPLACE": 1,
     })]
 
 

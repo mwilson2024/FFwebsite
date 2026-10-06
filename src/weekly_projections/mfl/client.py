@@ -314,9 +314,12 @@ def _compact_roster_move(
 
     for raw in raw_parts:
         value = raw.strip()
-        if not value or re.search(r"[^0-9,|\s]", value):
+        if not value or re.search(r"[^0-9,_|\s]", value):
             continue
-        sections = value.split("|")
+        separator = "|" if "|" in value else "_" if "_" in value else ""
+        if not separator:
+            continue
+        sections = value.split(separator)
         if len(sections) not in (2, 3):
             continue
 
@@ -876,9 +879,9 @@ class MFLClient:
 
     def pending_waivers(self) -> tuple[MFLPendingWaiver, ...]:
         """Return only this authenticated franchise's unprocessed MFL claims."""
-        payload = self.export(
-            "pendingWaivers", FRANCHISE_ID=self.config.franchise_id.zfill(4),
-        )
+        # Per MFL's API contract, FRANCHISE_ID is commissioner impersonation.
+        # An owner read must rely on the authenticated MFL_USER_ID cookie.
+        payload = self.export("pendingWaivers")
         if not isinstance(payload, dict):
             raise MFLApiError("MFL pending waivers are unavailable")
         root = payload.get("pendingWaivers", payload.get("pending_waivers"))
@@ -892,15 +895,18 @@ class MFLClient:
                 preferred = value.get("$t") or value.get("id") or value.get("player_id")
                 if preferred not in (None, ""):
                     return [str(preferred)]
-                return [text for child in value.values() for text in values(child)]
+                return []
             if isinstance(value, list):
                 return [text for child in value for text in values(child)]
             return [] if value in (None, "") else [str(value)]
 
+        def key_name(value: Any) -> str:
+            return re.sub(r"[^a-z0-9]", "", str(value).casefold())
+
         def integer(item: dict[str, Any], *names: str) -> int | None:
-            normalized = {str(key).replace("_", "").casefold(): value for key, value in item.items()}
+            normalized = {key_name(key): value for key, value in item.items()}
             for name in names:
-                found = values(normalized.get(name.replace("_", "").casefold()))
+                found = values(normalized.get(key_name(name)))
                 if found:
                     match = re.search(r"-?\d+", found[0])
                     if match:
@@ -912,51 +918,77 @@ class MFLClient:
 
         candidates: list[dict[str, Any]] = []
         seen_objects: set[int] = set()
-        for key in ("waiver", "request", "claim", "transaction"):
-            for item in _iter_key(root, key):
-                if isinstance(item, dict) and id(item) not in seen_objects:
-                    seen_objects.add(id(item))
-                    candidates.append(item)
-        if isinstance(root, dict) and not candidates:
-            candidates.append(root)
-        elif isinstance(root, list) and not candidates:
-            candidates.extend(item for item in root if isinstance(item, dict))
+
+        def collect(value: Any) -> None:
+            if isinstance(value, dict):
+                if id(value) not in seen_objects:
+                    seen_objects.add(id(value))
+                    candidates.append(value)
+                for child in value.values():
+                    collect(child)
+            elif isinstance(value, list):
+                for child in value:
+                    collect(child)
+
+        # MFL labels priority and blind-bid rows differently. Parse every
+        # dictionary by its local add/drop/request shape instead of the label.
+        collect(root)
 
         action_pattern = re.compile(r"(\d+)\s*[,|:]\s*(ADD|DROP)\b", re.IGNORECASE)
         reverse_pattern = re.compile(r"(?:^|;)\s*(ADD|DROP)\s*[,|:]\s*(\d+)", re.IGNORECASE)
         rows: list[MFLPendingWaiver] = []
         seen_claims: set[tuple] = set()
+        saw_claim_shape = False
         for item in candidates:
-            normalized = {str(key).replace("_", "").casefold(): value for key, value in item.items()}
-            direct_adds = values(normalized.get("add")) + values(normalized.get("addid"))
-            direct_drops = values(normalized.get("drop")) + values(normalized.get("dropid"))
+            normalized = {key_name(key): value for key, value in item.items()}
+            add_values = [
+                text
+                for key, value in normalized.items()
+                if key in {"add", "adds", "addid", "addplayer", "addplayerid", "playeradd", "playertoadd"}
+                for text in values(value)
+            ]
+            drop_values = [
+                text
+                for key, value in normalized.items()
+                if key in {"drop", "drops", "dropid", "dropplayer", "dropplayerid", "playerdrop", "playertodrop"}
+                for text in values(value)
+            ]
+            direct_adds = add_values
+            direct_drops = drop_values
             adds = tuple(dict.fromkeys(candidate for value in direct_adds for candidate in re.findall(r"\d+", value)))
             drops = tuple(dict.fromkeys(candidate for value in direct_drops for candidate in re.findall(r"\d+", value)))
             raw_parts = [
-                text for key in ("transaction", "players", "description", "request")
-                for text in values(normalized.get(key))
+                text
+                for key, value in normalized.items()
+                if key in {"transaction", "players", "description", "request", "picks", "pick", "value"}
+                or ("waiver" in key and key != "pendingwaivers")
+                for text in values(value)
             ]
+            player_values = values(normalized.get("player")) + values(normalized.get("playerid"))
+            if direct_adds or direct_drops or raw_parts or player_values:
+                saw_claim_shape = True
             if not adds and not drops:
                 actions = [(player, action.upper()) for text in raw_parts for player, action in action_pattern.findall(text)]
                 actions.extend((player, action.upper()) for text in raw_parts for action, player in reverse_pattern.findall(text))
                 adds = tuple(dict.fromkeys(player for player, action in actions if action == "ADD"))
                 drops = tuple(dict.fromkeys(player for player, action in actions if action == "DROP"))
-            bid = integer(item, "bid", "amount")
+            bid = integer(item, "bid", "amount", "bbid", "bid_amount")
             if not adds and not drops:
                 compact = _compact_roster_move(
                     raw_parts,
-                    "BBID_WAIVER_REQUEST" if bid is not None else "WAIVER_REQUEST",
+                    "BBID_WAIVER_REQUEST"
+                    if bid is not None or any("bbid" in key or "blindbid" in key for key in normalized)
+                    else "WAIVER_REQUEST",
                 )
                 if compact is not None:
                     adds, drops, compact_bid = compact
                     if bid is None:
                         bid = compact_bid
             if not adds:
-                player_values = values(normalized.get("player")) + values(normalized.get("playerid"))
                 adds = tuple(dict.fromkeys(candidate for value in player_values for candidate in re.findall(r"\d+", value)))
             if not adds and not drops:
                 continue
-            round_number = integer(item, "round", "waiver_round")
+            round_number = integer(item, "round", "waiver_round", "round_number")
             order = integer(item, "order", "priority", "rank")
             signature = (adds, drops, round_number, order, bid)
             if signature in seen_claims:
@@ -966,15 +998,18 @@ class MFLClient:
                 str(round_number or 0), str(order or 0), str(bid if bid is not None else "n"),
                 ".".join(adds) or "none", ".".join(drops) or "none",
             ))
-            claim_id = str(item.get("id") or item.get("request_id") or fallback_id)[:100]
+            claim_id_values = values(normalized.get("id")) + values(normalized.get("requestid")) + values(normalized.get("waiverid"))
+            claim_id = str(claim_id_values[0] if claim_id_values else fallback_id)[:100]
             rows.append(MFLPendingWaiver(claim_id, adds, drops, round_number, order, bid))
+        if not rows and saw_claim_shape:
+            raise MFLApiError(
+                "MFL returned pending waiver data in an unrecognized format; no empty result was assumed"
+            )
         return tuple(sorted(rows, key=lambda row: (row.round or 1, row.order or 9999, row.id)))
 
     def pending_trades(self) -> tuple[MFLPendingTrade, ...]:
         """Return trade offers sent by or offered to the authenticated franchise."""
-        payload = self.export(
-            "pendingTrades", FRANCHISE_ID=self.config.franchise_id.zfill(4),
-        )
+        payload = self.export("pendingTrades")
         if not isinstance(payload, dict):
             raise MFLApiError("MFL pending trades are unavailable")
         root = payload.get("pendingTrades", payload.get("pending_trades"))
@@ -1090,7 +1125,6 @@ class MFLClient:
             ROUND=target.round,
             PICKS=",".join(picks),
             REPLACE=1,
-            FRANCHISE_ID=self.config.franchise_id.zfill(4),
         )
 
     def respond_to_trade(
