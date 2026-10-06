@@ -2539,6 +2539,23 @@ def _mfl_write_acknowledged(result: object) -> bool:
     return str(status).strip().casefold() in {"ok", "success", "1"}
 
 
+def _add_drop_verified_on_mfl(client: MFLClient, preview: AddDropPreview) -> bool:
+    """Read MFL back after a write and require the exact submitted player identities."""
+    if preview.mode == "fcfs":
+        roster = client.roster_ids()
+        return preview.add.id in roster and preview.drop.id not in roster
+
+    for claim in client.pending_waivers():
+        if claim.adds != (preview.add.id,) or claim.drops != (preview.drop.id,):
+            continue
+        if preview.round is not None and claim.round != preview.round:
+            continue
+        if preview.bid is not None and claim.bid != preview.bid:
+            continue
+        return True
+    return False
+
+
 def _rule_text(value) -> str:
     if isinstance(value, dict):
         value = value.get("$t", "")
@@ -7645,6 +7662,8 @@ def show_preview(request: Request, pending_id: str):
             "pending_id": pending_id,
             "error": None,
             "success": None,
+            "verified_on_mfl": False,
+            "verification_message": None,
         },
     )
 
@@ -7659,6 +7678,8 @@ def submit_move(request: Request, pending_id: str, csrf_token: str = Form(...)):
     league = _league(current, preview.league_id)
     client = _client(current, league)
     operation_status = "failed"
+    verified_on_mfl = False
+    verification_message = None
     try:
         client.validate_add_drop(preview)
         week = client.current_week()
@@ -7681,24 +7702,28 @@ def submit_move(request: Request, pending_id: str, csrf_token: str = Form(...)):
         try:
             result = client.submit_add_drop(preview, replace=preview.replace_existing)
         except MFLWriteUncertainError as write_error:
-            # MFL occasionally follows a successful FCFS write with an HTML
-            # page instead of API JSON/XML. Verify authoritative roster state
-            # before showing success; queued claims remain explicitly uncertain.
-            if preview.mode == "fcfs":
-                try:
-                    current_roster = client.roster_ids()
-                except MFLApiError as verify_error:
-                    log_error("move_submit_readback_failed", verify_error)
-                    raise MFLWriteUncertainError(
-                        "MFL's response could not be confirmed. Do not submit again "
-                        "until you check your MFL roster and Transactions report."
-                    ) from write_error
-                if preview.add.id in current_roster and preview.drop.id not in current_roster:
-                    result = {"status": "verified-by-roster-readback"}
-                else:
-                    raise write_error
-            else:
+            # An unreadable write receipt is not retried. A safe MFL GET may
+            # still prove either the resulting roster or the queued claim.
+            try:
+                verified_on_mfl = _add_drop_verified_on_mfl(client, preview)
+            except MFLApiError as verify_error:
+                log_error("move_submit_readback_failed", verify_error)
+                raise MFLWriteUncertainError(
+                    "MFL's response could not be confirmed. Do not submit again "
+                    "until you check your MFL roster and Transactions report."
+                ) from write_error
+            if not verified_on_mfl:
                 raise write_error
+            result = {"status": "verified-by-mfl-readback"}
+        if not verified_on_mfl:
+            try:
+                verified_on_mfl = _add_drop_verified_on_mfl(client, preview)
+            except MFLApiError as verify_error:
+                log_error("move_submit_verification_unavailable", verify_error)
+                verification_message = (
+                    "MFL accepted the request, but the follow-up report was unavailable. "
+                    "Open MFL before submitting it again."
+                )
         _invalidate_player_board(current, league.id)
         if preview.mode != "fcfs":
             current.read_cache.pop(
@@ -7709,8 +7734,19 @@ def submit_move(request: Request, pending_id: str, csrf_token: str = Form(...)):
             if preview.mode != "fcfs"
             else "MFL accepted the add/drop request."
         )
+        if verified_on_mfl:
+            verification_message = (
+                "The exact waiver claim appears in MFL's pending report."
+                if preview.mode != "fcfs"
+                else "MFL's roster now contains the added player and no longer contains the dropped player."
+            )
+        elif verification_message is None:
+            verification_message = (
+                "MFL accepted the request, but the matching roster or pending claim has not appeared "
+                "in the follow-up report yet. Check MFL before submitting it again."
+            )
         error = None
-        operation_status = "submitted" if preview.mode != "fcfs" else "completed"
+        operation_status = "verified" if verified_on_mfl else "submitted"
     except (MFLApiError, ValueError) as api_error:
         log_error("move_submit_failed", api_error)
         result = None
@@ -7725,7 +7761,11 @@ def submit_move(request: Request, pending_id: str, csrf_token: str = Form(...)):
         title=("Waiver claim · " if preview.mode != "fcfs" else "")
               + f"Add {preview.add.name} · drop {preview.drop.name}",
         status=operation_status,
-        message=success or error or "No receipt was returned.",
+        message=(
+            f"{success} Verified on MFL."
+            if success and verified_on_mfl
+            else success or error or "No receipt was returned."
+        ),
     )
     return templates.TemplateResponse(
         request=request,
@@ -7738,6 +7778,8 @@ def submit_move(request: Request, pending_id: str, csrf_token: str = Form(...)):
             "error": error,
             "success": success,
             "result": result,
+            "verified_on_mfl": verified_on_mfl,
+            "verification_message": verification_message,
         },
         status_code=200 if success else 502,
     )
@@ -8467,6 +8509,38 @@ def api_player_market_verify(request: Request, league: str, revision: str = ""):
             "locked_count": sum(item.availability.locked for item in recommendations),
         },
         "roster_locked": sorted(roster_locked),
+    }
+
+
+@app.get("/api/player-market/pending-claims")
+def api_player_market_pending_claims(request: Request, league: str):
+    """Load authoritative pending claims after the usable player pool is visible."""
+    current = _require_session(request)
+    selected = _league(current, league)
+    client = _client(current, selected)
+    try:
+        claims = client.pending_waivers()
+    except MFLApiError as error:
+        _log_provider_error_once(
+            current, selected.id, "player_market_pending_waivers_unavailable", error,
+        )
+        return JSONResponse(
+            {
+                "detail": "MFL could not verify your pending waiver claims right now.",
+                "reference": request.state.error_reference,
+            },
+            status_code=503,
+        )
+    catalog = current.player_catalog or {}
+    return {
+        "league_id": selected.id,
+        "count": len(claims),
+        "html": templates.env.get_template("_pending_waivers_market.html").render(
+            session=current,
+            league=selected,
+            claims=claims,
+            catalog=catalog,
+        ),
     }
 
 

@@ -759,6 +759,27 @@
   };
   if (marketWorkspace) verifyMarket();
 
+  const pendingClaimsCard = document.querySelector("[data-pending-claims-url]");
+  const loadPendingClaims = async () => {
+    const target = document.querySelector("#market-pending-claims");
+    if (!pendingClaimsCard || !target) return;
+    try {
+      const response = await fetch(pendingClaimsCard.dataset.pendingClaimsUrl, {
+        headers: { "Accept": "application/json" },
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "Pending claims are unavailable.");
+      target.innerHTML = data.html;
+    } catch (error) {
+      target.replaceChildren();
+      const message = document.createElement("p");
+      message.className = "warning";
+      message.textContent = `${error.message} No claim was changed.`;
+      target.append(message);
+    }
+  };
+  if (pendingClaimsCard) window.setTimeout(loadPendingClaims, 0);
+
   const moveBuilder = document.querySelector("#move-builder");
   const useDefenseSuggestion = (button) => {
     const radio = [...document.querySelectorAll('input[name="add_id"]')].find((input) => input.value === button.dataset.streamPick);

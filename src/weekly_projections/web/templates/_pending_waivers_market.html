@@ -1,0 +1,17 @@
+{% if claims %}
+  <ol class="market-pending-list">
+    {% for claim in claims %}
+      <li>
+        <div class="pending-claim-copy">
+          <strong>{% if claim.adds %}Claim {% for id in claim.adds %}{{ catalog[id].name if id in catalog else 'Player ' ~ id }}{{ ', ' if not loop.last }}{% endfor %}{% else %}Pending waiver claim{% endif %}</strong>
+          <span>{% if claim.drops %}Drop {% for id in claim.drops %}{{ catalog[id].name if id in catalog else 'Player ' ~ id }}{{ ', ' if not loop.last }}{% endfor %}{% else %}No drop player supplied by MFL{% endif %}</span>
+          <small>{% if claim.round is not none %}Round {{ claim.round }}{% else %}Round not supplied{% endif %}{% if claim.order is not none %} · Priority {{ claim.order }}{% endif %}{% if claim.bid is not none %} · {{ claim.bid }} FAAB{% endif %}</small>
+        </div>
+        <strong class="mfl-verified-check"><span aria-hidden="true">✓</span> Verified on MFL</strong>
+        <form method="post" action="/transactions/pending/preview"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="league" value="{{ league.id }}"><input type="hidden" name="kind" value="waiver"><input type="hidden" name="item_id" value="{{ claim.id }}"><input type="hidden" name="action" value="revoke"><button class="market-withdraw-claim" type="submit">Review withdrawal</button></form>
+      </li>
+    {% endfor %}
+  </ol>
+{% else %}
+  <p class="market-pending-empty"><span aria-hidden="true">✓</span> MFL reports no unprocessed waiver claims for your franchise.</p>
+{% endif %}

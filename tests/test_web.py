@@ -433,6 +433,94 @@ def test_move_page_shows_full_board_projections_and_locks(monkeypatch) -> None:
     assert 'id="waiver-optimizer"' in payload["waiver_html"]
 
 
+def test_player_market_loads_authoritative_pending_claims_at_the_top(monkeypatch) -> None:
+    web_app.sessions.clear()
+    league = MFLLeague("11111", "0001", "Home League")
+    current = web_app.BrowserSession("cookie", 2026, [league], "csrf")
+    current.player_catalog = {
+        "101": MFLPlayer("101", "Claim Target", "RB", "DET"),
+        "102": MFLPlayer("102", "Drop Candidate", "RB", "GB"),
+    }
+    web_app.sessions["market-pending-session"] = current
+
+    class PendingMarketClient:
+        def pending_waivers(self):
+            return (MFLPendingWaiver("claim-1", ("101",), ("102",), round=1, order=2),)
+
+    monkeypatch.setattr(web_app, "_client", lambda *args: PendingMarketClient())
+    monkeypatch.setattr(web_app, "_remember_catalog", lambda *args: None)
+    monkeypatch.setattr(
+        web_app,
+        "_load_player_board",
+        lambda *args, **kwargs: (
+            3, [], [], ProjectionBlend(scores={}, mfl_scores={}, ml_scores={}, ml_matched=0), set(),
+        ),
+    )
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", "market-pending-session")
+
+    page = client.get("/moves?league=11111")
+    assert page.status_code == 200
+    assert page.text.index("Pending waiver claims") < page.text.index("market-enrichment-status")
+    assert "Checking MFL for unprocessed claims" in page.text
+
+    pending = client.get("/api/player-market/pending-claims?league=11111")
+    assert pending.status_code == 200
+    assert pending.json()["count"] == 1
+    fragment = pending.json()["html"]
+    assert "Claim Target" in fragment and "Drop Candidate" in fragment
+    assert "✓</span> Verified on MFL" in fragment
+    assert "Review withdrawal" in fragment
+
+
+@pytest.mark.parametrize("mode", ["fcfs", "waiver"])
+def test_submitted_move_is_read_back_and_marked_verified_on_mfl(monkeypatch, mode) -> None:
+    web_app.sessions.clear()
+    league = MFLLeague("11111", "0001", "Home League")
+    current = web_app.BrowserSession("cookie", 2026, [league], "csrf")
+    add = MFLPlayer("101", "Claim Target", "RB", "DET")
+    drop = MFLPlayer("102", "Drop Candidate", "RB", "GB")
+    preview = AddDropPreview(
+        mode, add, drop, league.id, league.franchise_id,
+        round=1 if mode == "waiver" else None,
+    )
+    current.pending_moves["move-1"] = preview
+    web_app.sessions["verified-move-session"] = current
+
+    class VerifiedMoveClient:
+        def validate_add_drop(self, submitted):
+            assert submitted == preview
+
+        def current_week(self):
+            return 3
+
+        def nfl_team_kickoffs(self, *, week):
+            assert week == 3
+            return {"DET": 4_000_000_000, "GB": 4_000_000_000}
+
+        def submit_add_drop(self, submitted, *, replace=False):
+            assert submitted == preview and replace is False
+            return {"status": "ok"}
+
+        def roster_ids(self):
+            return {"101"}
+
+        def pending_waivers(self):
+            return (MFLPendingWaiver("claim-1", ("101",), ("102",), round=1),)
+
+    monkeypatch.setattr(web_app, "_client", lambda *args: VerifiedMoveClient())
+    monkeypatch.setattr(web_app, "_invalidate_player_board", lambda *args: None)
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", "verified-move-session")
+
+    response = client.post("/submit/move-1", data={"csrf_token": "csrf"})
+
+    assert response.status_code == 200
+    assert "Verified on MFL" in response.text
+    assert current.operations[-1].status == "verified"
+    assert "Verified on MFL" in current.operations[-1].message
+
+
 @pytest.mark.parametrize("pricing_unavailable", [False, True])
 def test_defense_streaming_cards_use_loaded_data_and_existing_move_builder(monkeypatch, pricing_unavailable) -> None:
     from types import SimpleNamespace

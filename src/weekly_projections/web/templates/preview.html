@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   
-  <title>Review Move · {{ league.name }}</title><link rel="stylesheet" href="/static/app.css?v=20260910-modern">
+  <title>Review Move · {{ league.name }}</title><link rel="stylesheet" href="/static/app.css?v=20261006-mfl-verification">
   <link rel="stylesheet" href="/static/workspace.css?v=2">
   <link rel="stylesheet" href="/static/lions.css?v=1">
   {% include '_theme_assets.html' %}
@@ -14,6 +14,8 @@
     {% if success %}
       <p class="eyebrow">TRANSACTION SENT</p><h1>{{ success }}</h1>
       <div class="success-mark" aria-hidden="true">✓</div>
+      {% if verified_on_mfl %}<p class="mfl-verification-badge" role="status"><span aria-hidden="true">✓</span> Verified on MFL</p>{% endif %}
+      {% if verification_message %}<p class="{{ 'helper' if verified_on_mfl else 'warning' }}">{{ verification_message }}</p>{% endif %}
       <div class="review-actions"><a class="secondary-action" href="/moves?league={{ league.id }}">Back to roster</a></div>
     {% elif error %}
       <p class="eyebrow danger-text">MFL DID NOT CONFIRM</p><h1>The move was not confirmed.</h1><div class="error" role="alert">{{ error }}{% include '_error_reference.html' %}</div>

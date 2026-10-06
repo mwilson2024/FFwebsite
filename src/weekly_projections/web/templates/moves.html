@@ -6,13 +6,13 @@
   
   <meta name="csrf-token" content="{{ session.csrf_token }}">
   <title>{{ league.name }} · Player Market</title>
-  <link rel="stylesheet" href="/static/app.css?v=20261002-market">
+  <link rel="stylesheet" href="/static/app.css?v=20261006-pending-claims">
   <link rel="stylesheet" href="/static/workspace.css?v=20260924-progressive-market">
   <link rel="stylesheet" href="/static/fantasy.css?v=20260921-leaders">
   <link rel="stylesheet" href="/static/lions.css?v=1">
   <link rel="stylesheet" href="/static/rosters.css?v=3">
   <script src="/static/diagnostics.js" defer></script>
-  <script src="/static/app.js?v=20261005-adaptive-ranks" defer></script>
+  <script src="/static/app.js?v=20261006-pending-claims" defer></script>
   {% include '_theme_assets.html' %}
 </head>
 <body>
@@ -32,6 +32,11 @@
       </div>
       {% if error %}<div class="error" role="alert">{{ error }}{% include '_error_reference.html' %}</div>{% endif %}
 
+      <section class="market-pending-card" data-pending-claims-url="/api/player-market/pending-claims?league={{ league.id|urlencode }}" aria-labelledby="market-pending-title">
+        <header><div><p class="eyebrow">MFL · AUTHORITATIVE</p><h2 id="market-pending-title">Pending waiver claims</h2></div><a href="/transactions?league={{ league.id }}&amp;view=pending">View waivers &amp; trades →</a></header>
+        <div id="market-pending-claims" aria-live="polite"><p class="pending-claims-loading">Checking MFL for unprocessed claims…</p></div>
+      </section>
+
       <section class="lineup-intelligence waiver-intelligence" id="market-enrichment-status" aria-live="polite">
         <span><small>Player pool</small><strong>{% if market_verified %}{{ player_count }} ready{% else %}{{ player_count }} cached{% endif %}</strong></span>
         <span><small>Projection source</small><strong id="market-projection-source">{% if enrichment_pending %}Loading in background…{% else %}{{ projection_source }}{% endif %}</strong></span>
@@ -41,7 +46,7 @@
         <p id="market-enrichment-copy">{% if not market_verified %}Showing the last saved player pool immediately. It is browse-only while MFL verifies current ownership, availability, and kickoff locks in the background.{% elif enrichment_pending %}Players, ownership, and add/claim availability are ready now. Rankings, projections, matchup context, and waiver intelligence are loading without blocking the page.{% else %}{{ ranking_label }} leads the default sort. MFL remains authoritative for league scoring, locks, ownership, and moves. Change this anytime in Settings.{% endif %}</p>
       </section>
 
-      <div class="market-jump-grid"><a class="defense-stream-link" href="/transactions?league={{ league.id }}&amp;view=pending"><span><strong>Pending claims</strong><small>Review or withdraw MFL waivers</small></span><span aria-hidden="true">→</span></a><a class="defense-stream-link" href="#waiver-optimizer"><span><strong>Build my waiver queue</strong><small>Order claims and budget FAAB</small></span><span aria-hidden="true">↓</span></a><a class="defense-stream-link" href="#defense-streaming"><span><strong>Streaming a defense?</strong><small>Compare talent, matchup and waiver price</small></span><span aria-hidden="true">↓</span></a></div>
+      <div class="market-jump-grid"><a class="defense-stream-link" href="#waiver-optimizer"><span><strong>Build my waiver queue</strong><small>Order claims and budget FAAB</small></span><span aria-hidden="true">↓</span></a><a class="defense-stream-link" href="#defense-streaming"><span><strong>Streaming a defense?</strong><small>Compare talent, matchup and waiver price</small></span><span aria-hidden="true">↓</span></a></div>
 
       <form method="post" action="/preview" id="waiver-form">
         <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
