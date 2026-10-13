@@ -11,7 +11,7 @@ import json
 import re
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import zip_longest
 from pathlib import Path
 from threading import BoundedSemaphore, Event, Lock, RLock, Thread
@@ -584,6 +584,19 @@ class OperationRecord:
 
 
 @dataclass
+class RosterSync:
+    league_id: str
+    franchise_id: str
+    add_id: str
+    drop_id: str
+    created_at: float = field(default_factory=time.monotonic)
+    next_check_at: float = field(default_factory=lambda: time.monotonic() + 60)
+    attempts: int = 0
+    max_attempts: int = 10
+    status: str = "pending"
+
+
+@dataclass
 class BrowserSession:
     mfl_cookie: str
     year: int
@@ -596,6 +609,7 @@ class BrowserSession:
     trades: dict[str, TradeDraft] = field(default_factory=dict)
     blocks: dict[str, BlockDraft] = field(default_factory=dict)
     pending_actions: dict[str, PendingTransactionAction] = field(default_factory=dict)
+    roster_syncs: dict[str, RosterSync] = field(default_factory=dict)
     expires_at: float = field(default_factory=lambda: time.monotonic() + 8 * 60 * 60)
     read_cache: dict[str, tuple[float, object]] = field(default_factory=dict)
     cache_observed_at: dict[str, float] = field(default_factory=dict)
@@ -2556,6 +2570,122 @@ def _add_drop_verified_on_mfl(client: MFLClient, preview: AddDropPreview) -> boo
     return False
 
 
+def _start_roster_sync(current: BrowserSession, preview: AddDropPreview) -> str:
+    """Create one bounded, session-only FCFS roster reconciliation job."""
+    now = time.monotonic()
+    current.roster_syncs = {
+        key: value for key, value in current.roster_syncs.items()
+        if now - value.created_at < 30 * 60 and value.status == "pending"
+    }
+    sync_id = secrets.token_urlsafe(24)
+    current.roster_syncs[sync_id] = RosterSync(
+        league_id=preview.league_id,
+        franchise_id=preview.franchise_id,
+        add_id=preview.add.id,
+        drop_id=preview.drop.id,
+    )
+    return sync_id
+
+
+def _sync_player_market_snapshot(
+    current: BrowserSession,
+    league: MFLLeague,
+    roster_ids: set[str],
+) -> None:
+    """Apply only confirmed ownership to the browse cache after an MFL move."""
+    stored = _load_database_player_market_snapshot(current, league.id)
+    if not stored:
+        return
+    week, _, recommendations, _, _ = stored
+    own_id = league.franchise_id.zfill(4)
+    own_name = next(
+        (
+            item.fantasy_team_name for item in recommendations
+            if item.fantasy_team_id.zfill(4) == own_id and item.fantasy_team_name
+        ),
+        f"Franchise {own_id}",
+    )
+    updated: list[PlayerRecommendation] = []
+    for item in recommendations:
+        was_mine = item.fantasy_team_id.zfill(4) == own_id
+        is_mine = item.player.id in roster_ids
+        if is_mine:
+            updated.append(replace(
+                item,
+                availability=MFLAvailability(item.player.id, status="mine"),
+                fantasy_team_id=own_id,
+                fantasy_team_name=own_name,
+                recommendation="Your roster",
+                recommendation_tone="muted",
+                reason=f"MFL roster sync confirms this player is rostered by {own_name}.",
+            ))
+        elif was_mine:
+            # MFL roster ownership proves the drop, but it does not prove the
+            # player's new free-agent/waiver state. Keep add controls disabled
+            # until the next freeAgents refresh supplies that state.
+            updated.append(replace(
+                item,
+                availability=MFLAvailability(
+                    item.player.id, status="locked", locked=True, cant_add=True,
+                ),
+                fantasy_team_id="",
+                fantasy_team_name="",
+                recommendation="Availability refreshing",
+                recommendation_tone="muted",
+                reason="MFL confirms this player left your roster; waiver availability is still refreshing.",
+            ))
+        else:
+            updated.append(item)
+    player_by_id = {
+        item.player.id: item.player for item in updated
+    } | (current.player_catalog or {})
+    roster = [
+        player_by_id.get(player_id, MFLPlayer(player_id, f"Player {player_id}"))
+        for player_id in sorted(roster_ids)
+    ]
+    _save_database_player_market_snapshot(
+        current, league.id, week, roster, updated,
+    )
+
+
+def _remember_synced_roster(
+    current: BrowserSession,
+    league: MFLLeague,
+    roster_ids: set[str],
+) -> None:
+    """Update session/database roster views without another MFL round trip."""
+    now = time.monotonic()
+    own_id = league.franchise_id.zfill(4)
+    roster_key = f"{current.year}:{league.id}:report:roster:{league.franchise_id}"
+    league_rosters_key = f"{current.year}:{league.id}:report:league-rosters"
+    cached_league_rosters: dict[str, set[str]] | None = None
+    with current.read_lock:
+        for key in tuple(current.read_cache):
+            if key.startswith((
+                f"{current.year}:{league.id}:player-board",
+                f"{current.year}:{league.id}:player-pool",
+                f"{current.year}:{league.id}:home-player-board",
+            )):
+                current.read_cache.pop(key, None)
+        current.read_cache[roster_key] = (now + 60, set(roster_ids))
+        current.cache_observed_at[roster_key] = now
+        existing = current.read_cache.get(league_rosters_key)
+        if existing and isinstance(existing[1], dict):
+            cached_league_rosters = {
+                str(team_id).zfill(4): set(player_ids)
+                for team_id, player_ids in existing[1].items()
+            }
+            cached_league_rosters[own_id] = set(roster_ids)
+            current.read_cache[league_rosters_key] = (now + 60, cached_league_rosters)
+            current.cache_observed_at[league_rosters_key] = now
+    if cached_league_rosters is not None:
+        _save_database_report_snapshot(
+            current, league.id, "league-rosters", cached_league_rosters,
+            ttl=60, stale_ttl=600,
+        )
+    _sync_player_market_snapshot(current, league, roster_ids)
+
+
 def _rule_text(value) -> str:
     if isinstance(value, dict):
         value = value.get("$t", "")
@@ -4386,24 +4516,52 @@ def _stage_move(
 ) -> tuple[str, AddDropPreview, MFLLeague]:
     league = _league(current, league_id)
     client = _client(current, league)
-    preview = client.preview_add_drop(
-        add=add_id,
-        drop=drop_id,
+    # Staging is non-mutating. Reuse the recently MFL-verified market board
+    # instead of repeating freeAgents + roster exports on every Review click.
+    # The final confirmation still performs fresh MFL validation immediately
+    # before the write.
+    week, roster, recommendations, _, roster_locked = _load_player_board(
+        client,
+        current,
+        include_reference=False,
+        include_score_context=False,
+        include_projections=False,
+    )
+    roster_by_id = {player.id: player for player in roster}
+    board_by_id = {item.player.id: item for item in recommendations}
+    add_row = board_by_id.get(str(add_id))
+    drop_player = roster_by_id.get(str(drop_id))
+    if add_row is None or add_row.is_rostered:
+        raise ValueError("The selected player is not listed as a free agent in this league")
+    if add_row.availability.cant_add:
+        raise ValueError(f"{add_row.player.name} cannot be added or claimed in MFL right now")
+    if mode == "fcfs" and add_row.availability.locked:
+        raise ValueError(
+            f"{add_row.player.name} cannot be added immediately because the game is locked; "
+            "choose a priority or blind-bid waiver claim"
+        )
+    if drop_player is None:
+        raise ValueError("The selected drop player is no longer on your MFL roster")
+    if mode == "blind-bid" and (bid is None or bid < 0):
+        raise ValueError("Blind-bid waivers require a non-negative FAAB bid")
+    if mode == "waiver" and (round_number is None or round_number < 1):
+        raise ValueError("Priority waivers require a positive claim round")
+    if replace_existing and mode == "fcfs":
+        raise ValueError("Immediate FCFS moves cannot replace waiver claims")
+    preview = AddDropPreview(
         mode=mode,
+        add=add_row.player,
+        drop=drop_player,
+        league_id=league.id,
+        franchise_id=league.franchise_id,
         bid=bid,
-        round_number=round_number,
+        round=round_number,
         replace_existing=replace_existing,
     )
-    week = client.current_week()
     if week is not None:
-        locked = _locked_player_ids(
-            [preview.add, preview.drop],
-            client.nfl_team_kickoffs(week=week),
-        )
-        blocked = {
-            player_id for player_id in locked
-            if player_id == preview.drop.id or mode == "fcfs"
-        }
+        blocked = {preview.drop.id} & roster_locked
+        if mode == "fcfs" and add_row.availability.locked:
+            blocked.add(preview.add.id)
         if blocked:
             names = ", ".join(
                 player.name for player in (preview.add, preview.drop) if player.id in blocked
@@ -7664,6 +7822,7 @@ def show_preview(request: Request, pending_id: str):
             "success": None,
             "verified_on_mfl": False,
             "verification_message": None,
+            "roster_sync_id": None,
         },
     )
 
@@ -7680,6 +7839,7 @@ def submit_move(request: Request, pending_id: str, csrf_token: str = Form(...)):
     operation_status = "failed"
     verified_on_mfl = False
     verification_message = None
+    roster_sync_id = None
     try:
         client.validate_add_drop(preview)
         week = client.current_week()
@@ -7715,7 +7875,16 @@ def submit_move(request: Request, pending_id: str, csrf_token: str = Form(...)):
             if not verified_on_mfl:
                 raise write_error
             result = {"status": "verified-by-mfl-readback"}
-        if not verified_on_mfl:
+        if (
+            not verified_on_mfl
+            and preview.mode == "fcfs"
+            and _mfl_write_acknowledged(result)
+        ):
+            # MFL can acknowledge an FCFS write before its roster export has
+            # converged. Avoid an immediate extra read; begin one bounded check
+            # per minute instead.
+            roster_sync_id = _start_roster_sync(current, preview)
+        elif not verified_on_mfl:
             try:
                 verified_on_mfl = _add_drop_verified_on_mfl(client, preview)
             except MFLApiError as verify_error:
@@ -7724,7 +7893,8 @@ def submit_move(request: Request, pending_id: str, csrf_token: str = Form(...)):
                     "MFL accepted the request, but the follow-up report was unavailable. "
                     "Open MFL before submitting it again."
                 )
-        _invalidate_player_board(current, league.id)
+        if roster_sync_id is None:
+            _invalidate_player_board(current, league.id)
         if preview.mode != "fcfs":
             current.read_cache.pop(
                 f"{current.year}:{league.id}:report:pending-waivers", None,
@@ -7742,7 +7912,10 @@ def submit_move(request: Request, pending_id: str, csrf_token: str = Form(...)):
             )
         elif verification_message is None:
             verification_message = (
-                "MFL accepted the request, but the matching roster or pending claim has not appeared "
+                "MFL accepted the add/drop. Fantasy HQ will check the roster once per minute "
+                "for up to 10 checks and stop as soon as the exact change appears."
+                if roster_sync_id
+                else "MFL accepted the request, but the matching roster or pending claim has not appeared "
                 "in the follow-up report yet. Check MFL before submitting it again."
             )
         error = None
@@ -7780,6 +7953,7 @@ def submit_move(request: Request, pending_id: str, csrf_token: str = Form(...)):
             "result": result,
             "verified_on_mfl": verified_on_mfl,
             "verification_message": verification_message,
+            "roster_sync_id": roster_sync_id,
         },
         status_code=200 if success else 502,
     )
@@ -8447,6 +8621,111 @@ class StageMoveRequest(BaseModel):
     replace_existing: bool = False
 
 
+@app.get("/api/roster-sync/{sync_id}")
+def api_roster_sync(request: Request, sync_id: str):
+    """Reconcile one acknowledged FCFS move at most once per minute."""
+    current = _require_session(request)
+    sync = current.roster_syncs.get(sync_id)
+    if sync is None:
+        raise HTTPException(status_code=404, detail="This roster sync expired")
+    league = _league(current, sync.league_id)
+    now = time.monotonic()
+    if sync.status == "reflected":
+        return {
+            "status": "reflected", "reflected": True, "attempts": sync.attempts,
+            "message": "Your Fantasy HQ roster now matches MFL.",
+        }
+    if sync.status == "stopped" or now - sync.created_at >= 30 * 60:
+        sync.status = "stopped"
+        return {
+            "status": "stopped", "reflected": False, "attempts": sync.attempts,
+            "message": "Automatic roster checks stopped. Open MFL before trying the move again.",
+        }
+    if now < sync.next_check_at:
+        return {
+            "status": "waiting", "reflected": False, "attempts": sync.attempts,
+            "retry_after": max(1, math.ceil(sync.next_check_at - now)),
+            "message": "Waiting for the next one-minute MFL roster check.",
+        }
+    session_cooldown = current.provider_cooldowns.get(league.id, 0.0)
+    if session_cooldown > now:
+        sync.next_check_at = session_cooldown
+        return {
+            "status": "paused", "reflected": False, "attempts": sync.attempts,
+            "retry_after": max(1, math.ceil(session_cooldown - now)),
+            "message": "Roster sync is paused while MFL's rate-limit cooldown is active.",
+        }
+
+    # Reserve this minute before doing network I/O. Duplicate browser tabs can
+    # request the same sync URL concurrently; only the first request may reach
+    # MFL, while the rest observe the reserved next-check time.
+    with current.read_lock:
+        if now < sync.next_check_at:
+            return {
+                "status": "waiting", "reflected": False, "attempts": sync.attempts,
+                "retry_after": max(1, math.ceil(sync.next_check_at - now)),
+                "message": "Waiting for the next one-minute MFL roster check.",
+            }
+        sync.next_check_at = now + 60
+
+    client = _client(current, league)
+    try:
+        roster_ids = client.roster_ids()
+    except MFLRateLimitError as error:
+        current.provider_cooldowns[league.id] = now + error.retry_after
+        sync.next_check_at = now + error.retry_after
+        _log_provider_error_once(
+            current, league.id, "roster_sync_rate_limited", error,
+            window=error.retry_after,
+        )
+        return {
+            "status": "paused", "reflected": False, "attempts": sync.attempts,
+            "retry_after": error.retry_after,
+            "message": "Roster sync is paused while MFL's rate-limit cooldown is active.",
+        }
+    except MFLApiError as error:
+        sync.next_check_at = now + 60
+        _log_provider_error_once(
+            current, league.id, "roster_sync_unavailable", error, window=300,
+        )
+        return {
+            "status": "waiting", "reflected": False, "attempts": sync.attempts,
+            "retry_after": 60,
+            "message": "MFL roster verification is temporarily unavailable; the next check is in one minute.",
+        }
+
+    current.provider_cooldowns.pop(league.id, None)
+    sync.attempts += 1
+    reflected = sync.add_id in roster_ids and sync.drop_id not in roster_ids
+    if reflected:
+        sync.status = "reflected"
+        _remember_synced_roster(current, league, set(roster_ids))
+        _record_operation(
+            current,
+            league_id=league.id,
+            kind="roster sync",
+            title="MFL roster synchronized",
+            status="verified",
+            message="The accepted add/drop is now reflected in Fantasy HQ.",
+        )
+        return {
+            "status": "reflected", "reflected": True, "attempts": sync.attempts,
+            "message": "Your Fantasy HQ roster now matches MFL.",
+        }
+    if sync.attempts >= sync.max_attempts:
+        sync.status = "stopped"
+        return {
+            "status": "stopped", "reflected": False, "attempts": sync.attempts,
+            "message": "MFL still does not show the exact roster change after 10 checks. Check MFL before submitting again.",
+        }
+    sync.next_check_at = now + 60
+    return {
+        "status": "waiting", "reflected": False, "attempts": sync.attempts,
+        "retry_after": 60,
+        "message": "MFL has not reflected the exact roster change yet; checking again in one minute.",
+    }
+
+
 @app.get("/api/player-market/verify")
 def api_player_market_verify(request: Request, league: str, revision: str = ""):
     """Verify ownership and kickoff locks without waiting on projection providers."""
@@ -8519,7 +8798,14 @@ def api_player_market_pending_claims(request: Request, league: str):
     selected = _league(current, league)
     client = _client(current, selected)
     try:
-        claims = client.pending_waivers()
+        claims = _cached_session_read(
+            current,
+            selected.id,
+            "pending-waivers",
+            client.pending_waivers,
+            ttl=60,
+            stale_ttl=300,
+        )
     except MFLApiError as error:
         _log_provider_error_once(
             current, selected.id, "player_market_pending_waivers_unavailable", error,

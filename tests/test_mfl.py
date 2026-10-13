@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 import requests
 
+from weekly_projections.mfl import client as mfl_client_module
 from weekly_projections.mfl.client import (
     AddDropPreview,
     MFLApiError,
@@ -91,6 +92,32 @@ def test_http_429_returns_actionable_message_without_retrying():
     with pytest.raises(MFLRateLimitError, match="HTTP 429.*45 seconds") as caught:
         client._decode(response)
     assert caught.value.retry_after == 45
+
+
+def test_real_http_429_opens_one_host_wide_read_circuit(monkeypatch):
+    mfl_client_module._mfl_read_cooldowns.clear()
+    response = requests.Response()
+    response.status_code = 429
+    response.url = "https://www42.myfantasyleague.com/2026/export?TYPE=freeAgents"
+    response.request = requests.Request("GET", response.url).prepare()
+    client = MFLClient(_config(user_cookie="cookie", base_url="https://www42.myfantasyleague.com"))
+    calls = []
+
+    try:
+        with pytest.raises(MFLRateLimitError, match="paused for 15 minutes") as caught:
+            client._decode(response)
+        assert caught.value.retry_after == 900
+
+        def unexpected_get(*args, **kwargs):
+            calls.append((args, kwargs))
+            raise AssertionError("host circuit should stop this request before transport")
+
+        monkeypatch.setattr(client.session, "get", unexpected_get)
+        with pytest.raises(MFLRateLimitError, match="MFL reads are paused"):
+            client.export("freeAgents")
+        assert calls == []
+    finally:
+        mfl_client_module._mfl_read_cooldowns.clear()
 
 
 def test_default_transport_does_not_retry_http_429():

@@ -635,9 +635,14 @@
     return true;
   };
   const scheduleMarketEnrichment = () => {
-    if (!marketWorkspace?.dataset.playerMarketEnrichment) return;
-    if ("requestIdleCallback" in window) window.requestIdleCallback(enrichMarket, { timeout: 1500 });
-    else window.setTimeout(enrichMarket, 0);
+    const loadExtrasInOrder = async () => {
+      await enrichMarket();
+      // Do not burst the pending-waiver request alongside the larger market
+      // verification/enrichment requests. MFL applies one shared rate budget.
+      window.setTimeout(loadPendingClaims, 1000);
+    };
+    if ("requestIdleCallback" in window) window.requestIdleCallback(loadExtrasInOrder, { timeout: 1500 });
+    else window.setTimeout(loadExtrasInOrder, 0);
   };
   const enrichMarket = async () => {
     const url = marketWorkspace?.dataset.playerMarketEnrichment;
@@ -778,8 +783,6 @@
       target.append(message);
     }
   };
-  if (pendingClaimsCard) window.setTimeout(loadPendingClaims, 0);
-
   const moveBuilder = document.querySelector("#move-builder");
   const useDefenseSuggestion = (button) => {
     const radio = [...document.querySelectorAll('input[name="add_id"]')].find((input) => input.value === button.dataset.streamPick);
@@ -1075,6 +1078,56 @@
       if (remaining <= 0) checkWindow();
     }, 1000);
     else scheduleKickoff(document.body.dataset.nextKickoff);
+  }
+
+  const rosterSync = document.querySelector("[data-roster-sync-url]");
+  if (rosterSync) {
+    const status = rosterSync.querySelector('[role="status"]');
+    const detail = rosterSync.querySelector("small");
+    let timer = null;
+    let running = false;
+    const schedule = (seconds = 60) => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(checkRoster, Math.max(60, Number(seconds) || 60) * 1000);
+    };
+    const checkRoster = async () => {
+      if (running) return;
+      if (document.hidden) { schedule(60); return; }
+      running = true;
+      try {
+        const response = await fetch(rosterSync.dataset.rosterSyncUrl, {
+          headers: { "Accept": "application/json" },
+          signal: AbortSignal.timeout(20000),
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.detail || "Roster sync is unavailable.");
+        if (status) status.textContent = data.message;
+        if (detail) detail.textContent = `${data.attempts || 0} of 10 MFL roster checks used.`;
+        if (data.reflected) {
+          rosterSync.classList.add("verified");
+          const link = document.createElement("a");
+          link.className = "secondary-action";
+          link.href = rosterSync.dataset.rosterUrl;
+          link.textContent = "Open synchronized roster";
+          rosterSync.append(link);
+          return;
+        }
+        if (data.status === "stopped") {
+          rosterSync.classList.add("warning");
+          return;
+        }
+        schedule(data.retry_after || 60);
+      } catch (error) {
+        if (status) status.textContent = `${error.message} Automatic checks will retry in one minute.`;
+        schedule(60);
+      } finally {
+        running = false;
+      }
+    };
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && !running) schedule(60);
+    });
+    schedule(60);
   }
 
   const context = document.modelContext;

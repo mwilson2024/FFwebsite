@@ -22,12 +22,15 @@ TEAM_ALIASES = {"LVR": "LV", "LAR": "LAR", "JAC": "JAX", "NEP": "NE", "NOS": "NO
 EVENTS = {
     "PY": ("passing", "passingYards", "Passing yards"),
     "#P": ("passing", "passingTouchdowns", "Passing TDs"),
+    "P2": ("passing", "passingTwoPointConversions", "Passing two-point conversions"),
     "IN": ("passing", "interceptions", "Interceptions thrown"),
     "RY": ("rushing", "rushingYards", "Rushing yards"),
     "#R": ("rushing", "rushingTouchdowns", "Rushing TDs"),
+    "R2": ("rushing", "rushingTwoPointConversions", "Rushing two-point conversions"),
     "CY": ("receiving", "receivingYards", "Receiving yards"),
     "CC": ("receiving", "receptions", "Receptions"),
     "#C": ("receiving", "receivingTouchdowns", "Receiving TDs"),
+    "C2": ("receiving", "receivingTwoPointConversions", "Receiving two-point conversions"),
     "FL": ("fumbles", "fumblesLost", "Fumbles lost"),
     "EP": ("kicking", "extraPointsMade", "Extra points"),
     "#KT": ("kickReturns", "kickReturnTouchdowns", "Kick return TDs"),
@@ -37,12 +40,13 @@ EVENTS = {
     "SK": ("teamDefense", "sacks", "Sacks"),
     "SF": ("teamDefense", "safeties", "Safeties"),
     "PA": ("teamDefense", "pointsAllowed", "Points allowed"),
+    "TPA": ("teamDefense", "pointsAllowed", "Total points allowed"),
     "#DT": ("teamDefense", "touchdowns", "Defensive/special-teams TDs"),
 }
 STAT_FIELDS = {
-    "passing": [("completions/passingAttempts", "C/ATT"), ("passingYards", "pass yds"), ("passingTouchdowns", "pass TD"), ("interceptions", "INT")],
-    "rushing": [("rushingAttempts", "carries"), ("rushingYards", "rush yds"), ("rushingTouchdowns", "rush TD")],
-    "receiving": [("receptions", "rec"), ("receivingYards", "rec yds"), ("receivingTouchdowns", "rec TD"), ("receivingTargets", "targets")],
+    "passing": [("completions/passingAttempts", "C/ATT"), ("passingYards", "pass yds"), ("passingTouchdowns", "pass TD"), ("passingTwoPointConversions", "pass 2PT"), ("interceptions", "INT")],
+    "rushing": [("rushingAttempts", "carries"), ("rushingYards", "rush yds"), ("rushingTouchdowns", "rush TD"), ("rushingTwoPointConversions", "rush 2PT")],
+    "receiving": [("receptions", "rec"), ("receivingYards", "rec yds"), ("receivingTouchdowns", "rec TD"), ("receivingTwoPointConversions", "rec 2PT"), ("receivingTargets", "targets")],
     "fumbles": [("fumblesLost", "fumbles lost")],
     "kicking": [("fieldGoalsMade/fieldGoalAttempts", "FG"), ("longFieldGoalMade", "long FG"), ("extraPointsMade/extraPointAttempts", "XP")],
     "defensive": [("totalTackles", "tackles"), ("soloTackles", "solo"), ("sacks", "sacks"), ("defensiveTouchdowns", "def TD")],
@@ -88,6 +92,64 @@ def _is_defense_or_special_teams_touchdown(play: dict) -> bool:
     ))
 
 
+def _player_name_aliases(player: MFLPlayer) -> set[str]:
+    """Return full and ESPN play-by-play forms without broad surname matching."""
+    full = _normalized_words(_player_display_name(player))
+    parts = full.split()
+    aliases = {full} if full else set()
+    if len(parts) >= 2:
+        family_index = -2 if parts[-1] in {"jr", "sr", "ii", "iii", "iv", "v"} else -1
+        aliases.add(f"{parts[0][0]} {parts[family_index]}")
+    return aliases
+
+
+def _two_point_conversion_counts(payload: dict, player: MFLPlayer) -> dict[str, int]:
+    """Extract successful conversion roles that ESPN omits from player stat tables.
+
+    ESPN's scoring-play summary uses full names (``A Pass to B for Two-Point
+    Conversion``), while detailed play text can use initials and an explicit
+    ``ATTEMPT SUCCEEDS`` marker. Failed and intercepted attempts are ignored.
+    """
+    aliases = _player_name_aliases(player)
+    counts = {"passingTwoPointConversions": 0, "rushingTwoPointConversions": 0,
+              "receivingTwoPointConversions": 0}
+    if not aliases:
+        return counts
+    team_code = TEAM_ALIASES.get(player.team.upper(), player.team.upper())
+    for play in payload.get("scoringPlays") or []:
+        if not isinstance(play, dict):
+            continue
+        play_team = _play_team(play)
+        if team_code and play_team and play_team != team_code:
+            continue
+        text = _normalized_words(play.get("text", ""))
+        if "two point conversion" not in text:
+            continue
+        if any(marker in text for marker in (
+            "conversion failed", "attempt fails", "attempt failed", "intercepted",
+            "no good", "unsuccessful",
+        )):
+            continue
+        if "for two point conversion" not in text and "attempt succeeds" not in text:
+            continue
+        for alias in aliases:
+            escaped = re.escape(alias)
+            if re.search(rf"(?:^|\s){escaped}\s+pass(?:es)?\s+to(?:\s|$)", text):
+                counts["passingTwoPointConversions"] += 1
+                break
+        for alias in aliases:
+            escaped = re.escape(alias)
+            if re.search(rf"(?:^|\s)pass(?:es)?\s+to\s+{escaped}(?:\s|$)", text):
+                counts["receivingTwoPointConversions"] += 1
+                break
+        for alias in aliases:
+            escaped = re.escape(alias)
+            if re.search(rf"(?:^|\s){escaped}\s+(?:run|rush|rushes)(?:\s|$)", text):
+                counts["rushingTwoPointConversions"] += 1
+                break
+    return counts
+
+
 @lru_cache(maxsize=128)
 def _public_json(path: str, params: tuple, minute: int) -> dict:
     # Fixed origin and separately-created request: no MFL cookies or league IDs.
@@ -114,6 +176,16 @@ def parse_boxscore(payload: dict, player: MFLPlayer, year: int, week: int) -> di
                 if str(athlete.get("athlete", {}).get("id", "")) != player.espn_id or not player.espn_id:
                     continue
                 categories[category.get("name", "")] = dict(zip(category.get("keys", []), athlete.get("stats", [])))
+    if not _is_team_defense(player):
+        conversion_counts = _two_point_conversion_counts(payload, player)
+        for category, key in (
+            ("passing", "passingTwoPointConversions"),
+            ("rushing", "rushingTwoPointConversions"),
+            ("receiving", "receivingTwoPointConversions"),
+        ):
+            count = conversion_counts[key]
+            if count:
+                categories.setdefault(category, {})[key] = str(count)
     lines = []
     for category, fields in STAT_FIELDS.items():
         values = categories.get(category, {})
@@ -402,7 +474,7 @@ def scoring_components(boxscore: dict, rules: dict, position: str) -> list[dict]
             if points:
                 tier_label = (
                     f"{label} tier ({bounds[1]}–{bounds[2]})"
-                    if event == "PA"
+                    if event in {"PA", "TPA"}
                     else f"{label} bonus ({bounds[1]}–{bounds[2]})"
                 )
                 result.append({"label": label if expression.startswith("*") else tier_label, "stat": str(amount), "points": float(points), "rule": expression})

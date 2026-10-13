@@ -115,6 +115,63 @@ def test_league_rules_include_receptions_yards_td_and_bonus_not_generic_ppr():
     assert scoring_components({"categories": {}}, sample_rules(), "WR") == []
 
 
+def test_successful_two_point_pass_rush_and_reception_are_scored_from_espn_plays():
+    payload = {
+        "header": {
+            "week": 5,
+            "season": {"year": 2026, "type": 2},
+            "competitions": [{"status": {"type": {"state": "post", "completed": True}}}],
+        },
+        "boxscore": {"players": [{"statistics": [
+            {
+                "name": "passing", "keys": ["passingYards", "passingTouchdowns"],
+                "athletes": [{"athlete": {"id": "1"}, "stats": ["250", "2"]}],
+            },
+            {
+                "name": "receiving", "keys": ["receptions", "receivingYards"],
+                "athletes": [{"athlete": {"id": "2"}, "stats": ["6", "72"]}],
+            },
+            {
+                "name": "rushing", "keys": ["rushingAttempts", "rushingYards"],
+                "athletes": [{"athlete": {"id": "3"}, "stats": ["20", "115"]}],
+            },
+        ]}]},
+        "scoringPlays": [
+            {
+                "text": "Touchdown (Josh Allen Pass to Dalton Kincaid for Two-Point Conversion)",
+                "team": {"abbreviation": "BUF"},
+            },
+            {
+                "text": "Touchdown (Derrick Henry Run for Two-Point Conversion)",
+                "team": {"abbreviation": "BAL"},
+            },
+            {
+                "text": "TWO-POINT CONVERSION ATTEMPT. J.Allen pass to D.Kincaid is intercepted. ATTEMPT FAILS.",
+                "team": {"abbreviation": "BUF"},
+            },
+        ],
+    }
+    rules = {"positionRules": [
+        {"positions": "QB", "rule": {"event": "P2", "range": "0-10", "points": "*2"}},
+        {"positions": "TE", "rule": {"event": "C2", "range": "0-10", "points": "*2"}},
+        {"positions": "RB", "rule": {"event": "R2", "range": "0-10", "points": "*2"}},
+    ]}
+
+    allen = parse_boxscore(payload, MFLPlayer("a", "Allen, Josh", "QB", "BUF", "1"), 2026, 5)
+    kincaid = parse_boxscore(payload, MFLPlayer("k", "Kincaid, Dalton", "TE", "BUF", "2"), 2026, 5)
+    henry = parse_boxscore(payload, MFLPlayer("h", "Henry, Derrick", "RB", "BAL", "3"), 2026, 5)
+
+    assert allen["categories"]["passing"]["passingTwoPointConversions"] == "1"
+    assert kincaid["categories"]["receiving"]["receivingTwoPointConversions"] == "1"
+    assert henry["categories"]["rushing"]["rushingTwoPointConversions"] == "1"
+    assert any("1 pass 2PT" in line for line in allen["stat_lines"])
+    assert any("1 rec 2PT" in line for line in kincaid["stat_lines"])
+    assert any("1 rush 2PT" in line for line in henry["stat_lines"])
+    assert sum(row["points"] for row in scoring_components(allen, rules, "QB")) == 2
+    assert sum(row["points"] for row in scoring_components(kincaid, rules, "TE")) == 2
+    assert sum(row["points"] for row in scoring_components(henry, rules, "RB")) == 2
+
+
 def test_team_defense_live_points_include_every_configured_league_rule():
     payload = {
         "header": {
@@ -199,6 +256,33 @@ def test_defense_points_allowed_tier_handles_real_world_rule_format_variants():
         "Fumbles recovered", "Sacks", "Points allowed tier (8–11)",
     ]
     assert sum(row["points"] for row in components) == 6
+
+
+def test_mfl_total_points_allowed_event_scores_17_points_and_one_sack():
+    box = {
+        "categories": {
+            "teamDefense": {
+                "sacks": "1",
+                "pointsAllowed": "17",
+            },
+        },
+    }
+    rules = {"positionRules": {"positions": "Def", "rule": [
+        {"event": "SK", "range": "0-25", "points": "*1"},
+        {"event": "TPA", "range": "0-0", "points": "10"},
+        {"event": "TPA", "range": "2-3", "points": "5"},
+        {"event": "TPA", "range": "4-7", "points": "3"},
+        {"event": "TPA", "range": "8-11", "points": "2"},
+        {"event": "TPA", "range": "12-18", "points": "1"},
+        {"event": "TPA", "range": "19-100", "points": "0"},
+    ]}}
+
+    components = scoring_components(box, rules, "Def")
+
+    assert [row["label"] for row in components] == [
+        "Sacks", "Total points allowed tier (12–18)",
+    ]
+    assert [row["points"] for row in components] == [1, 1]
 
 
 def scoring_client(monkeypatch, status="starter", seconds=0):

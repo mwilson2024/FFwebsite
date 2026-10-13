@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import os
 import re
+import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+from threading import Lock
 from typing import Any, Iterable, Iterator, Literal
 from urllib.parse import urlsplit, urlunsplit
 
@@ -24,9 +26,37 @@ class MFLWriteUncertainError(MFLApiError):
 class MFLRateLimitError(MFLApiError):
     """MFL temporarily refused reads because its request budget was exhausted."""
 
-    def __init__(self, message: str, *, retry_after: int = 120) -> None:
+    def __init__(self, message: str, *, retry_after: int = 900) -> None:
         super().__init__(message)
-        self.retry_after = max(30, min(900, retry_after))
+        self.retry_after = max(30, min(3600, retry_after))
+
+
+_mfl_read_cooldowns: dict[str, float] = {}
+_mfl_read_cooldown_lock = Lock()
+
+
+def _mfl_read_cooldown_key(url: str) -> str:
+    """Share one 429 circuit per MFL host without retaining request details."""
+    host = (urlsplit(str(url or "")).hostname or "api.myfantasyleague.com").casefold()
+    return host if host.endswith(".myfantasyleague.com") else "api.myfantasyleague.com"
+
+
+def _pause_mfl_reads(url: str, seconds: int) -> None:
+    key = _mfl_read_cooldown_key(url)
+    until = time.monotonic() + max(30, min(3600, int(seconds)))
+    with _mfl_read_cooldown_lock:
+        _mfl_read_cooldowns[key] = max(_mfl_read_cooldowns.get(key, 0.0), until)
+
+
+def _mfl_read_cooldown_remaining(url: str) -> int:
+    key = _mfl_read_cooldown_key(url)
+    now = time.monotonic()
+    with _mfl_read_cooldown_lock:
+        until = _mfl_read_cooldowns.get(key, 0.0)
+        if until <= now:
+            _mfl_read_cooldowns.pop(key, None)
+            return 0
+    return max(1, int(until - now + 0.999))
 
 
 @dataclass(frozen=True)
@@ -465,10 +495,21 @@ class MFLClient:
         except requests.RequestException as error:
             if response.status_code == 429:
                 retry_after = str(response.headers.get("Retry-After") or "").strip()
-                wait = f" Wait {retry_after} seconds before refreshing." if retry_after.isdecimal() else " Wait a few minutes before refreshing."
+                retry_seconds = int(retry_after) if retry_after.isdecimal() else 900
+                # A real requests response has a prepared request. Keep tests
+                # and synthetic response objects from leaking cooldown state
+                # into unrelated clients while sharing production 429s across
+                # every session that uses the same MFL host.
+                if getattr(response, "request", None) is not None:
+                    _pause_mfl_reads(str(getattr(response, "url", "")), retry_seconds)
+                wait = (
+                    f" Wait {retry_seconds} seconds before refreshing."
+                    if retry_after.isdecimal()
+                    else " Automatic MFL reads are paused for 15 minutes."
+                )
                 raise MFLRateLimitError(
                     "MFL's request limit was reached (HTTP 429)." + wait,
-                    retry_after=int(retry_after) if retry_after.isdecimal() else 120,
+                    retry_after=retry_seconds,
                 ) from error
             raise MFLApiError(f"MFL request failed: {error}") from error
         try:
@@ -500,6 +541,13 @@ class MFLClient:
             # League IDs cause MFL to route global feeds to a league server.
             params.pop("L", None)
         url = f"https://api.myfantasyleague.com/{self.config.year}" if global_feed else self.year_url
+        cooldown = _mfl_read_cooldown_remaining(url)
+        if cooldown:
+            raise MFLRateLimitError(
+                f"MFL reads are paused for {cooldown} seconds after HTTP 429. "
+                "Cached data remains available where possible.",
+                retry_after=cooldown,
+            )
         try:
             response = self.session.get(
                 f"{url}/export", params=params, timeout=(10, 60)

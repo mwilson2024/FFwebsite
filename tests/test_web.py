@@ -31,6 +31,7 @@ from weekly_projections.mfl.client import (
     MFLPendingTrade,
     MFLPendingWaiver,
     MFLPlayer,
+    MFLRateLimitError,
     MFLWriteUncertainError,
 )
 from weekly_projections.recommendations import PlayerRecommendation
@@ -442,9 +443,11 @@ def test_player_market_loads_authoritative_pending_claims_at_the_top(monkeypatch
         "102": MFLPlayer("102", "Drop Candidate", "RB", "GB"),
     }
     web_app.sessions["market-pending-session"] = current
+    calls = {"pending": 0}
 
     class PendingMarketClient:
         def pending_waivers(self):
+            calls["pending"] += 1
             return (MFLPendingWaiver("claim-1", ("101",), ("102",), round=1, order=2),)
 
     monkeypatch.setattr(web_app, "_client", lambda *args: PendingMarketClient())
@@ -472,9 +475,14 @@ def test_player_market_loads_authoritative_pending_claims_at_the_top(monkeypatch
     assert "✓</span> Verified on MFL" in fragment
     assert "Review withdrawal" in fragment
 
+    cached = client.get("/api/player-market/pending-claims?league=11111")
+    assert cached.status_code == 200
+    assert cached.json()["count"] == 1
+    assert calls["pending"] == 1
+
 
 @pytest.mark.parametrize("mode", ["fcfs", "waiver"])
-def test_submitted_move_is_read_back_and_marked_verified_on_mfl(monkeypatch, mode) -> None:
+def test_submitted_move_uses_bounded_roster_sync_or_claim_readback(monkeypatch, mode) -> None:
     web_app.sessions.clear()
     league = MFLLeague("11111", "0001", "Home League")
     current = web_app.BrowserSession("cookie", 2026, [league], "csrf")
@@ -486,6 +494,8 @@ def test_submitted_move_is_read_back_and_marked_verified_on_mfl(monkeypatch, mod
     )
     current.pending_moves["move-1"] = preview
     web_app.sessions["verified-move-session"] = current
+
+    calls = {"roster": 0, "claims": 0}
 
     class VerifiedMoveClient:
         def validate_add_drop(self, submitted):
@@ -503,9 +513,11 @@ def test_submitted_move_is_read_back_and_marked_verified_on_mfl(monkeypatch, mod
             return {"status": "ok"}
 
         def roster_ids(self):
+            calls["roster"] += 1
             return {"101"}
 
         def pending_waivers(self):
+            calls["claims"] += 1
             return (MFLPendingWaiver("claim-1", ("101",), ("102",), round=1),)
 
     monkeypatch.setattr(web_app, "_client", lambda *args: VerifiedMoveClient())
@@ -516,9 +528,95 @@ def test_submitted_move_is_read_back_and_marked_verified_on_mfl(monkeypatch, mod
     response = client.post("/submit/move-1", data={"csrf_token": "csrf"})
 
     assert response.status_code == 200
-    assert "Verified on MFL" in response.text
-    assert current.operations[-1].status == "verified"
-    assert "Verified on MFL" in current.operations[-1].message
+    if mode == "fcfs":
+        assert "Roster synchronization is active" in response.text
+        assert "once per minute" in response.text
+        assert current.operations[-1].status == "submitted"
+        assert len(current.roster_syncs) == 1
+        assert calls == {"roster": 0, "claims": 0}
+    else:
+        assert "Verified on MFL" in response.text
+        assert current.operations[-1].status == "verified"
+        assert "Verified on MFL" in current.operations[-1].message
+        assert calls == {"roster": 0, "claims": 1}
+
+
+def test_roster_sync_waits_until_due_then_updates_cached_roster(monkeypatch) -> None:
+    web_app.sessions.clear()
+    league = MFLLeague("11111", "0001", "Home League")
+    current = web_app.BrowserSession("cookie", 2026, [league], "csrf")
+    sync = web_app.RosterSync(
+        league_id=league.id,
+        franchise_id=league.franchise_id,
+        add_id="101",
+        drop_id="102",
+        next_check_at=time.monotonic() + 60,
+    )
+    current.roster_syncs["sync-1"] = sync
+    web_app.sessions["roster-sync-session"] = current
+    calls = {"roster": 0}
+
+    class RosterSyncClient:
+        def roster_ids(self):
+            calls["roster"] += 1
+            return {"101", "103"}
+
+    monkeypatch.setattr(web_app, "_client", lambda *args: RosterSyncClient())
+    monkeypatch.setattr(web_app, "_load_database_player_market_snapshot", lambda *args: None)
+    monkeypatch.setattr(web_app, "_save_database_report_snapshot", lambda *args, **kwargs: None)
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", "roster-sync-session")
+
+    waiting = client.get("/api/roster-sync/sync-1")
+    assert waiting.status_code == 200
+    assert waiting.json()["status"] == "waiting"
+    assert calls["roster"] == 0
+
+    sync.next_check_at = 0
+    reflected = client.get("/api/roster-sync/sync-1")
+    assert reflected.status_code == 200
+    assert reflected.json() == {
+        "status": "reflected",
+        "reflected": True,
+        "attempts": 1,
+        "message": "Your Fantasy HQ roster now matches MFL.",
+    }
+    assert calls["roster"] == 1
+    assert current.read_cache["2026:11111:report:roster:0001"][1] == {"101", "103"}
+
+    repeated = client.get("/api/roster-sync/sync-1")
+    assert repeated.json()["status"] == "reflected"
+    assert calls["roster"] == 1
+
+
+def test_roster_sync_pauses_on_mfl_rate_limit_without_using_an_attempt(monkeypatch) -> None:
+    web_app.sessions.clear()
+    league = MFLLeague("11111", "0001", "Home League")
+    current = web_app.BrowserSession("cookie", 2026, [league], "csrf")
+    current.roster_syncs["sync-1"] = web_app.RosterSync(
+        league_id=league.id,
+        franchise_id=league.franchise_id,
+        add_id="101",
+        drop_id="102",
+        next_check_at=0,
+    )
+    web_app.sessions["roster-rate-session"] = current
+
+    class RateLimitedClient:
+        def roster_ids(self):
+            raise MFLRateLimitError("rate limited", retry_after=900)
+
+    monkeypatch.setattr(web_app, "_client", lambda *args: RateLimitedClient())
+    monkeypatch.setattr(web_app, "_log_provider_error_once", lambda *args, **kwargs: None)
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", "roster-rate-session")
+
+    response = client.get("/api/roster-sync/sync-1")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "paused"
+    assert response.json()["retry_after"] == 900
+    assert current.roster_syncs["sync-1"].attempts == 0
 
 
 @pytest.mark.parametrize("pricing_unavailable", [False, True])
@@ -2520,16 +2618,42 @@ def test_game_locked_free_agent_can_be_staged_as_waiver_but_not_fcfs(monkeypatch
 
     class MoveClient:
         _players = None
-        def preview_add_drop(self, **kwargs):
-            return AddDropPreview(
-                kwargs["mode"], add, drop, league.id, league.franchise_id,
-                bid=kwargs["bid"], round=kwargs["round_number"],
-                replace_existing=kwargs["replace_existing"],
-            )
-        def current_week(self): return 2
-        def nfl_team_kickoffs(self, *, week): return {"BUF": 1, "DET": 9999999999}
 
     monkeypatch.setattr(web_app, "_client", lambda *args: MoveClient())
+    monkeypatch.setattr(
+        web_app,
+        "_load_player_board",
+        lambda *args, **kwargs: (
+            2,
+            [drop],
+            [
+                PlayerRecommendation(
+                    add,
+                    MFLAvailability(add.id, status="locked", locked=True),
+                    None,
+                    None,
+                    None,
+                    "Waiver watch",
+                    "muted",
+                    "Immediate FCFS is locked.",
+                ),
+                PlayerRecommendation(
+                    drop,
+                    MFLAvailability(drop.id, status="mine"),
+                    None,
+                    None,
+                    None,
+                    "Your roster",
+                    "muted",
+                    "Rostered.",
+                    fantasy_team_id="0001",
+                    fantasy_team_name="Mine",
+                ),
+            ],
+            ProjectionBlend(scores={}, mfl_scores={}, ml_scores={}, ml_matched=0),
+            set(),
+        ),
+    )
     pending_id, preview, _ = web_app._stage_move(
         current, league_id=league.id, add_id=add.id, drop_id=drop.id,
         mode="waiver", bid=None, round_number=1,
@@ -2537,7 +2661,7 @@ def test_game_locked_free_agent_can_be_staged_as_waiver_but_not_fcfs(monkeypatch
     assert pending_id in current.pending_moves
     assert preview.mode == "waiver"
 
-    with pytest.raises(ValueError, match="Game already started"):
+    with pytest.raises(ValueError, match="cannot be added immediately"):
         web_app._stage_move(
             current, league_id=league.id, add_id=add.id, drop_id=drop.id,
             mode="fcfs", bid=None, round_number=None,

@@ -48,6 +48,9 @@ def test_completed_nfl_schedule_advances_stale_remembered_week(monkeypatch):
 
 
 def test_other_matchup_selection_loads_its_players_and_keeps_week(monkeypatch):
+    # This test reuses the synthetic cookie value used by other modules; keep
+    # their process-wide provider-week cache from changing this fixture's week.
+    web.shared_read_cache.clear()
     def team(fid, pid):
         return MFLLiveFranchise(fid,10,False,1,0,3600,(MFLLivePlayer(pid,10,'starter',3600),))
     live = MFLLiveScoring(1,(MFLLiveMatchup((team('0001','1'),team('0002','2'))),
