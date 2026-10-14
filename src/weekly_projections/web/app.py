@@ -620,6 +620,8 @@ class BrowserSession:
     social_posts: dict[str, SocialPostDraft] = field(default_factory=dict)
     depth_snapshots: dict[str, dict[str, int]] = field(default_factory=dict)
     watchlists: dict[str, set[str]] = field(default_factory=dict)
+    notification_states: dict[str, str] = field(default_factory=dict)
+    active_notification_ids: dict[str, set[str]] = field(default_factory=dict)
     live_timelines: dict[str, dict] = field(default_factory=dict)
     operations: list[OperationRecord] = field(default_factory=list)
     ranking_preference: str = field(default_factory=_default_ranking_preference)
@@ -3934,6 +3936,51 @@ def _practice_report(details: str) -> str:
     return "Not reported by MFL"
 
 
+def _notification_id(league_id: str, week: int | None, action: dict) -> str:
+    """Return a stable, non-secret identity for one specific alert version."""
+    value = "|".join((
+        str(league_id), str(week or ""), str(action.get("subject_id") or ""),
+        str(action.get("tone") or ""), str(action.get("title") or ""),
+        str(action.get("detail") or ""), str(action.get("href") or ""),
+    ))
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:24]
+
+
+def _prepare_notifications(
+    current: BrowserSession,
+    league_id: str,
+    week: int | None,
+    actions: list[dict],
+) -> tuple[list[dict], list[dict]]:
+    """Attach identities and apply this session's acknowledge/clear choices."""
+    active: list[dict] = []
+    acknowledged: list[dict] = []
+    actionable_ids: set[str] = set()
+    for source in actions:
+        action = dict(source)
+        # Positive empty-state copy is informational, not a recurring alert.
+        if action.get("tone") == "good" and action.get("subject_id") is None:
+            active.append(action)
+            continue
+        action_id = _notification_id(league_id, week, action)
+        action["id"] = action_id
+        actionable_ids.add(action_id)
+        state = current.notification_states.get(action_id, "active")
+        action["state"] = state
+        if state == "acknowledged":
+            acknowledged.append(action)
+        elif state != "cleared":
+            active.append(action)
+    current.active_notification_ids[str(league_id)] = actionable_ids
+    # Notification choices are intentionally session-only, but still bounded.
+    if len(current.notification_states) > 500:
+        keep = set().union(*current.active_notification_ids.values())
+        current.notification_states = {
+            key: value for key, value in current.notification_states.items() if key in keep
+        }
+    return active, acknowledged
+
+
 def _load_insights(
     current: BrowserSession,
     selected: MFLLeague,
@@ -4006,33 +4053,54 @@ def _load_insights(
     if open_slots:
         actions.append({
             "tone": "danger", "title": f"Fill {open_slots} open starter slot{'s' if open_slots != 1 else ''}",
-            "detail": "MFL's saved lineup is short of the league starter maximum.",
+            "detail": (
+                f"{selected.name}'s Week {week} MFL lineup has {open_slots} empty "
+                f"starter slot{'s' if open_slots != 1 else ''}."
+            ),
             "href": f"/lineup?league={selected.id}&week={week}", "label": "Fix lineup",
+            "subject_id": "lineup-open-slots",
         })
     changes = [item for item in lineup.players if item.action in {"START", "SIT"}]
     if changes and lineup.projected_gain > .05:
+        starts = ", ".join(item.player.name for item in changes if item.action == "START")
+        sits = ", ".join(item.player.name for item in changes if item.action == "SIT")
+        change_detail = "; ".join(
+            part for part in (
+                f"Start {starts}" if starts else "",
+                f"bench {sits}" if sits else "",
+            ) if part
+        )
         actions.append({
             "tone": "strong", "title": f"Best-lineup suggestion adds {lineup.projected_gain:.1f} projected points",
-            "detail": "Review the legal start/sit changes before confirming anything with MFL.",
+            "detail": f"{change_detail}. Review these legal changes before confirming anything with MFL.",
             "href": f"/lineup?league={selected.id}&week={week}", "label": "Review suggestion",
+            "subject_id": "best-lineup",
         })
     for row in rows:
-        if row["severity"] in {"danger", "warning"} and row["item"].recommended_start:
+        if row["severity"] in {"danger", "warning"} and row["item"].currently_starting:
             actions.append({
                 "tone": row["severity"], "title": f"{row['item'].player.name}: {row['injury_status']}",
-                "detail": row["injury_details"] or "MFL lists an injury designation for a recommended starter.",
+                "detail": (
+                    f"{row['injury_details']} This player is in your saved Week {week} MFL lineup."
+                    if row["injury_details"] else
+                    f"MFL lists an injury designation for this Week {week} starter."
+                ),
                 "href": row["news_url"], "label": "MFL news",
+                "subject_id": row["item"].player.id,
             })
     for team, outlook in weather.items():
         if outlook.caution:
             player_names = ", ".join(
                 item.player.name for item in lineup.players
-                if canonical_team(item.player.team) == team
+                if item.currently_starting and canonical_team(item.player.team) == team
             )[:120]
+            if not player_names:
+                continue
             actions.append({
                 "tone": "warning", "title": f"Weather watch: {player_names or team}",
                 "detail": f"{outlook.label}; {outlook.temperature_f or '—'}°F, {outlook.precipitation_percent or 0:.0f}% precipitation, {outlook.wind_mph or 0:.0f} mph wind.",
                 "href": f"/insights?league={selected.id}#weather", "label": "See forecast",
+                "subject_id": f"weather:{team}",
             })
     if not actions:
         actions.append({
@@ -4040,6 +4108,9 @@ def _load_insights(
             "detail": "Your saved lineup has no visible open slots or high-priority MFL injury conflicts.",
             "href": f"/lineup?league={selected.id}&week={week}", "label": "Check lineup",
         })
+    active_actions, acknowledged_actions = _prepare_notifications(
+        current, selected.id, week, actions[:8],
+    )
     reference_by_player = {item.player_id: item for item in accuracy.references}
     reference_rows = [
         {
@@ -4059,8 +4130,11 @@ def _load_insights(
     )
     return {
         "week": week, "lineup": lineup, "settings": settings, "blend": blend,
-        "rows": rows, "actions": actions[:8],
-        "alert_count": sum(action["tone"] in {"danger", "warning"} for action in actions[:8]),
+        "rows": rows, "actions": active_actions,
+        "acknowledged_actions": acknowledged_actions,
+        "alert_count": sum(
+            action["tone"] in {"danger", "warning"} for action in active_actions
+        ),
         "depth_updated": depth_updated,
         "accuracy": accuracy, "projection_tracker": _projection_tracker_summary(accuracy),
         "reference_rows": reference_rows, "errors": errors,
@@ -4994,7 +5068,7 @@ def _submit_emergency_lineup(
     *,
     week: int,
     kickoff: int,
-) -> dict[str, str]:
+) -> dict[str, object]:
     """Make one guarded five-minute write for an explicitly opted-in league."""
     if league.id not in current.emergency_lineup_leagues:
         return {"status": "disabled", "message": "Emergency lineup automation is off."}
@@ -5043,6 +5117,12 @@ def _submit_emergency_lineup(
             return {"status": "none", "message": "No legal emergency replacement was needed."}
         removed = set(recommendation.current_starters) - set(plan.starter_ids)
         added = set(plan.starter_ids) - set(recommendation.current_starters)
+        roster_by_id = {player.id: player for player in roster}
+        removed_names = sorted(roster_by_id[player_id].name for player_id in removed)
+        added_names = sorted(roster_by_id[player_id].name for player_id in added)
+        replacement_detail = (
+            f"Started {', '.join(added_names)} for {', '.join(removed_names)}."
+        )
         if removed != unavailable or len(added) != len(removed):
             raise ValueError("The emergency plan would change more than the unavailable starters")
         if any(
@@ -5112,7 +5192,7 @@ def _submit_emergency_lineup(
                 comments="Fantasy HQ emergency Out/Inactive replacement",
             )
             outcome = "submitted"
-            message = f"Emergency Week {week} lineup submitted to MFL."
+            message = f"Emergency Week {week} lineup submitted to MFL. {replacement_detail}"
         except MFLWriteUncertainError as write_error:
             # Readback is safe. The ambiguous POST itself is never retried.
             try:
@@ -5125,7 +5205,10 @@ def _submit_emergency_lineup(
                 saved_starters = set()
             if saved_starters == set(plan.starter_ids):
                 outcome = "verified"
-                message = f"Emergency Week {week} lineup verified after MFL's unclear receipt."
+                message = (
+                    f"Emergency Week {week} lineup verified after MFL's unclear receipt. "
+                    f"{replacement_detail}"
+                )
             else:
                 outcome = "uncertain"
                 message = (
@@ -5149,7 +5232,10 @@ def _submit_emergency_lineup(
             "emergency_lineup_result", league_id=league.id, week=week,
             outcome=outcome, changed_player_count=len(removed),
         )
-        return {"status": outcome, "message": message}
+        return {
+            "status": outcome, "message": message,
+            "removed_names": removed_names, "added_names": added_names,
+        }
     except Exception as error:
         log_error("emergency_lineup_failed", error)
         if claimed and action_key:
@@ -5175,7 +5261,7 @@ def _submit_emergency_lineup(
 
 
 def _background_push_cycle() -> None:
-    """Run pregame scans and send generic opted-in wake-ups when available."""
+    """Run pregame scans and send private, deduplicated opted-in wake-ups."""
     if not os.environ.get("WP_DATABASE_URL", "").strip():
         return
     cycle_time = int(time.time())
@@ -5284,7 +5370,9 @@ def _background_push_cycle() -> None:
                             )
 
                 if general_due:
-                    notification_parts.extend(item["title"] for item in urgent)
+                    notification_parts.extend(
+                        str(item.get("id") or item["title"]) for item in urgent
+                    )
                 if not notification_parts:
                     continue
                 signature = hashlib.sha256(
@@ -5299,7 +5387,8 @@ def _background_push_cycle() -> None:
                     send_web_push(
                         stored["subscription"], title="Fantasy HQ update",
                         body=notification_body,
-                        url="/dashboard?source=pwa-briefing", tag="fantasy-hq-briefing",
+                        url=f"/notifications?league={league.id}&source=pwa",
+                        tag=f"fantasy-hq-{league.id}-{signature[:8]}",
                     )
                     _persistent_store().mark_push_sent(
                         current.owner_fingerprint, stored["endpoint_hash"], signature,
@@ -5553,6 +5642,7 @@ def insights_page(request: Request, league: str):
         context.setdefault("errors", {})
         context.setdefault("rows", ())
         context.setdefault("actions", ())
+        context.setdefault("acknowledged_actions", ())
         context.setdefault("accuracy", empty_accuracy)
         context.setdefault("projection_tracker", _projection_tracker_summary(context["accuracy"]))
         context.setdefault("ranking_label", _RANKING_PREFERENCES[current.ranking_preference])
@@ -5569,7 +5659,7 @@ def insights_page(request: Request, league: str):
         context = {
             "session": current, "league": selected, "active_tool": "home",
             "error": "Roster intelligence is temporarily unavailable. Existing league pages are still available.",
-            "errors": {}, "rows": (), "actions": (),
+            "errors": {}, "rows": (), "actions": (), "acknowledged_actions": (),
             "accuracy": ProjectionAccuracyReport((), (), (), ()), "week": None,
             "projection_tracker": _projection_tracker_summary(ProjectionAccuracyReport((), (), (), ())),
             "ranking_label": _RANKING_PREFERENCES[current.ranking_preference],
@@ -6165,6 +6255,70 @@ def notifications_page(request: Request, league: str):
     current = _require_session(request)
     selected = _league(current, league)
     return RedirectResponse(f"/insights?league={selected.id}#action-center", status_code=303)
+
+
+def _update_notification_state(
+    current: BrowserSession, league_id: str, action_id: str, state: str,
+) -> None:
+    if not re.fullmatch(r"[0-9a-f]{24}", action_id):
+        raise HTTPException(status_code=400, detail="Choose a valid alert")
+    if action_id not in current.active_notification_ids.get(league_id, set()):
+        raise HTTPException(status_code=404, detail="This alert is no longer active")
+    current.notification_states[action_id] = state
+    _clear_report_cache(current, league_id, "home-briefing")
+
+
+@app.post("/notifications/acknowledge")
+def acknowledge_notification(
+    request: Request,
+    league: str = Form(...),
+    action_id: str = Form(...),
+    csrf_token: str = Form(...),
+):
+    current = _require_session(request)
+    _check_csrf(current, csrf_token)
+    selected = _league(current, league)
+    _update_notification_state(current, selected.id, action_id, "acknowledged")
+    return RedirectResponse(
+        f"/insights?league={selected.id}#action-center", status_code=303,
+    )
+
+
+@app.post("/notifications/clear")
+def clear_notification(
+    request: Request,
+    league: str = Form(...),
+    action_id: str = Form(...),
+    csrf_token: str = Form(...),
+):
+    current = _require_session(request)
+    _check_csrf(current, csrf_token)
+    selected = _league(current, league)
+    _update_notification_state(current, selected.id, action_id, "cleared")
+    return RedirectResponse(
+        f"/insights?league={selected.id}#action-center", status_code=303,
+    )
+
+
+@app.post("/notifications/{operation}-all")
+def update_all_notifications(
+    request: Request,
+    operation: str,
+    league: str = Form(...),
+    csrf_token: str = Form(...),
+):
+    current = _require_session(request)
+    _check_csrf(current, csrf_token)
+    selected = _league(current, league)
+    if operation not in {"acknowledge", "clear"}:
+        raise HTTPException(status_code=404)
+    state = "acknowledged" if operation == "acknowledge" else "cleared"
+    for action_id in current.active_notification_ids.get(selected.id, set()):
+        current.notification_states[action_id] = state
+    _clear_report_cache(current, selected.id, "home-briefing")
+    return RedirectResponse(
+        f"/insights?league={selected.id}#action-center", status_code=303,
+    )
 
 
 @app.get("/schedule", response_class=HTMLResponse)
@@ -8581,8 +8735,12 @@ def test_push(request: Request):
             raise ValueError("Enable background alerts on this device first")
         send_web_push(
             stored[0]["subscription"], title="Fantasy HQ background alerts are ready",
-            body="This generic test arrived through Web Push. Open the app to view private league details.",
-            url="/dashboard?source=pwa-briefing", tag="fantasy-hq-test",
+            body="Test succeeded. Open Fantasy HQ to review detailed player alerts and their acknowledge or clear controls.",
+            url=(
+                f"/notifications?league={stored[0].get('league_id')}"
+                if stored[0].get("league_id") else "/dashboard?source=pwa-briefing"
+            ),
+            tag="fantasy-hq-test",
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))

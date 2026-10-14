@@ -40,6 +40,10 @@ def test_service_worker_handles_background_push_and_safe_internal_navigation():
     assert "addEventListener('push'" in script
     assert "payload.url.startsWith('/')" in script
     assert "showNotification" in script
+    foreground = (ROOT / "src" / "weekly_projections" / "web" / "static" / "pwa.js").read_text(
+        encoding="utf-8"
+    )
+    assert "registration.showNotification" not in foreground
 
 
 def test_command_center_loads_leagues_sequentially():

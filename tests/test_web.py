@@ -1178,9 +1178,13 @@ def test_notification_center_and_first_run_guide(monkeypatch) -> None:
     league = MFLLeague("88883", "0001", "Alert League")
     current = web_app.BrowserSession("tools-alert-cookie", 2026, [league], "csrf")
     web_app.sessions["tools-alert"] = current
+    action_id = "a" * 24
+    current.active_notification_ids[league.id] = {action_id}
     monkeypatch.setattr(web_app, "_load_insights", lambda *args, **kwargs: {
-        "actions": [{"tone": "warning", "title": "Questionable starter", "detail": "Check Sunday status.",
+        "actions": [{"id": action_id, "tone": "warning", "title": "Amon-Ra St. Brown: Questionable",
+                     "detail": "Amon-Ra St. Brown was limited Friday with a knee injury.",
                      "href": "/lineup?league=88883", "label": "Review"}],
+        "acknowledged_actions": [],
     })
     class AlertClient:
         def transactions(self, **kwargs): return ()
@@ -1188,7 +1192,22 @@ def test_notification_center_and_first_run_guide(monkeypatch) -> None:
     client = TestClient(web_app.app)
     client.cookies.set("wp_session", "tools-alert")
     alerts = client.get("/notifications?league=88883")
-    assert alerts.status_code == 200 and "Questionable starter" in alerts.text
+    assert alerts.status_code == 200 and "Amon-Ra St. Brown" in alerts.text
+    assert "Acknowledge" in alerts.text and "Clear" in alerts.text
+    rejected = client.post("/notifications/acknowledge", data={
+        "league": league.id, "action_id": action_id, "csrf_token": "wrong",
+    }, follow_redirects=False)
+    assert rejected.status_code == 403
+    acknowledged = client.post("/notifications/acknowledge", data={
+        "league": league.id, "action_id": action_id, "csrf_token": "csrf",
+    }, follow_redirects=False)
+    assert acknowledged.status_code == 303
+    assert current.notification_states[action_id] == "acknowledged"
+    cleared = client.post("/notifications/clear", data={
+        "league": league.id, "action_id": action_id, "csrf_token": "csrf",
+    }, follow_redirects=False)
+    assert cleared.status_code == 303
+    assert current.notification_states[action_id] == "cleared"
     home = client.get("/home?league=88883")
     assert "Which rankings should lead your player lists?" in home.text and "My activity" in home.text
     saved = client.post("/preferences/rankings", data={
@@ -1200,6 +1219,37 @@ def test_notification_center_and_first_run_guide(monkeypatch) -> None:
     assert "Your league is connected" in home.text
     dismissed = client.post("/onboarding/dismiss", data={"league": "88883", "csrf_token": "csrf"}, follow_redirects=False)
     assert dismissed.status_code == 303 and dismissed.cookies.get("wp_tour_done") == "1"
+
+
+def test_notification_versions_are_deduplicated_until_details_change() -> None:
+    league = MFLLeague("88883", "0001", "Alert League")
+    current = web_app.BrowserSession("cookie", 2026, [league], "csrf")
+    questionable = [{
+        "tone": "warning", "title": "Amon-Ra St. Brown: Questionable",
+        "detail": "Limited Friday with a knee injury.", "subject_id": "1234",
+        "href": "/lineup?league=88883&week=6", "label": "Review",
+    }]
+
+    active, acknowledged = web_app._prepare_notifications(
+        current, league.id, 6, questionable,
+    )
+    assert len(active) == 1 and not acknowledged
+    alert_id = active[0]["id"]
+    current.notification_states[alert_id] = "acknowledged"
+    active, acknowledged = web_app._prepare_notifications(
+        current, league.id, 6, questionable,
+    )
+    assert not active and [item["id"] for item in acknowledged] == [alert_id]
+    current.notification_states[alert_id] = "cleared"
+    active, acknowledged = web_app._prepare_notifications(
+        current, league.id, 6, questionable,
+    )
+    assert not active and not acknowledged
+
+    changed = [dict(questionable[0], title="Amon-Ra St. Brown: Out")]
+    active, acknowledged = web_app._prepare_notifications(current, league.id, 6, changed)
+    assert len(active) == 1 and not acknowledged
+    assert active[0]["id"] != alert_id
 
 
 def test_ranking_preference_is_csrf_protected_and_changeable(monkeypatch) -> None:
@@ -2810,5 +2860,6 @@ def test_five_minute_emergency_submit_changes_only_out_starter(monkeypatch):
     )
 
     assert result["status"] == "submitted"
+    assert "Started Healthy Backup for Out Receiver" in result["message"]
     assert client.submitted == [{"qb", "backup"}]
     assert store.outcomes == ["submitted"]

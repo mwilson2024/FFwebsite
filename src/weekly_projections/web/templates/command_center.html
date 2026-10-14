@@ -7,11 +7,11 @@
   <title>Command center</title>
   <link rel="stylesheet" href="/static/app.css?v=20260927-command">
   <link rel="stylesheet" href="/static/workspace.css?v=3">
-  <link rel="stylesheet" href="/static/command-center.css?v=2">
+  <link rel="stylesheet" href="/static/command-center.css?v=20261014-overview-links">
   <link rel="stylesheet" href="/static/command-center-live.css?v=3">
-  <link rel="stylesheet" href="/static/command-center-polish.css?v=1">
+  <link rel="stylesheet" href="/static/command-center-polish.css?v=20261014-overview-links">
   <link rel="stylesheet" href="/static/lions.css?v=1">
-  <script src="/static/command-center.js?v=4" defer></script>
+  <script src="/static/command-center.js?v=20261014-overview-links" defer></script>
   {% include '_theme_assets.html' %}
 </head>
 <body class="gameday-page">
@@ -26,10 +26,10 @@
       <div class="command-hero-status"><strong>{{ leagues|length }}</strong><span>connected leagues</span><small id="command-load-progress">Preparing board…</small></div>
     </section>
     <section class="command-overview" aria-label="Portfolio summary" aria-live="polite">
-      <article><span>Needs attention</span><strong id="command-action-count">—</strong><small>lineup and injury items</small></article>
-      <article><span>Live now</span><strong id="command-live-count">—</strong><small>active matchups</small></article>
-      <article><span>Pending</span><strong id="command-pending-count">—</strong><small>waivers and trades</small></article>
-      <article><span>Lineup upside</span><strong id="command-edge-total">—</strong><small>projected points available</small></article>
+      <button type="button" data-command-overview-filter="action" aria-pressed="false" aria-controls="command-board"><span>Needs attention</span><strong id="command-action-count">—</strong><small>lineup and injury items</small><b>Show leagues →</b></button>
+      <button type="button" data-command-overview-filter="live" aria-pressed="false" aria-controls="command-board"><span>Live now</span><strong id="command-live-count">—</strong><small>active matchups</small><b>Show leagues →</b></button>
+      <button type="button" data-command-overview-filter="pending" aria-pressed="false" aria-controls="command-board"><span>Pending</span><strong id="command-pending-count">—</strong><small>waivers and trades</small><b>Show leagues →</b></button>
+      <button type="button" data-command-overview-filter="upside" aria-pressed="false" aria-controls="command-board"><span>Lineup upside</span><strong id="command-edge-total">—</strong><small>projected points available</small><b>Show leagues →</b></button>
     </section>
     <div class="command-toolbar" aria-label="Command center filters">
       <div role="group" aria-label="Filter leagues">
@@ -40,7 +40,7 @@
       </div>
       <p><span class="command-live-dot" aria-hidden="true"></span> Core data loads first; transaction queues follow.</p>
     </div>
-    <div class="command-grid" data-command-center data-league-count="{{ leagues|length }}">
+    <div class="command-grid" id="command-board" data-command-center data-league-count="{{ leagues|length }}">
       {% for item in leagues %}
       <article class="command-card loading" data-command-league="{{ item.id }}" data-command-category="loading">
         <header>

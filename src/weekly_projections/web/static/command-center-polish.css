@@ -24,3 +24,46 @@
 .all-clear { color: #8bbcff; }
 .command-alerts li.tone-strong { border-left-color: #9b8cff; }
 .command-chance b { background: linear-gradient(90deg, #6fa8ff, #a78bfa); }
+
+.command-overview button {
+  display: grid;
+  gap: .15rem;
+  min-height: 7rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--line, #315477);
+  border-radius: 18px;
+  background: var(--panel, #082f53);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
+}
+
+.command-overview button:hover {
+  border-color: #7da8ff;
+  transform: translateY(-2px);
+}
+
+.command-overview button:focus-visible {
+  outline: 3px solid #ffc845;
+  outline-offset: 3px;
+}
+
+.command-overview button[aria-pressed="true"] {
+  border-color: #7da8ff;
+  box-shadow: 0 0 0 2px rgba(125, 168, 255, .22), 0 12px 32px rgba(0, 0, 0, .18);
+}
+
+.command-overview button > b {
+  margin-top: .4rem;
+  color: var(--site-link, #8bbcff);
+  font-size: .75rem;
+}
+
+.command-overview button[aria-pressed="true"] > b { color: #ffc845; }
+.command-overview button[aria-pressed="true"] > b::before { content: "✓ "; }
+
+@media (max-width: 650px) {
+  .command-overview button { min-height: 6.5rem; padding: .8rem; }
+}

@@ -74,14 +74,4 @@
 
   const alertCount = Number(document.body.dataset.insightAlertCount || 0);
   if ('setAppBadge' in navigator) alertCount ? navigator.setAppBadge(alertCount) : navigator.clearAppBadge();
-  if (alertCount && localStorage.getItem(preference) === '1' && window.Notification?.permission === 'granted') {
-    const signature = `${location.pathname}:${location.search}:${alertCount}`;
-    if (sessionStorage.getItem('fantasy-hq-last-alert') !== signature) {
-      navigator.serviceWorker?.ready.then(registration => registration.showNotification('Fantasy HQ briefing', {
-        body: `${alertCount} roster item${alertCount === 1 ? '' : 's'} need your attention.`,
-        icon: '/static/app-icon-192.png', badge: '/static/app-icon-192.png', tag: 'fantasy-hq-briefing',
-      }));
-      sessionStorage.setItem('fantasy-hq-last-alert', signature);
-    }
-  }
 })();

@@ -3,6 +3,7 @@
   const boardData = new Map();
   let coreLoaded = 0;
   let queueLoaded = 0;
+  let currentFilter = 'all';
   const text = value => document.createTextNode(String(value));
   const element = (tag, className = '', value = '') => {
     const item = document.createElement(tag); if (className) item.className = className;
@@ -56,23 +57,46 @@
     const progress = document.querySelector('#command-load-progress');
     if (progress) progress.textContent = coreLoaded < cards.length ? `Loading ${coreLoaded} of ${cards.length}` : queueLoaded < cards.length ? `Checking queues ${queueLoaded} of ${cards.length}` : 'Board is up to date';
   };
-  const applyFilter = (filter = document.querySelector('[data-command-filter].active')?.dataset.commandFilter || 'all') => {
+  const applyFilter = (filter = currentFilter) => {
+    currentFilter = filter;
     let visible = 0;
     cards.forEach(card => {
-      const matches = filter === 'all' || (filter === 'action' && card.dataset.commandCategory === 'action') || (filter === 'live' && card.dataset.live === 'true') || (filter === 'ready' && card.dataset.commandCategory === 'ready');
+      const matches = filter === 'all'
+        || (filter === 'action' && card.dataset.commandCategory === 'action')
+        || (filter === 'live' && card.dataset.live === 'true')
+        || (filter === 'ready' && card.dataset.commandCategory === 'ready')
+        || (filter === 'pending' && card.dataset.pending === 'true')
+        || (filter === 'upside' && card.dataset.upside === 'true');
       card.hidden = !matches; if (matches) visible += 1;
     });
     const empty = document.querySelector('#command-filter-empty'); if (empty) empty.hidden = visible !== 0;
   };
+  const selectFilter = (filter, control) => {
+    document.querySelectorAll('[data-command-filter]').forEach(item => {
+      const selected = item === control;
+      item.classList.toggle('active', selected);
+      item.setAttribute('aria-pressed', selected ? 'true' : 'false');
+    });
+    document.querySelectorAll('[data-command-overview-filter]').forEach(item => {
+      item.setAttribute('aria-pressed', item === control ? 'true' : 'false');
+    });
+    applyFilter(filter);
+    document.querySelector('#command-board')?.scrollIntoView({behavior:'smooth', block:'start'});
+  };
   document.querySelectorAll('[data-command-filter]').forEach(button => button.addEventListener('click', () => {
-    document.querySelectorAll('[data-command-filter]').forEach(item => { item.classList.toggle('active', item === button); item.setAttribute('aria-pressed', item === button ? 'true' : 'false'); });
-    applyFilter(button.dataset.commandFilter);
+    selectFilter(button.dataset.commandFilter, button);
+  }));
+  document.querySelectorAll('[data-command-overview-filter]').forEach(button => button.addEventListener('click', () => {
+    const selected = button.getAttribute('aria-pressed') === 'true';
+    const allButton = document.querySelector('[data-command-filter="all"]');
+    selectFilter(selected ? 'all' : button.dataset.commandOverviewFilter, selected ? allButton : button);
   }));
   const render = (card, data) => {
     card.classList.remove('loading');
     const state = card.querySelector('.load-state');
     if (data.error) {
       card.classList.add('failed'); card.dataset.commandCategory = 'action'; state.textContent = 'Unavailable';
+      card.dataset.live = 'false'; card.dataset.pending = 'false'; card.dataset.upside = 'false';
       const failure = element('div', 'command-load-error'); failure.append(element('strong', '', 'League unavailable'), element('p', '', data.error), link('Open league home', `/home?league=${encodeURIComponent(data.league_id || card.dataset.commandLeague)}`));
       card.querySelector('.command-skeleton')?.replaceWith(failure); return;
     }
@@ -80,6 +104,8 @@
     card.style.order = String(-Number(data.priority_rank || 0));
     card.dataset.commandCategory = Number(data.priority_rank) >= 3 ? 'action' : 'ready';
     card.dataset.live = data.game_state === 'Live' ? 'true' : 'false';
+    card.dataset.pending = 'false';
+    card.dataset.upside = Number(data.lineup?.projected_gain || 0) > .05 ? 'true' : 'false';
     card.classList.add(`priority-${String(data.priority || 'ready').toLowerCase().replace(/\s+/g, '-')}`);
     state.className = `load-state priority-pill priority-${String(data.priority || 'ready').toLowerCase().replace(/\s+/g, '-')}`;
     state.textContent = data.priority;
@@ -140,6 +166,7 @@
   const renderQueue = (card, queueData) => {
     const data = boardData.get(queueData.league_id); if (!data) return;
     data.queue = queueData; boardData.set(queueData.league_id, data);
+    card.dataset.pending = Number(queueData.pending_total || 0) > 0 ? 'true' : 'false';
     const queue = card.querySelector('[data-command-queue]'); if (!queue) return;
     queue.querySelector('.queue-loading')?.remove();
     const chips = element('div', 'command-queue-chips command-queue-provider');
@@ -147,7 +174,8 @@
     chips.append(link(`${queueData.incoming_trades} trade${queueData.incoming_trades === 1 ? '' : 's'} to answer`, data.links.transactions, queueData.incoming_trades ? 'queue-urgent' : ''));
     chips.append(link(`${queueData.outgoing_trades} sent`, data.links.transactions)); queue.append(chips);
     if (queueData.errors?.length) queue.append(element('small', 'queue-warning', `Could not refresh: ${queueData.errors.join(' and ')}. Other data is still current.`));
-    card.querySelector('.command-card-footer span:last-child').textContent = 'Queue checked'; updateSummary();
+    card.querySelector('.command-card-footer span:last-child').textContent = 'Queue checked';
+    applyFilter(); updateSummary();
   };
   (async () => {
     for (const card of cards) {

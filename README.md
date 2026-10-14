@@ -375,7 +375,11 @@ The Settings menu includes installation guidance, device-local alert preferences
 app-badge support, and opt-in background Web Push when migration 009 and the VAPID
 variables are configured. Push endpoints are encrypted server-side and outbound
 notifications contain generic copy only; no push service receives MFL credentials
-or private league details. In-page alerts continue to work without Web Push.
+or private league details. The signed-in notification center contains the actual
+player, status, lineup, and weather details. Each alert has a stable version ID and
+session-only Acknowledge/Clear controls; either choice suppresses that exact version,
+while a materially changed player status becomes a new alert. In-page alerts continue
+to work without Web Push, and the browser no longer creates a second foreground copy.
 The installed app exposes a direct Team Score shortcut where the host platform
 supports manifest shortcuts. A true iPhone Home Screen widget is not a web/PWA
 feature; that would require a separately shipped native iOS app and WidgetKit
