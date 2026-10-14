@@ -6,13 +6,13 @@ import pytest
 def test_all_pages_load_their_requested_theme_last():
     templates = Path(__file__).resolve().parents[1] / 'src/weekly_projections/web/templates'
     pages = [p for p in templates.glob('*.html') if '<!doctype html>' in p.read_text(encoding='utf-8').lower()]
-    assert len(pages) == 25
+    assert len(pages) == 26
     for page in pages:
         source = page.read_text(encoding='utf-8')
         assert "{% include '_theme_assets.html' %}" in source, page.name
         source = source.replace("{% include '_theme_assets.html' %}", (templates / '_theme_assets.html').read_text(encoding='utf-8'))
         soup = BeautifulSoup(source, 'html.parser')
-        assert soup.select('link[rel="stylesheet"]')[-1]['href'] == '/static/themes.css?v=7', page.name
+        assert soup.select('link[rel="stylesheet"]')[-1]['href'] == '/static/themes.css?v=20261014-assistant-nav', page.name
         assert len(soup.select('meta[name="theme-color"]')) == 1
         assert soup.select_one('script[src="/static/theme.js?v=20260924-league-themes"]')
         assert soup.select_one('meta[name="wp-theme-scope"]')
@@ -116,16 +116,16 @@ def test_league_switcher_uses_one_control_height_on_every_page():
     assert '.header-league-picker .league-switch-button' in css
     assert 'height:44px; min-height:44px;' in css
     assert '.league-topbar .brand-mark { display:grid; width:44px; height:44px; }' in css
-    assert '/static/interface.css?v=20261014-notifications' in assets
+    assert '/static/interface.css?v=20261014-assistant-nav' in assets
     assert '<span class="sr-only">Switch league</span>' in header
 
 
-def test_mobile_navigation_fits_the_five_primary_tabs_on_one_row():
+def test_mobile_navigation_fits_the_six_primary_tabs_on_one_row():
     css = (Path(__file__).resolve().parents[1] / 'src/weekly_projections/web/static/themes.css').read_text(
         encoding='utf-8'
     )
     mobile = css.split('@media(max-width:480px)', 1)[1]
-    assert 'grid-template-columns:repeat(5,minmax(0,1fr));' in mobile
+    assert 'grid-template-columns:repeat(6,minmax(0,1fr));' in mobile
 
 
 def test_activity_wall_only_scrolls_after_reaching_waiver_height():

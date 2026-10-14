@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Assistant · {{ league.name }}</title>
+  <link rel="stylesheet" href="/static/app.css?v=20261014-assistant">
+  <link rel="stylesheet" href="/static/workspace.css?v=3">
+  <link rel="stylesheet" href="/static/assistant.css?v=20261014-openai">
+  <script src="/static/diagnostics.js" defer></script>
+  {% include '_theme_assets.html' %}
+</head>
+<body class="assistant-page">
+  {% include '_league_header.html' %}
+  <main class="workspace assistant-workspace" id="main-content">
+    <header class="assistant-hero">
+      <div><p class="eyebrow">OPENAI · PRIVATE BY DEFAULT</p><h1>Fantasy HQ Assistant</h1><p>Ask for fantasy strategy or help finding and understanding features in the app.</p></div>
+      <span class="assistant-status {{ 'ready' if configured else 'offline' }}">{{ 'Ready' if configured else 'Setup needed' }}</span>
+    </header>
+
+    <aside class="assistant-privacy" aria-label="Assistant privacy">
+      <strong>What leaves Fantasy HQ?</strong>
+      <p>Only the question you type and this recent chat are sent to OpenAI. Fantasy HQ does not automatically send your league name, roster, scores, MFL cookie, password, API keys, or raw MFL responses. Do not paste secrets into chat.</p>
+    </aside>
+
+    {% if error %}<div class="error" role="alert">{{ error }}{% include '_error_reference.html' %}</div>{% endif %}
+
+    {% if not configured %}
+      <section class="assistant-setup">
+        <span class="assistant-orb" aria-hidden="true">✦</span>
+        <div><p class="eyebrow">ONE-TIME SERVER SETUP</p><h2>Add your OpenAI key</h2><p>Create the key in your OpenAI account, then add it to Railway or Azure as <code>OPENAI_API_KEY</code>. Do not paste the key into Fantasy HQ, GitHub, or this chat. Restart the app after saving it.</p><p>The optional <code>WP_OPENAI_MODEL</code> setting changes the model; the default is <code>{{ assistant_model }}</code>.</p></div>
+      </section>
+    {% else %}
+      <section class="assistant-shell" aria-label="Fantasy HQ Assistant conversation">
+        <div class="assistant-transcript" aria-live="polite">
+          {% for item in messages %}
+            <article class="assistant-message {{ item.role }}" {% if loop.last %}id="latest-answer"{% endif %}>
+              <span>{{ 'You' if item.role == 'user' else 'Fantasy HQ AI' }}</span>
+              <p>{{ item.content }}</p>
+            </article>
+          {% else %}
+            <div class="assistant-empty"><span class="assistant-orb" aria-hidden="true">✦</span><h2>What can I help with?</h2><p>Try “Explain how the waiver optimizer works,” “What should I consider in a start/sit decision?”, or “Where do I verify a pending trade?”</p></div>
+          {% endfor %}
+        </div>
+        <form class="assistant-compose" method="post" action="/assistant/message">
+          <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+          <input type="hidden" name="league" value="{{ league.id }}">
+          <label for="assistant-message">Your question<textarea id="assistant-message" name="message" maxlength="2000" rows="4" required placeholder="Ask about fantasy strategy or how Fantasy HQ works…"></textarea></label>
+          <div><small>Session-only chat · no automatic MFL context · advice never submits an action</small><button type="submit">Ask OpenAI <span aria-hidden="true">→</span></button></div>
+        </form>
+      </section>
+      {% if messages %}<form class="assistant-clear" method="post" action="/assistant/clear"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="league" value="{{ league.id }}"><button class="secondary-button" type="submit">Clear this chat</button></form>{% endif %}
+    {% endif %}
+  </main>
+</body>
+</html>

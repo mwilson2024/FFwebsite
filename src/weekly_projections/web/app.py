@@ -106,6 +106,12 @@ from weekly_projections.gameday import (
     observe_scoring,
 )
 from weekly_projections.decision_simulator import simulate_decision
+from weekly_projections.openai_assistant import (
+    AssistantTurn,
+    OpenAIAssistantError,
+    ask_openai,
+    normalize_model,
+)
 
 
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -140,6 +146,18 @@ _RANKING_PREFERENCES = {
     "combined": "Combined MFL + ESPN + FantasyPros + CBS + ML ranks",
 }
 templates.env.globals["ranking_preferences"] = _RANKING_PREFERENCES
+
+_ASSISTANT_INSTRUCTIONS = """You are Fantasy HQ Assistant inside a private MyFantasyLeague
+fantasy-football application. Give concise, practical help with fantasy decisions and with
+navigating this application. MFL totals, league rules, roster ownership, locks, and transaction
+receipts are authoritative. Clearly label projections and opinions as estimates. Never claim that
+you submitted a lineup, waiver claim, trade, message, or other action; you cannot perform actions.
+Never ask for or repeat an MFL password, session cookie, CSRF value, API key, or other secret.
+Current injuries, locks, roster ownership, scores, and availability are not supplied to you, so say
+that the user must verify them in Fantasy HQ or MFL. Do not invent private league facts."""
+_ASSISTANT_RATE_WINDOW_SECONDS = 60
+_ASSISTANT_RATE_LIMIT = 6
+_ASSISTANT_HISTORY_LIMIT = 16
 
 
 @dataclass
@@ -622,6 +640,8 @@ class BrowserSession:
     watchlists: dict[str, set[str]] = field(default_factory=dict)
     notification_states: dict[str, str] = field(default_factory=dict)
     active_notification_ids: dict[str, set[str]] = field(default_factory=dict)
+    assistant_chats: dict[str, list[AssistantTurn]] = field(default_factory=dict)
+    assistant_request_times: list[float] = field(default_factory=list)
     live_timelines: dict[str, dict] = field(default_factory=dict)
     operations: list[OperationRecord] = field(default_factory=list)
     ranking_preference: str = field(default_factory=_default_ranking_preference)
@@ -725,7 +745,7 @@ async def secure_local_responses(request: Request, call_next):
         response.delete_cookie("wp_remember", path="/", httponly=True, samesite="strict", secure=_secure_cookies(request))
     league_id = request.query_params.get("league")
     if (current and request.method == "GET" and response.status_code == 200
-            and request.url.path in {"/home", "/command-center", "/simulator", "/lineup", "/rosters", "/moves", "/scores", "/trades", "/standings", "/league", "/insights", "/planner", "/transactions", "/transactions/pending", "/watchlist", "/compare", "/notifications", "/schedule", "/rules", "/data-status", "/guide"}
+            and request.url.path in {"/home", "/command-center", "/simulator", "/lineup", "/rosters", "/moves", "/scores", "/trades", "/standings", "/league", "/insights", "/planner", "/transactions", "/transactions/pending", "/watchlist", "/compare", "/notifications", "/schedule", "/rules", "/data-status", "/guide", "/assistant"}
             and any(item.id == league_id for item in current.leagues)):
         response.set_cookie("wp_last_league", f"{current.year}:{league_id}", max_age=365*86400,
                             httponly=True, samesite="strict", secure=_secure_cookies(request))
@@ -2111,6 +2131,46 @@ def _client(current: BrowserSession, league: MFLLeague) -> MFLClient:
     # intentionally bypass it and re-read MFL before any write.
     client._browser_read_cache = current.read_cache
     return client
+
+
+def _assistant_config() -> tuple[str, str]:
+    """Return server-only OpenAI configuration without exposing the key to templates."""
+    return (
+        os.environ.get("OPENAI_API_KEY", "").strip(),
+        normalize_model(os.environ.get("WP_OPENAI_MODEL")),
+    )
+
+
+def _check_assistant_rate_limit(current: BrowserSession) -> None:
+    now = time.monotonic()
+    current.assistant_request_times = [
+        seen for seen in current.assistant_request_times
+        if now - seen < _ASSISTANT_RATE_WINDOW_SECONDS
+    ]
+    if len(current.assistant_request_times) >= _ASSISTANT_RATE_LIMIT:
+        raise OpenAIAssistantError(
+            "The assistant has reached its short request limit. Wait a minute and try again."
+        )
+    current.assistant_request_times.append(now)
+
+
+def _assistant_template(
+    request: Request,
+    current: BrowserSession,
+    selected: MFLLeague,
+    *,
+    error: str = "",
+):
+    key, model = _assistant_config()
+    return templates.TemplateResponse(request=request, name="assistant.html", context={
+        "session": current,
+        "league": selected,
+        "active_tool": "assistant",
+        "configured": bool(key),
+        "assistant_model": model,
+        "messages": current.assistant_chats.get(selected.id, ()),
+        "error": error,
+    })
 
 
 def _historical_client(
@@ -6592,6 +6652,71 @@ def guide_page(request: Request, league: str):
         "session": current, "league": selected, "active_tool": "guide",
         "page": "guide", "page_title": "Getting started", "error": "",
     })
+
+
+@app.get("/assistant", response_class=HTMLResponse)
+def assistant_page(request: Request, league: str):
+    current = _require_session(request)
+    selected = _league(current, league)
+    return _assistant_template(request, current, selected)
+
+
+@app.post("/assistant/message", response_class=HTMLResponse)
+def assistant_message(
+    request: Request,
+    league: str = Form(...),
+    message: str = Form("", max_length=2_000),
+    csrf_token: str = Form(...),
+):
+    current = _require_session(request)
+    _check_csrf(current, csrf_token)
+    selected = _league(current, league)
+    api_key, model = _assistant_config()
+    question = message.strip()
+    if not api_key:
+        return _assistant_template(
+            request, current, selected,
+            error="The OpenAI assistant is not configured on this server yet.",
+        )
+    try:
+        _check_assistant_rate_limit(current)
+        answer = ask_openai(
+            api_key=api_key,
+            model=model,
+            instructions=_ASSISTANT_INSTRUCTIONS,
+            user_message=question,
+            history=current.assistant_chats.get(selected.id, ()),
+        )
+    except OpenAIAssistantError as error:
+        # Do not attach the requests exception or response body: prompts and the
+        # Authorization header must never enter diagnostics.
+        log_error("openai_assistant_unavailable", RuntimeError(str(error)))
+        return _assistant_template(request, current, selected, error=str(error))
+
+    chat = current.assistant_chats.setdefault(selected.id, [])
+    chat.extend((AssistantTurn("user", question), AssistantTurn("assistant", answer)))
+    if len(chat) > _ASSISTANT_HISTORY_LIMIT:
+        del chat[:-_ASSISTANT_HISTORY_LIMIT]
+    log_event("openai_assistant_answered")
+    return RedirectResponse(
+        "/assistant?" + urlencode({"league": selected.id}) + "#latest-answer",
+        status_code=303,
+    )
+
+
+@app.post("/assistant/clear")
+def clear_assistant_chat(
+    request: Request,
+    league: str = Form(...),
+    csrf_token: str = Form(...),
+):
+    current = _require_session(request)
+    _check_csrf(current, csrf_token)
+    selected = _league(current, league)
+    current.assistant_chats.pop(selected.id, None)
+    return RedirectResponse(
+        "/assistant?" + urlencode({"league": selected.id}), status_code=303,
+    )
 
 
 @app.get("/league", response_class=HTMLResponse)

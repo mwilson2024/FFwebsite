@@ -88,6 +88,31 @@ WP_SESSION_DB=/data/sessions.sqlite3
 WP_SESSION_SECRET=<your generated Fernet key>
 ```
 
+### OpenAI assistant (optional)
+
+Fantasy HQ includes a session-only help chatbot powered by OpenAI. Create an API
+key in the OpenAI dashboard and store it only as a server environment variable:
+
+```text
+OPENAI_API_KEY=<your OpenAI project API key>
+WP_OPENAI_MODEL=gpt-6-luna
+```
+
+In Railway, add these under **Variables**. In Azure App Service, add them under
+**Settings → Environment variables**, save, and restart the app. The model setting
+is optional; `gpt-6-luna` is the cost-conscious default. Never paste the key into
+Fantasy HQ, GitHub, chat, a browser-visible setting, logs, or an environment file.
+
+The key stays on the server. Each request uses the OpenAI Responses API with
+response storage disabled and explicit timeouts. Only the question the user types
+and up to 12 recent user/assistant chat messages are sent to OpenAI. League names,
+rosters, scores, injuries, projections, MFL cookies, credentials, CSRF tokens, API
+keys, and raw MFL responses are not added automatically. Chat history lives only
+in the active in-memory browser session and clears on disconnect, expiration,
+restart, redeploy, or the **Clear this chat** button. The assistant is advisory and
+cannot submit an MFL lineup, waiver claim, trade, or message. A six-request-per-minute
+session limit, 2,000-character input limit, and bounded answer size help control cost.
+
 ## Supabase PostgreSQL on Azure App Service
 
 The application can use the free Supabase PostgreSQL project instead of the
