@@ -30,5 +30,9 @@
       </div>
     </section>
   </main>
+  {% if session.leagues %}
+    {% set assistant_widget_league = session.leagues[0] %}
+    {% include '_assistant_widget.html' %}
+  {% endif %}
 </body>
 </html>

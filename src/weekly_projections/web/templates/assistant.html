@@ -5,7 +5,6 @@
   <title>Assistant · {{ league.name }}</title>
   <link rel="stylesheet" href="/static/app.css?v=20261014-assistant">
   <link rel="stylesheet" href="/static/workspace.css?v=3">
-  <link rel="stylesheet" href="/static/assistant.css?v=20261014-openai">
   <script src="/static/diagnostics.js" defer></script>
   {% include '_theme_assets.html' %}
 </head>
@@ -19,7 +18,7 @@
 
     <aside class="assistant-privacy" aria-label="Assistant privacy">
       <strong>What leaves Fantasy HQ?</strong>
-      <p>Only the question you type and this recent chat are sent to OpenAI. Fantasy HQ does not automatically send your league name, roster, scores, MFL cookie, password, API keys, or raw MFL responses. Do not paste secrets into chat.</p>
+      <p>When you send a message, your question, recent chat, and a bounded plain-text summary of the visible page are sent to OpenAI. HTML, form values, cookies, CSRF tokens, passwords, API keys, and raw MFL responses are excluded. Do not paste secrets into chat.</p>
     </aside>
 
     {% if error %}<div class="error" role="alert">{{ error }}{% include '_error_reference.html' %}</div>{% endif %}
@@ -41,11 +40,14 @@
             <div class="assistant-empty"><span class="assistant-orb" aria-hidden="true">✦</span><h2>What can I help with?</h2><p>Try “Explain how the waiver optimizer works,” “What should I consider in a start/sit decision?”, or “Where do I verify a pending trade?”</p></div>
           {% endfor %}
         </div>
-        <form class="assistant-compose" method="post" action="/assistant/message">
+        <form class="assistant-compose" method="post" action="/assistant/message" data-assistant-context-form>
           <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
           <input type="hidden" name="league" value="{{ league.id }}">
+          <input type="hidden" name="page_title" value="">
+          <input type="hidden" name="page_path" value="">
+          <input type="hidden" name="page_context" value="">
           <label for="assistant-message">Your question<textarea id="assistant-message" name="message" maxlength="2000" rows="4" required placeholder="Ask about fantasy strategy or how Fantasy HQ works…"></textarea></label>
-          <div><small>Session-only chat · no automatic MFL context · advice never submits an action</small><button type="submit">Ask OpenAI <span aria-hidden="true">→</span></button></div>
+          <div><small>Session-only chat · visible page context included when sent · advice never submits an action</small><button type="submit">Ask OpenAI <span aria-hidden="true">→</span></button></div>
         </form>
       </section>
       {% if messages %}<form class="assistant-clear" method="post" action="/assistant/clear"><input type="hidden" name="csrf_token" value="{{ session.csrf_token }}"><input type="hidden" name="league" value="{{ league.id }}"><button class="secondary-button" type="submit">Clear this chat</button></form>{% endif %}

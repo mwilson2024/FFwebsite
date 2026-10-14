@@ -17,5 +17,4 @@
     <span>Scores</span>
   </a>
   <a aria-label="League intelligence" {% if league_section %}class="active" aria-current="{{ 'page' if active_tool == 'league' else 'location' }}"{% endif %} href="/league?league={{ league.id }}"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V10h4v10M10 20V4h4v16M15 20v-7h4v7M3 20h18"/></svg><span class="nav-label-desktop">League</span><span class="nav-label-mobile" aria-hidden="true">League</span></a>
-  <a {% if active_tool == 'assistant' %}class="active" aria-current="page"{% endif %} href="/assistant?league={{ league.id }}"><svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 13.8 8.2 19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3ZM19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8L19 16Z"/></svg><span class="nav-label-desktop">Assistant</span><span class="nav-label-mobile" aria-hidden="true">Ask</span></a>
 </nav>

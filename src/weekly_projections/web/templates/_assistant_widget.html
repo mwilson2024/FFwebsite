@@ -1,0 +1,31 @@
+{% if assistant_widget_league is defined %}
+<aside class="assistant-widget" data-assistant-widget data-league-id="{{ assistant_widget_league.id }}">
+  <button class="assistant-fab" type="button" data-assistant-open aria-controls="assistant-drawer-{{ assistant_widget_league.id }}" aria-expanded="false">
+    <span aria-hidden="true">✦</span><span>Ask AI</span>
+  </button>
+  <section class="assistant-drawer" id="assistant-drawer-{{ assistant_widget_league.id }}" role="dialog" aria-modal="false" aria-labelledby="assistant-widget-title-{{ assistant_widget_league.id }}" hidden>
+    <header>
+      <div><span class="assistant-orb" aria-hidden="true">✦</span><div><strong id="assistant-widget-title-{{ assistant_widget_league.id }}">Fantasy HQ Assistant</strong><small>Page-aware help</small></div></div>
+      <button type="button" class="assistant-widget-close" data-assistant-close aria-label="Close assistant">×</button>
+    </header>
+    <p class="assistant-widget-privacy">When you send, the visible text on this page and recent chat go to OpenAI. Form values, HTML, cookies, CSRF tokens, and credentials are excluded.</p>
+    {% if not openai_assistant_configured() %}
+      <div class="assistant-widget-setup"><strong>Server setup needed</strong><p>Add <code>OPENAI_API_KEY</code> to the host before using the assistant.</p><a href="/assistant?league={{ assistant_widget_league.id }}">View setup details</a></div>
+    {% else %}
+      <div class="assistant-widget-transcript" data-assistant-transcript aria-live="polite">
+        {% for item in session.assistant_chats.get(assistant_widget_league.id, ()) %}
+          <article class="assistant-message {{ item.role }}"><span>{{ 'You' if item.role == 'user' else 'Fantasy HQ AI' }}</span><p>{{ item.content }}</p></article>
+        {% else %}
+          <div class="assistant-widget-empty" data-assistant-empty><strong>Ask about this page</strong><p>I can explain the information shown here or help you make a fantasy decision.</p></div>
+        {% endfor %}
+      </div>
+      <form class="assistant-widget-compose" data-assistant-widget-form>
+        <label for="assistant-widget-message-{{ assistant_widget_league.id }}">Message</label>
+        <textarea id="assistant-widget-message-{{ assistant_widget_league.id }}" maxlength="2000" rows="3" required placeholder="Ask about what you're viewing…"></textarea>
+        <div><span data-assistant-status role="status"></span><button type="submit">Send <span aria-hidden="true">→</span></button></div>
+      </form>
+      <a class="assistant-widget-full" href="/assistant?league={{ assistant_widget_league.id }}">Open full assistant</a>
+    {% endif %}
+  </section>
+</aside>
+{% endif %}

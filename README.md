@@ -104,14 +104,17 @@ is optional; `gpt-6-luna` is the cost-conscious default. Never paste the key int
 Fantasy HQ, GitHub, chat, a browser-visible setting, logs, or an environment file.
 
 The key stays on the server. Each request uses the OpenAI Responses API with
-response storage disabled and explicit timeouts. Only the question the user types
-and up to 12 recent user/assistant chat messages are sent to OpenAI. League names,
-rosters, scores, injuries, projections, MFL cookies, credentials, CSRF tokens, API
-keys, and raw MFL responses are not added automatically. Chat history lives only
-in the active in-memory browser session and clears on disconnect, expiration,
-restart, redeploy, or the **Clear this chat** button. The assistant is advisory and
-cannot submit an MFL lineup, waiver claim, trade, or message. A six-request-per-minute
-session limit, 2,000-character input limit, and bounded answer size help control cost.
+response storage disabled and explicit timeouts. The bottom-right assistant makes no
+background request: only after the user presses **Send** does it transmit the question,
+up to 12 recent chat messages, and at most 12,000 characters of visible plain text from
+the current page. That visible context can include league names, players, scores,
+projections, and other information already shown on screen. HTML, form/input values,
+query strings, MFL cookies, credentials, CSRF tokens, API keys, and raw MFL responses
+are excluded. Chat history lives only in the active in-memory browser session and
+clears on disconnect, expiration, restart, redeploy, or the **Clear this chat** button.
+The assistant is advisory and cannot submit an MFL lineup, waiver claim, trade, or
+message. A six-request-per-minute session limit, 2,000-character input limit, and
+bounded answer size help control cost.
 
 ## Supabase PostgreSQL on Azure App Service
 

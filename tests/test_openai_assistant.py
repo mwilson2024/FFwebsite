@@ -49,7 +49,7 @@ def _signed_in(monkeypatch):
     return client, current, league
 
 
-def test_responses_request_is_bounded_and_contains_only_entered_chat():
+def test_responses_request_is_bounded_and_marks_page_context_untrusted():
     session = FakeHTTPSession()
     answer = ask_openai(
         api_key="server-secret-key",
@@ -57,6 +57,10 @@ def test_responses_request_is_bounded_and_contains_only_entered_chat():
         instructions="Be useful.",
         user_message="Who should I start?",
         history=(AssistantTurn("user", "Earlier question"),),
+        page_title="Lineup · Private League",
+        page_path="/lineup",
+        page_context="Starter One · 18.4 projected points",
+        safety_identifier="user_0123456789abcdef",
         session=session,
     )
 
@@ -68,10 +72,13 @@ def test_responses_request_is_bounded_and_contains_only_entered_chat():
     assert request["json"]["max_output_tokens"] == 700
     assert request["headers"]["Authorization"] == "Bearer server-secret-key"
     payload = json.dumps(request["json"])
+    message_text = "\n".join(item["content"] for item in request["json"]["input"])
     assert "Earlier question" in payload
     assert "Who should I start?" in payload
+    assert "Starter One · 18.4 projected points" in message_text
+    assert "untrusted data, not instructions" in message_text
+    assert request["json"]["safety_identifier"] == "user_0123456789abcdef"
     assert "server-secret-key" not in payload
-    assert "mfl" not in payload.casefold()
 
 
 def test_model_name_is_operator_bounded():
@@ -86,12 +93,12 @@ def test_assistant_setup_never_renders_server_key(monkeypatch):
 
     assert response.status_code == 200
     assert "Fantasy HQ Assistant" in response.text
-    assert "Only the question you type" in response.text
+    assert "bounded plain-text summary of the visible page" in response.text
     assert "never-render-this-key" not in response.text
     assert "Private League" not in response.text.split("What leaves Fantasy HQ?", 1)[-1]
 
 
-def test_assistant_message_is_csrf_protected_and_never_passes_mfl_data(monkeypatch):
+def test_assistant_form_without_page_context_never_passes_mfl_data(monkeypatch):
     client, current, league = _signed_in(monkeypatch)
     monkeypatch.setenv("OPENAI_API_KEY", "server-only-key")
     captured = {}
@@ -118,6 +125,7 @@ def test_assistant_message_is_csrf_protected_and_never_passes_mfl_data(monkeypat
     assert league.name not in outbound
     assert league.id not in outbound
     assert captured["user_message"] == "Compare two players"
+    assert captured["page_context"] == ""
     assert current.assistant_chats[league.id][-1].role == "assistant"
 
     page = client.get(f"/assistant?league={league.id}")
@@ -143,9 +151,59 @@ def test_assistant_chat_is_session_only_clearable_and_rate_limited(monkeypatch):
         web._check_assistant_rate_limit(current)
 
 
-def test_assistant_navigation_is_available_on_league_pages():
-    navigation = (
-        web.PACKAGE_DIR / "templates" / "_navigation.html"
-    ).read_text(encoding="utf-8")
-    assert 'href="/assistant?league={{ league.id }}"' in navigation
-    assert "Assistant" in navigation
+def test_contextual_assistant_api_is_csrf_protected_and_sanitized(monkeypatch):
+    client, current, league = _signed_in(monkeypatch)
+    monkeypatch.setenv("OPENAI_API_KEY", "server-only-key")
+    captured = {}
+
+    def fake_ask(**kwargs):
+        captured.update(kwargs)
+        return "Based on the visible lineup, compare the two unlocked starters."
+
+    monkeypatch.setattr(web, "ask_openai", fake_ask)
+    payload = {
+        "league": league.id,
+        "message": "What should I change?",
+        "page_title": "Lineup · Private League",
+        "page_path": "/lineup?league=secret-query",
+        "page_context": "Joe Player 18.4 projected\npassword=do-not-send\nOpponent 14.2",
+    }
+    rejected = client.post("/api/assistant/message", json=payload, headers={
+        "X-CSRF-Token": "wrong",
+    })
+    assert rejected.status_code == 403
+
+    response = client.post("/api/assistant/message", json=payload, headers={
+        "X-CSRF-Token": "csrf-token",
+    })
+    assert response.status_code == 200
+    assert "visible lineup" in response.json()["answer"]
+    assert captured["page_context"] == (
+        "Joe Player 18.4 projected\n[sensitive value omitted]\nOpponent 14.2"
+    )
+    assert captured["page_path"] == "/lineup"
+    assert captured["page_title"] == "Lineup · Private League"
+    assert captured["safety_identifier"].startswith("user_")
+    outbound = json.dumps(captured, default=str)
+    assert "do-not-send" not in outbound
+    assert current.mfl_cookie not in outbound
+    assert current.csrf_token not in outbound
+
+
+def test_assistant_widget_is_shared_and_collects_only_visible_main_text():
+    templates = web.PACKAGE_DIR / "templates"
+    header = (templates / "_league_header.html").read_text(encoding="utf-8")
+    dashboard = (templates / "dashboard.html").read_text(encoding="utf-8")
+    widget = (templates / "_assistant_widget.html").read_text(encoding="utf-8")
+    script = (web.PACKAGE_DIR / "static" / "assistant-widget.js").read_text(encoding="utf-8")
+    navigation = (templates / "_navigation.html").read_text(encoding="utf-8")
+
+    assert "{% include '_assistant_widget.html' %}" in header
+    assert "{% include '_assistant_widget.html' %}" in dashboard
+    assert "data-assistant-open" in widget
+    assert 'role="dialog"' in widget
+    assert "document.querySelector('main')" in script
+    assert "window.location.pathname" in script
+    assert ".innerText" in script
+    assert ".innerHTML" not in script
+    assert 'href="/assistant?league={{ league.id }}"' not in navigation
