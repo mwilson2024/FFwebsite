@@ -733,11 +733,11 @@ class MFLClient:
                 future.append(kickoff)
             elif kickoff > 0 and (
                 0 < remaining < 3600
-                # MFL can leave the clock at 3600 for several minutes after
-                # the scheduled kickoff. Treat only that short transition as
-                # live so the page wakes up and can see the first score; this
-                # remains bounded and cannot create all-day polling.
-                or (remaining == 3600 and 0 <= now - kickoff <= 30 * 60)
+                # MFL can leave an in-progress game's clock at its opening
+                # 3600 value well beyond kickoff. Keep refreshing throughout
+                # a bounded game-sized window so a stale schedule clock cannot
+                # pause live scores, without falling back to all-day polling.
+                or (remaining == 3600 and 0 <= now - kickoff <= 5 * 60 * 60)
             ):
                 active = True
         # Advance the app only with complete schedule evidence. One malformed

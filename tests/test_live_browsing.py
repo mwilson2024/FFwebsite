@@ -23,12 +23,22 @@ def test_refresh_requires_live_nfl_clock(monkeypatch, clock, kickoff, active, ne
     }
 
 
-def test_refresh_kickoff_grace_is_bounded(monkeypatch):
+def test_refresh_stale_opening_clock_remains_live_during_game_window(monkeypatch):
     client = MFLClient(MFLConfig(2026, '1', '0001'))
     monkeypatch.setattr(client, 'export', lambda *a, **k: {
         'nflSchedule': {'matchup': {'kickoff': 1000, 'gameSecondsRemaining': '3600'}},
     })
-    assert client.nfl_refresh_state(week=1, now=4000) == {
+    assert client.nfl_refresh_state(week=1, now=1000 + (4 * 60 * 60)) == {
+        'active': True, 'next_kickoff': None, 'complete': False,
+    }
+
+
+def test_refresh_stale_opening_clock_fallback_is_bounded(monkeypatch):
+    client = MFLClient(MFLConfig(2026, '1', '0001'))
+    monkeypatch.setattr(client, 'export', lambda *a, **k: {
+        'nflSchedule': {'matchup': {'kickoff': 1000, 'gameSecondsRemaining': '3600'}},
+    })
+    assert client.nfl_refresh_state(week=1, now=1000 + (5 * 60 * 60) + 1) == {
         'active': False, 'next_kickoff': None, 'complete': False,
     }
 
