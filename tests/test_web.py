@@ -2001,6 +2001,26 @@ def test_stale_persistent_report_returns_immediately_and_queues_refresh(monkeypa
     assert scheduled == [("standings", 3600)]
 
 
+def test_background_refresh_pacing_defers_bursts_without_calling_provider(monkeypatch) -> None:
+    current = web_app.BrowserSession(
+        "cookie", 2026, [MFLLeague("11111", "0001", "One")], "csrf",
+        owner_fingerprint="account:cache-owner",
+    )
+    monkeypatch.setenv("WP_DATABASE_URL", "postgresql://configured")
+    monkeypatch.setattr(
+        web_app, "_cache_refresh_next_provider_at", time.monotonic() + 60,
+    )
+
+    deferred = web_app._schedule_report_refresh(
+        current, "11111", "standings",
+        lambda: pytest.fail("A paced refresh must not call MFL"),
+        ttl=3600, stale_ttl=86400, shared=False,
+        shared_key="", cache_key="2026:11111:report:standings",
+    )
+
+    assert deferred is True
+
+
 def test_cache_telemetry_reports_hit_rate_and_latency() -> None:
     telemetry = web_app.CacheTelemetry()
     telemetry.record("memory_hit", amount=3)
@@ -2318,10 +2338,11 @@ def test_uncertain_lineup_write_is_verified_by_readback(monkeypatch) -> None:
         def __init__(self):
             self.status_reads = 0
             self.submit_calls = 0
+            self._players = {"p1": starter, "p2": bench}
 
         def roster_ids(self): return {"p1", "p2"}
         def named_players(self, ids): return [player for player in (starter, bench) if player.id in ids]
-        def player_roster_statuses(self, ids, *, week):
+        def player_roster_statuses(self, ids, *, week, fallback_player_ids=None):
             self.status_reads += 1
             return {"p1": "NS", "p2": "S"} if self.status_reads == 1 else {"p1": "S", "p2": "NS"}
         def lineup_settings(self): return MFLLineupSettings(1, (MFLLineupRule("WR", 1, 1),))

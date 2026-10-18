@@ -1646,7 +1646,11 @@ class MFLClient:
         return MFLLineupSettings(starter_count=starter_count, rules=tuple(rules))
 
     def player_roster_statuses(
-        self, player_ids: Iterable[str], *, week: int | None = None
+        self,
+        player_ids: Iterable[str],
+        *,
+        week: int | None = None,
+        fallback_player_ids: Iterable[str] | None = None,
     ) -> dict[str, str]:
         ids = sorted({str(player_id) for player_id in player_ids})
         if not ids:
@@ -1672,6 +1676,12 @@ class MFLClient:
                     statuses[player_id] = {"STARTER":"S", "NONSTARTER":"NS", "NON-STARTER":"NS"}.get(value, value)
                     break
         unknown = {player_id for player_id in ids if statuses.get(player_id, "R") == "R"}
+        if fallback_player_ids is not None:
+            # Lineup writes only need the expensive live-scoring fallback for
+            # players whose games have already kicked off. An unrelated taxi,
+            # reserve, or newly added player must not trigger another full
+            # league export immediately before every submission.
+            unknown.intersection_update(str(player_id) for player_id in fallback_player_ids)
         if unknown and week is not None:
             # R means either no lineup or no visibility. Never assume it means bench.
             live = self.live_scoring(week=week)

@@ -132,6 +132,7 @@ _GLOBAL_REPORT_SCOPE = "public-provider-data-v1"
 _LEAGUE_INTELLIGENCE_VERSION = 1
 _CACHE_REFRESH_WORKERS = 1
 _CACHE_REFRESH_LIMIT = 64
+_CACHE_REFRESH_SPACING_SECONDS = 4.0
 _ACTIVITY_LOOKBACK_DAYS = 14
 _THEMES = {"michigan", "lions", "aurora", "tigers", "redwings", "pistons"}
 _RANKING_PREFERENCES = {
@@ -219,6 +220,8 @@ _cache_refresh_executor = ThreadPoolExecutor(
 )
 _cache_refresh_pending: set[str] = set()
 _cache_refresh_lock = Lock()
+_cache_refresh_pacing_lock = Lock()
+_cache_refresh_next_provider_at = 0.0
 _cache_maintenance_due = 0.0
 _cache_maintenance_lock = Lock()
 atexit.register(lambda: _cache_refresh_executor.shutdown(wait=False, cancel_futures=True))
@@ -1784,6 +1787,7 @@ def _schedule_report_refresh(
     cache_key: str,
 ) -> bool:
     """Coalesce a safe display-report refresh and return without blocking the page."""
+    global _cache_refresh_next_provider_at
     if not os.environ.get("WP_DATABASE_URL", "").strip() \
             or not _persistent_report_identity(label) \
             or not _persistent_report_location(current, league_id, label):
@@ -1798,7 +1802,17 @@ def _schedule_report_refresh(
             return True
         if len(_cache_refresh_pending) >= _CACHE_REFRESH_LIMIT:
             cache_telemetry.record("background_rejected")
-            return False
+            return True
+    # Stale database data is already available to this request. Start at most
+    # one provider refresh per interval; later page views will naturally pick
+    # up the deferred reports without building a long background queue.
+    with _cache_refresh_pacing_lock:
+        now = time.monotonic()
+        if _cache_refresh_next_provider_at > now:
+            cache_telemetry.record("background_deferred")
+            return True
+        _cache_refresh_next_provider_at = now + _CACHE_REFRESH_SPACING_SECONDS
+    with _cache_refresh_lock:
         _cache_refresh_pending.add(refresh_key)
 
     def refresh() -> None:
@@ -1849,7 +1863,7 @@ def _schedule_report_refresh(
     except RuntimeError:
         with _cache_refresh_lock:
             _cache_refresh_pending.discard(refresh_key)
-        return False
+        return True
     cache_telemetry.record("background_queued")
     return True
 
@@ -5006,6 +5020,12 @@ def command_center_league(request: Request, league_id: str):
     """Load one league's decision brief without fanning out provider reads."""
     current = _require_session(request)
     selected = _league(current, league_id)
+    cache_key = f"{current.year}:{selected.id}:report:command-center-core"
+    with current.read_lock:
+        cached = current.read_cache.get(cache_key)
+        if cached and cached[0] > time.monotonic():
+            cache_telemetry.record("memory_hit")
+            return cached[1]
     try:
         insight = _load_insights(
             current, selected, include_external=False, include_accuracy=False,
@@ -5095,7 +5115,7 @@ def command_center_league(request: Request, league_id: str):
             for collection in (current.pending_moves.values(), current.pending_lineups.values(), current.trades.values())
             for item in collection
         )
-        return {
+        payload = {
             "league_id": selected.id, "name": selected.name, "week": week,
             "priority": priority, "priority_rank": priority_rank,
             "team": own_team.name if own_team else "Your team",
@@ -5145,6 +5165,11 @@ def command_center_league(request: Request, league_id: str):
                 "standings": f"/league?league={selected.id}&view=overview#standings",
             },
         }
+        # This card aggregates several reports. Keep it briefly as one unit so
+        # browser revisits and redirects do not rebuild the same MFL fan-out.
+        with current.read_lock:
+            current.read_cache[cache_key] = (time.monotonic() + 90, payload)
+        return payload
     except (MFLApiError, ValueError) as error:
         if isinstance(error, MFLApiError):
             _log_provider_error_once(current, selected.id, "command_center_league_unavailable", error)
@@ -7908,16 +7933,41 @@ def preview_lineup(
     try:
         if not 1 <= week <= 18:
             raise ValueError("Choose a week from 1 through 18")
-        roster_ids = client.roster_ids()
+        roster_ids = _cached_session_read(
+            current, league.id, f"roster:{league.franchise_id}", client.roster_ids,
+            ttl=30, stale_ttl=300,
+        )
+        if client._players is None:
+            client._players = _cached_session_read(
+                current, "mfl-global", "players", client.players,
+                ttl=86400, stale_ttl=_LEAGUE_STATIC_STALE_TTL, shared=True,
+            )
         selected_ids = set(starter_ids)
         if not selected_ids.issubset(roster_ids):
             raise ValueError("The lineup contains a player who is not on your MFL roster")
-        settings = client.lineup_settings()
+        settings = _cached_session_read(
+            current, league.id, "lineup-settings", client.lineup_settings,
+            ttl=_WEEKLY_STATIC_TTL, stale_ttl=30 * 86400,
+        )
         selected_players = client.named_players(selected_ids)
-        statuses = client.player_roster_statuses(roster_ids, week=week)
         roster = client.named_players(roster_ids)
-        kickoffs = client.nfl_team_kickoffs(week=week)
+        def load_week_schedule():
+            loaded = client.nfl_team_kickoffs(week=week)
+            return loaded, dict(getattr(client, "week_games", {}))
+
+        kickoffs, _ = _cached_session_read(
+            current, "mfl-global", f"nfl-schedule:{week}", load_week_schedule,
+            ttl=_WEEKLY_STATIC_TTL, stale_ttl=_LEAGUE_STATIC_STALE_TTL, shared=True,
+        )
         locked_ids = _locked_player_ids(roster, kickoffs)
+        statuses = _cached_session_read(
+            current, league.id,
+            f"roster-status:{league.franchise_id}:{week}",
+            lambda: client.player_roster_statuses(
+                roster_ids, week=week, fallback_player_ids=locked_ids,
+            ),
+            ttl=30, stale_ttl=300,
+        )
         _check_locked_players_unchanged(
             selected_ids=selected_ids,
             statuses=statuses,
@@ -7946,9 +7996,15 @@ def preview_lineup(
         }
         current_players = client.named_players(current_ids)
         try:
-            mfl_projections = client.projected_scores(
-                week=week, player_ids=roster_ids
+            all_projections = _cached_session_read(
+                current, league.id, f"projections:{week}",
+                lambda: client.projected_scores(week=week),
+                ttl=_PROJECTIONS_TTL, stale_ttl=86400,
             )
+            mfl_projections = {
+                player_id: all_projections[player_id]
+                for player_id in roster_ids if player_id in all_projections
+            }
         except MFLApiError:
             mfl_projections = {}
         projections = projection_blend(
@@ -8026,18 +8082,42 @@ def submit_lineup(request: Request, pending_id: str, csrf_token: str = Form(...)
     client = _client(current, league)
     operation_status = "failed"
     try:
+        # Ownership and saved starter state are read live immediately before the
+        # write. Stable rules, player metadata, and kickoff times come from the
+        # bounded cache and do not consume MFL's transaction-time request budget.
         roster_ids = client.roster_ids()
+        if client._players is None:
+            client._players = _cached_session_read(
+                current, "mfl-global", "players", client.players,
+                ttl=86400, stale_ttl=_LEAGUE_STATIC_STALE_TTL, shared=True,
+            )
         roster = client.named_players(roster_ids)
-        statuses = client.player_roster_statuses(roster_ids, week=preview.week)
+        def load_week_schedule():
+            loaded = client.nfl_team_kickoffs(week=preview.week)
+            return loaded, dict(getattr(client, "week_games", {}))
+
+        kickoffs, _ = _cached_session_read(
+            current, "mfl-global", f"nfl-schedule:{preview.week}",
+            load_week_schedule, ttl=_WEEKLY_STATIC_TTL,
+            stale_ttl=_LEAGUE_STATIC_STALE_TTL, shared=True,
+        )
+        locked_ids = _locked_player_ids(roster, kickoffs)
+        statuses = client.player_roster_statuses(
+            roster_ids,
+            week=preview.week,
+            fallback_player_ids=locked_ids,
+        )
         selected_ids = {player.id for player in preview.starters}
         if not selected_ids.issubset(roster_ids):
             raise ValueError("Your roster changed. Reopen the lineup and review it again.")
         if any(statuses.get(player_id) in {"IR", "TS"} for player_id in selected_ids):
             raise ValueError("A selected player is now on IR or taxi. Review the lineup again.")
-        if not lineup_is_legal(client.named_players(selected_ids), client.lineup_settings()):
+        settings = _cached_session_read(
+            current, league.id, "lineup-settings", client.lineup_settings,
+            ttl=_WEEKLY_STATIC_TTL, stale_ttl=30 * 86400,
+        )
+        if not lineup_is_legal(client.named_players(selected_ids), settings):
             raise ValueError("This lineup no longer meets your league rules. Review it again.")
-        kickoffs = client.nfl_team_kickoffs(week=preview.week)
-        locked_ids = _locked_player_ids(roster, kickoffs)
         _check_locked_players_unchanged(
             selected_ids={player.id for player in preview.starters},
             statuses=statuses,
@@ -8086,9 +8166,16 @@ def submit_lineup(request: Request, pending_id: str, csrf_token: str = Form(...)
         current.read_cache.pop(
             f"{current.year}:{league.id}:report:home-briefing", None,
         )
+        current.read_cache.pop(
+            f"{current.year}:{league.id}:report:command-center-core", None,
+        )
         error = None
         operation_status = "completed"
     except (MFLApiError, ValueError) as caught:
+        if isinstance(caught, MFLRateLimitError):
+            current.provider_cooldowns[league.id] = (
+                time.monotonic() + caught.retry_after
+            )
         log_error("lineup_submit_failed", caught)
         result = None
         success = None

@@ -71,6 +71,24 @@ def test_roster_status_accepts_franchise_shape_and_live_fallback(monkeypatch):
     assert client.player_roster_statuses(['a','b'],week=1) == {'a':'S','b':'NS'}
 
 
+def test_roster_status_skips_live_fallback_for_unknown_unlocked_players(monkeypatch):
+    client = MFLClient(MFLConfig(2026, 'league', '0001'))
+    monkeypatch.setattr(client, 'export', lambda *a, **k: {
+        'playerRosterStatus': {'player': [
+            {'id': 'locked', 'franchise': {'id': '1', 'status': 'S'}},
+            {'id': 'reserve', 'franchise': {'id': '1', 'status': 'R'}},
+        ]},
+    })
+    monkeypatch.setattr(
+        client, 'live_scoring',
+        lambda **k: (_ for _ in ()).throw(AssertionError('live scoring should not be read')),
+    )
+
+    assert client.player_roster_statuses(
+        ['locked', 'reserve'], week=1, fallback_player_ids={'locked'},
+    ) == {'locked': 'S', 'reserve': 'R'}
+
+
 def test_league_points_are_not_blended_or_filled_by_generic_ml(monkeypatch):
     from weekly_projections import projection_sources as sources
     monkeypatch.setattr(sources,'stathead_weekly_scores',lambda *a,**k: ({'a':100,'b':200},None))

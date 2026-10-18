@@ -92,6 +92,21 @@ def test_command_center_core_is_an_actionable_cross_league_brief(monkeypatch):
     assert "view=pending" in data["links"]["transactions"]
 
 
+def test_command_center_core_reuses_the_complete_card_for_brief_revisits(monkeypatch):
+    client = _session(monkeypatch)
+    original = web._load_insights
+    calls = {"insights": 0}
+
+    def counted(*args, **kwargs):
+        calls["insights"] += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(web, "_load_insights", counted)
+    assert client.get("/api/command-center/league").status_code == 200
+    assert client.get("/api/command-center/league").status_code == 200
+    assert calls["insights"] == 1
+
+
 def test_command_center_queue_loads_after_core_and_splits_trade_direction(monkeypatch):
     client = _session(monkeypatch)
     data = client.get("/api/command-center/league/queue").json()
