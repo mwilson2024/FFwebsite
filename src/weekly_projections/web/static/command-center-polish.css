@@ -1,8 +1,6 @@
-/* Blue/violet game-day accents replace the former green Command Center palette. */
-.command-overview strong,
-.command-mini-metrics strong {
-  color: #8bbcff;
-}
+/* Theme-safe Command Center accents. Keep interactive summaries looking like
+   dashboard cards instead of large primary-action buttons. */
+.command-mini-metrics strong { color: #8bbcff; }
 
 .command-toolbar button.active,
 .league-badge,
@@ -26,22 +24,73 @@
 .command-chance b { background: linear-gradient(90deg, #6fa8ff, #a78bfa); }
 
 .command-overview button {
+  --metric-accent: #6fa8ff;
+  --metric-color: color-mix(in srgb, var(--metric-accent) 72%, var(--site-text, #fff));
+  position: relative;
+  overflow: hidden;
   display: grid;
-  gap: .15rem;
-  min-height: 7rem;
-  padding: 1rem 1.1rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-content: center;
+  gap: .1rem .75rem;
+  min-height: 8rem;
+  padding: 1rem 1.1rem .9rem;
   border: 1px solid var(--line, #315477);
-  border-radius: 18px;
-  background: var(--panel, #082f53);
-  color: inherit;
+  border-radius: 16px;
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--metric-accent) 9%, var(--site-panel, #082f53)),
+    var(--site-panel, #082f53) 65%
+  );
+  color: var(--site-text, inherit);
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease;
+  box-shadow: inset 0 1px rgba(255, 255, 255, .035), 0 10px 28px rgba(0, 0, 0, .1);
+  transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease, background .16s ease;
+}
+
+.command-overview button::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: var(--metric-accent);
+}
+
+.command-overview button[data-command-overview-filter="action"] { --metric-accent: #f05f75; }
+.command-overview button[data-command-overview-filter="live"] { --metric-accent: #5aa7ff; }
+.command-overview button[data-command-overview-filter="pending"] { --metric-accent: #e8aa3c; }
+.command-overview button[data-command-overview-filter="upside"] { --metric-accent: #9a82ed; }
+
+.command-overview button > span {
+  grid-column: 1 / -1;
+  color: var(--site-muted, #91a9cb);
+  font-size: .7rem;
+  letter-spacing: .1em;
+}
+
+.command-overview button > strong {
+  grid-column: 1;
+  margin-top: .12rem;
+  color: var(--metric-color);
+  font-size: clamp(1.8rem, 3vw, 2.35rem);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.08;
+}
+
+.command-overview button > small {
+  grid-column: 1;
+  color: var(--site-muted, #91a9cb);
+  line-height: 1.35;
 }
 
 .command-overview button:hover {
-  border-color: #7da8ff;
+  border-color: var(--metric-accent);
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--metric-accent) 14%, var(--site-panel, #082f53)),
+    var(--site-panel, #082f53) 68%
+  );
   transform: translateY(-2px);
 }
 
@@ -51,19 +100,80 @@
 }
 
 .command-overview button[aria-pressed="true"] {
-  border-color: #7da8ff;
-  box-shadow: 0 0 0 2px rgba(125, 168, 255, .22), 0 12px 32px rgba(0, 0, 0, .18);
+  border-color: var(--metric-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--metric-accent) 26%, transparent), 0 12px 32px rgba(0, 0, 0, .18);
 }
 
 .command-overview button > b {
-  margin-top: .4rem;
-  color: var(--site-link, #8bbcff);
-  font-size: .75rem;
+  grid-column: 2;
+  grid-row: 2 / span 2;
+  align-self: end;
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  color: var(--metric-color);
+  font-size: .72rem;
+  white-space: nowrap;
 }
 
-.command-overview button[aria-pressed="true"] > b { color: #ffc845; }
+.command-overview button > b i { font-style: normal; transition: transform .16s ease; }
+.command-overview button:hover > b i { transform: translateX(3px); }
+.command-overview button[aria-pressed="true"] > b { color: var(--metric-color); }
 .command-overview button[aria-pressed="true"] > b::before { content: "✓ "; }
 
+.command-toolbar > div {
+  padding: .25rem;
+  border: 1px solid var(--site-line, #315477);
+  border-radius: 13px;
+  background: var(--site-panel, #082f53);
+}
+
+/* themes.css intentionally turns generic buttons into primary actions. These
+   two Command Center groups are navigation surfaces, so opt them back out. */
+html[data-theme] .command-overview button {
+  border-color: var(--site-line) !important;
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--metric-accent) 9%, var(--site-panel)),
+    var(--site-panel) 65%
+  ) !important;
+  color: var(--site-text) !important;
+  box-shadow: inset 0 1px rgba(255, 255, 255, .035), 0 10px 28px rgba(0, 0, 0, .1) !important;
+}
+
+html[data-theme] .command-overview button:is(:hover,[aria-pressed="true"]) {
+  border-color: var(--metric-accent) !important;
+}
+
+html[data-theme] .command-overview button[aria-pressed="true"] {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--metric-accent) 26%, transparent), 0 12px 32px rgba(0, 0, 0, .18) !important;
+}
+
+html[data-theme] .command-toolbar button {
+  min-height: 38px;
+  padding: .48rem .75rem;
+  border-color: transparent !important;
+  border-radius: 9px;
+  background: transparent !important;
+  color: var(--site-muted) !important;
+  box-shadow: none !important;
+}
+
+html[data-theme] .command-toolbar button:hover {
+  background: var(--site-hover) !important;
+  color: var(--site-text) !important;
+}
+
+html[data-theme] .command-toolbar button.active {
+  border-color: var(--site-line) !important;
+  background: var(--site-raised) !important;
+  color: var(--site-link) !important;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, .14) !important;
+}
+
 @media (max-width: 650px) {
-  .command-overview button { min-height: 6.5rem; padding: .8rem; }
+  .command-overview button { min-height: 7.25rem; padding: .85rem .9rem .75rem; }
+  .command-overview button > b { grid-column: 1 / -1; grid-row: auto; margin-top: .35rem; }
+  .command-toolbar > div { width: 100%; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  html[data-theme] .command-toolbar button { padding-inline: .35rem; font-size: .75rem; }
 }

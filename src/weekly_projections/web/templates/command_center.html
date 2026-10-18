@@ -9,7 +9,7 @@
   <link rel="stylesheet" href="/static/workspace.css?v=3">
   <link rel="stylesheet" href="/static/command-center.css?v=20261014-overview-links">
   <link rel="stylesheet" href="/static/command-center-live.css?v=3">
-  <link rel="stylesheet" href="/static/command-center-polish.css?v=20261014-overview-links">
+  <link rel="stylesheet" href="/static/command-center-polish.css?v=20261018-summary-restyle">
   <link rel="stylesheet" href="/static/lions.css?v=1">
   <script src="/static/command-center.js?v=20261014-overview-links" defer></script>
   {% include '_theme_assets.html' %}
@@ -26,10 +26,10 @@
       <div class="command-hero-status"><strong>{{ leagues|length }}</strong><span>connected leagues</span><small id="command-load-progress">Preparing board…</small></div>
     </section>
     <section class="command-overview" aria-label="Portfolio summary" aria-live="polite">
-      <button type="button" data-command-overview-filter="action" aria-pressed="false" aria-controls="command-board"><span>Needs attention</span><strong id="command-action-count">—</strong><small>lineup and injury items</small><b>Show leagues →</b></button>
-      <button type="button" data-command-overview-filter="live" aria-pressed="false" aria-controls="command-board"><span>Live now</span><strong id="command-live-count">—</strong><small>active matchups</small><b>Show leagues →</b></button>
-      <button type="button" data-command-overview-filter="pending" aria-pressed="false" aria-controls="command-board"><span>Pending</span><strong id="command-pending-count">—</strong><small>waivers and trades</small><b>Show leagues →</b></button>
-      <button type="button" data-command-overview-filter="upside" aria-pressed="false" aria-controls="command-board"><span>Lineup upside</span><strong id="command-edge-total">—</strong><small>projected points available</small><b>Show leagues →</b></button>
+      <button type="button" data-command-overview-filter="action" aria-pressed="false" aria-controls="command-board"><span>Needs attention</span><strong id="command-action-count">—</strong><small>lineup and injury items</small><b>View leagues <i aria-hidden="true">→</i></b></button>
+      <button type="button" data-command-overview-filter="live" aria-pressed="false" aria-controls="command-board"><span>Live now</span><strong id="command-live-count">—</strong><small>active matchups</small><b>View leagues <i aria-hidden="true">→</i></b></button>
+      <button type="button" data-command-overview-filter="pending" aria-pressed="false" aria-controls="command-board"><span>Pending</span><strong id="command-pending-count">—</strong><small>waivers and trades</small><b>View leagues <i aria-hidden="true">→</i></b></button>
+      <button type="button" data-command-overview-filter="upside" aria-pressed="false" aria-controls="command-board"><span>Lineup upside</span><strong id="command-edge-total">—</strong><small>projected points available</small><b>View leagues <i aria-hidden="true">→</i></b></button>
     </section>
     <div class="command-toolbar" aria-label="Command center filters">
       <div role="group" aria-label="Filter leagues">

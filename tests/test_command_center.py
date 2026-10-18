@@ -145,10 +145,14 @@ def test_command_center_client_renders_both_live_team_panels():
     assert "pts from opening" in script
     assert ".chance-change.is-up" in styles and ".chance-change.is-down" in styles
     assert "/static/command-center-live.css?v=3" in template
-    assert "/static/command-center-polish.css?v=20261014-overview-links" in template
+    assert "/static/command-center-polish.css?v=20261018-summary-restyle" in template
     assert "/static/command-center.js?v=20261014-overview-links" in template
     assert 'data-command-overview-filter="action"' in template
     assert 'data-command-overview-filter="pending"' in template
     assert 'data-command-overview-filter="upside"' in template
     assert "card.dataset.pending" in script and "card.dataset.upside" in script
     assert "scrollIntoView" in script
+    polish = (root / "static/command-center-polish.css").read_text(encoding="utf-8")
+    assert 'button[data-command-overview-filter="action"]' in polish
+    assert "html[data-theme] .command-overview button" in polish
+    assert "html[data-theme] .command-toolbar button.active" in polish
