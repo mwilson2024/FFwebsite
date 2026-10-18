@@ -7661,12 +7661,78 @@ def moves(request: Request, league: str, q: str = "", error: str = ""):
     )
 
 
+@app.post("/lineup/sync")
+def sync_lineup_from_mfl(
+    request: Request,
+    league: str = Form(...),
+    week: int = Form(...),
+    csrf_token: str = Form(...),
+):
+    """Refresh only the MFL lineup week the owner is currently viewing."""
+    current = _require_session(request)
+    _check_csrf(current, csrf_token)
+    selected = _league(current, league)
+    if not 1 <= week <= 18:
+        raise HTTPException(status_code=400, detail="Choose a valid week")
+
+    try:
+        cooldown = max(
+            0, math.ceil(current.provider_cooldowns.get(selected.id, 0) - time.monotonic())
+        )
+        if cooldown:
+            raise MFLRateLimitError(
+                f"MFL reads are paused for {cooldown} seconds after a rate limit. "
+                "Try this sync again after the wait.",
+                retry_after=cooldown,
+            )
+        live = _client(current, selected).live_scoring(week=week)
+        if live.week != week:
+            raise MFLApiError(
+                f"MFL returned Week {live.week} instead of the requested Week {week}"
+            )
+    except MFLApiError as error:
+        if isinstance(error, MFLRateLimitError):
+            current.provider_cooldowns[selected.id] = (
+                time.monotonic() + error.retry_after
+            )
+        _log_provider_error_once(
+            current,
+            selected.id,
+            "lineup_manual_sync_failed",
+            error,
+            window=error.retry_after if isinstance(error, MFLRateLimitError) else 120,
+        )
+        query = urlencode({
+            "league": selected.id,
+            "week": week,
+            "error": str(error)[:300],
+            "ref": request.state.error_reference,
+        })
+        return RedirectResponse(f"/lineup?{query}", status_code=303)
+
+    cache_key = f"{current.year}:{selected.id}:report:live-scoring:{week}"
+    observed_at = time.monotonic()
+    with current.read_lock:
+        current.read_cache[cache_key] = (observed_at + 60, live)
+        current.cache_observed_at[cache_key] = observed_at
+        current.provider_cooldowns.pop(selected.id, None)
+    log_event(
+        "lineup_manual_sync_completed",
+        league_id=selected.id,
+        week=week,
+        matchup_count=len(live.matchups),
+    )
+    query = urlencode({"league": selected.id, "week": week, "synced": "1"})
+    return RedirectResponse(f"/lineup?{query}", status_code=303)
+
+
 @app.get("/lineup", response_class=HTMLResponse)
 def lineup_page(
     request: Request,
     league: str,
     error: str = "",
     emergency: str = "",
+    synced: str = "",
     week: int | None = None,
 ):
     current = _session(request)
@@ -7756,6 +7822,7 @@ def lineup_page(
             "emergency_replacement_mode": current.emergency_lineup_modes.get(selected.id, "projection"),
             "emergency_priority_players": emergency_priority_players,
             "emergency_message": emergency if emergency in {"enabled", "disabled"} else "",
+            "lineup_synced": synced == "1",
             "error": api_error,
         },
     )

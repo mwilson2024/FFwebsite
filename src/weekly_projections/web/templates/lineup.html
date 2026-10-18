@@ -8,7 +8,7 @@
   <title>{{ league.name }} · Lineup</title>
   <link rel="stylesheet" href="/static/app.css?v=20260915-matchup-context">
   <link rel="stylesheet" href="/static/workspace.css?v=2">
-  <link rel="stylesheet" href="/static/fantasy.css?v=20261004-emergency-choices">
+  <link rel="stylesheet" href="/static/fantasy.css?v=20261018-lineup-sync">
   <link rel="stylesheet" href="/static/lions.css?v=1">
   <script src="/static/diagnostics.js" defer></script>
   <script src="/static/app.js?v=20261004-emergency-choices" defer></script>
@@ -19,12 +19,22 @@
   <main class="editor-shell" id="main-content">
     <div class="editor-heading">
       <div><p class="eyebrow">{{ league.name }}</p><h1>My lineup</h1></div>
-      <form method="get" action="/lineup" class="editor-selectors compact-selectors">
-        <input type="hidden" name="league" value="{{ league.id }}">
-        <label>Week<select name="week" id="lineup-week">{% for number in range(1,19) %}<option value="{{ number }}" {% if number == week %}selected{% endif %}>Week {{ number }}</option>{% endfor %}</select></label><button type="submit" class="secondary-button">View week</button>
-      </form>
+      <div class="lineup-heading-actions">
+        <form method="get" action="/lineup" class="editor-selectors compact-selectors">
+          <input type="hidden" name="league" value="{{ league.id }}">
+          <label>Week<select name="week" id="lineup-week">{% for number in range(1,19) %}<option value="{{ number }}" {% if number == week %}selected{% endif %}>Week {{ number }}</option>{% endfor %}</select></label><button type="submit" class="secondary-button">View week</button>
+        </form>
+        <form method="post" action="/lineup/sync" class="lineup-sync-form">
+          <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
+          <input type="hidden" name="league" value="{{ league.id }}">
+          <input type="hidden" name="week" value="{{ week or 1 }}">
+          <button type="submit" class="secondary-button accent">Sync Week {{ week or 1 }} with MFL</button>
+          <small>Only this league and week</small>
+        </form>
+      </div>
     </div>
     {% if error %}<div class="error" role="alert">{{ error }}{% include '_error_reference.html' %}</div>{% endif %}
+    {% if lineup_synced %}<div class="success" role="status">Week {{ week }} was refreshed directly from MFL.</div>{% endif %}
     {% if emergency_message %}<div class="success" role="status">Emergency lineup protection is now {{ 'on for this league' if emergency_message == 'enabled' else 'off for this league' }}.</div>{% endif %}
     {% if not emergency_prompt_answered %}
     <section class="emergency-lineup-setting emergency-lineup-question" aria-labelledby="emergency-lineup-question-title">
@@ -69,7 +79,6 @@
           {% if not recommendation.used_league_rules %}<p class="editor-note">No legal recommendation is available with these players and locks. You can still edit the lineup manually.</p>{% endif %}
           <details class="editor-details"><summary>Lineup options &amp; rules</summary>
             <button type="button" class="secondary-button" id="restore-current">Reset to saved lineup</button>
-            <a class="reload-mfl" href="/lineup?league={{ league.id }}&week={{ week }}">Reload from MFL</a>
             <p class="lineup-sync-note">{% if lineup_visible %}Loaded from MFL for Week {{ week }}. Changes stay here until you review and confirm.{% else %}MFL has not exposed a saved lineup for this week. This is an unsubmitted draft.{% endif %}</p>
             <div class="lineup-rules">{% for rule in settings.rules %}<span>{{ rule.name }} <strong>{{ rule.minimum }}{% if rule.minimum != rule.maximum %}–{{ rule.maximum }}{% endif %}</strong></span>{% endfor %}</div>
             <p>{{ projection_source }}{% if espn_source %} · {{ espn_source }} reference{% endif %} · {{ locked_count }} kickoff locks. Locked players cannot move.</p>

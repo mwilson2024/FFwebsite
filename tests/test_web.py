@@ -2195,6 +2195,9 @@ def test_lineup_page_shows_start_sit_recommendations(monkeypatch) -> None:
     assert "20260915-matchup-context" in response.text
     assert "ONE-TIME QUESTION" in response.text
     assert "Yes, protect my lineup" in response.text
+    assert 'action="/lineup/sync"' in response.text
+    assert "Sync Week 1 with MFL" in response.text
+    assert "Only this league and week" in response.text
 
     current = web_app.sessions[session_id]
     current.emergency_lineup_prompted.add(league.id)
@@ -2205,6 +2208,75 @@ def test_lineup_page_shows_start_sit_recommendations(monkeypatch) -> None:
     assert "PREGAME SAFEGUARD" in answered.text
     assert "Preferred replacement order" in answered.text
     assert 'value="p1"' in answered.text
+
+
+def test_lineup_force_sync_refreshes_only_the_displayed_week(monkeypatch) -> None:
+    web_app.sessions.clear()
+    session_id = "lineup-sync-session"
+    league = MFLLeague("11111", "0001", "Home League")
+    current = web_app.BrowserSession("cookie", 2026, [league], "csrf")
+    current.selected_week = 3
+    week_three_key = "2026:11111:report:live-scoring:3"
+    week_four_key = "2026:11111:report:live-scoring:4"
+    current.read_cache[week_three_key] = (time.monotonic() + 300, "old-week-three")
+    current.read_cache[week_four_key] = (time.monotonic() + 300, "keep-week-four")
+    web_app.sessions[session_id] = current
+    calls = []
+    refreshed = MFLLiveScoring(3, ())
+
+    class SyncClient:
+        def live_scoring(self, *, week):
+            calls.append(week)
+            return refreshed
+
+    monkeypatch.setattr(web_app, "_client", lambda current, selected: SyncClient())
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", session_id)
+
+    rejected = client.post(
+        "/lineup/sync",
+        data={"csrf_token": "wrong", "league": league.id, "week": "3"},
+        follow_redirects=False,
+    )
+    assert rejected.status_code == 403
+    assert calls == []
+
+    response = client.post(
+        "/lineup/sync",
+        data={"csrf_token": "csrf", "league": league.id, "week": "3"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/lineup?league=11111&week=3&synced=1"
+    assert calls == [3]
+    assert current.read_cache[week_three_key][1] is refreshed
+    assert current.read_cache[week_four_key][1] == "keep-week-four"
+    assert current.selected_week == 3
+
+
+def test_lineup_force_sync_respects_mfl_rate_limit_cooldown(monkeypatch) -> None:
+    web_app.sessions.clear()
+    league = MFLLeague("11111", "0001", "Home League")
+    current = web_app.BrowserSession("cookie", 2026, [league], "csrf")
+    current.provider_cooldowns[league.id] = time.monotonic() + 120
+    web_app.sessions["lineup-sync-cooldown"] = current
+    monkeypatch.setattr(
+        web_app,
+        "_client",
+        lambda current, selected: pytest.fail("MFL must not be called during cooldown"),
+    )
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", "lineup-sync-cooldown")
+
+    response = client.post(
+        "/lineup/sync",
+        data={"csrf_token": "csrf", "league": league.id, "week": "3"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/lineup?league=11111&week=3&error=")
+    assert "after+a+rate+limit" in response.headers["location"]
 
 
 def test_incomplete_lineup_preview_url_redirects_safely() -> None:
