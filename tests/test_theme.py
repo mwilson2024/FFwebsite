@@ -117,7 +117,8 @@ def test_league_switcher_uses_one_control_height_on_every_page():
     assert '.header-league-picker .league-switch-button' in css
     assert 'height:44px; min-height:44px;' in css
     assert '.league-topbar .brand-mark { display:grid; width:44px; height:44px; }' in css
-    assert '/static/interface.css?v=20261027-navigation-search' in assets
+    assert '/static/interface.css?v=20261027-settings-placement' in assets
+    assert '.site-options { grid-column:5; justify-self:end; width:max-content;' in css
     assert '<span class="sr-only">Switch league</span>' in header
 
 

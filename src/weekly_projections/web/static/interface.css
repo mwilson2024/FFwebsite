@@ -23,7 +23,7 @@ html body .league-topbar .brand-mark { display:grid; width:44px; height:44px; }
 .all-leagues-link:hover { background:#ffffff18; color:#fff; }
 html body .topbar.league-topbar .section-nav { grid-column:1/-1; order:initial; display:flex; gap:.5rem; width:100%; padding:0; margin:0; overflow:visible; background:transparent; }
 html body .topbar.league-topbar .section-nav a { flex:0 1 auto; min-height:48px; border-radius:10px 10px 0 0; padding:.7rem 1.05rem; font-size:.875rem; }
-.site-options { grid-column:4; position:relative; }
+.site-options { grid-column:5; justify-self:end; width:max-content; position:relative; }
 .site-options-heading { display:block; margin:.35rem 0 0; color:var(--site-muted); font-size:.72rem; letter-spacing:.08em; text-transform:uppercase; }
 .site-options>summary { display:flex; align-items:center; gap:.5rem; min-height:44px; padding:.5rem .75rem; color:white; cursor:pointer; list-style:none; border:1px solid #ffffff45; border-radius:10px; font-size:.875rem; }
 .site-options>summary::-webkit-details-marker { display:none; }
@@ -137,7 +137,7 @@ html body :is(.review-actions,.confirmation-actions) { display:flex; flex-wrap:w
   .all-leagues-link { display:none; }
   html body .league-topbar .header-league-picker { grid-column:1; }
   .header-player-search { grid-column:1/-1; order:2; }
-  html body .site-options { grid-column:2; }
+  html body .site-options { grid-column:2; justify-self:end; width:max-content; }
   html body .site-options>summary { width:44px; padding:.6rem; }
   .site-options>summary>span { display:none; }
   html body .topbar.league-topbar .section-nav { position:fixed; inset:auto 0 0; order:3; display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); width:100%; margin:0; padding:.4rem .2rem calc(.4rem + env(safe-area-inset-bottom)); gap:.15rem; background:var(--site-panel); border-top:1px solid var(--site-line); box-shadow:0 -4px 18px #0001; z-index:50; }

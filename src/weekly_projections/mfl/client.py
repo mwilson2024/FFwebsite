@@ -942,7 +942,7 @@ class MFLClient:
         # bounded fallback, never completed WAIVER/BBID_WAIVER transactions.
         if root in (None, "", {}, []):
             activity_payload = self.export(
-                "transactions", DAYS=14, COUNT=100, TRANS_TYPE="*",
+                "transactions", DAYS=7, COUNT=100, TRANS_TYPE="*",
             )
             activity_root = (
                 activity_payload.get("transactions")
@@ -951,14 +951,23 @@ class MFLClient:
             own_franchise = self.config.franchise_id.zfill(4)
             pending_rows: list[dict[str, Any]] = []
             if isinstance(activity_root, dict):
-                for item in _iter_key(activity_root, "transaction"):
-                    if not isinstance(item, dict):
-                        continue
-                    kind = str(
-                        item.get("type") or item.get("transaction_type") or ""
-                    ).upper()
-                    if "WAIVER" not in kind or "REQUEST" not in kind:
-                        continue
+                activity_rows = [
+                    item for item in _iter_key(activity_root, "transaction")
+                    if isinstance(item, dict)
+                ]
+
+                def transaction_timestamp(item: dict[str, Any]) -> int | None:
+                    raw = item.get("timestamp") or item.get("time")
+                    if isinstance(raw, dict):
+                        raw = raw.get("$t") or raw.get("value")
+                    try:
+                        value = int(str(raw))
+                    except (TypeError, ValueError):
+                        return None
+                    # Some feeds use JavaScript milliseconds rather than Unix seconds.
+                    return value // 1000 if value > 10_000_000_000 else value
+
+                def belongs_to_owner(item: dict[str, Any]) -> bool:
                     raw_franchise = (
                         item.get("franchise") or item.get("franchise_id") or ""
                     )
@@ -971,7 +980,36 @@ class MFLClient:
                         for candidate in re.findall(r"\d+", str(raw_franchise))
                         if len(candidate) <= 4
                     }
-                    if franchise_ids and own_franchise not in franchise_ids:
+                    return own_franchise in franchise_ids
+
+                now = int(time.time())
+                oldest_allowed = now - 7 * 86400
+                processed_at = max((
+                    timestamp
+                    for item in activity_rows
+                    if belongs_to_owner(item)
+                    for kind in [str(
+                        item.get("type") or item.get("transaction_type") or ""
+                    ).upper()]
+                    for timestamp in [transaction_timestamp(item)]
+                    if "WAIVER" in kind and "REQUEST" not in kind
+                    and timestamp is not None
+                ), default=0)
+                for item in activity_rows:
+                    if not isinstance(item, dict):
+                        continue
+                    kind = str(
+                        item.get("type") or item.get("transaction_type") or ""
+                    ).upper()
+                    if "WAIVER" not in kind or "REQUEST" not in kind:
+                        continue
+                    timestamp = transaction_timestamp(item)
+                    if (
+                        not belongs_to_owner(item)
+                        or timestamp is None
+                        or timestamp < oldest_allowed
+                        or timestamp <= processed_at
+                    ):
                         continue
                     pending_rows.append(item)
             root = pending_rows
