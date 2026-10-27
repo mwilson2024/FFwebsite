@@ -26,6 +26,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from weekly_projections.mfl.client import (
@@ -96,6 +97,7 @@ from weekly_projections.league_intelligence import (
 from weekly_projections.web.diagnostics import (
     client_ip, initialize_log, log_access, log_error, log_event, request_context,
 )
+from weekly_projections.web.http_policy import cache_control_for
 from weekly_projections.web.session_store import EncryptedSessionStore
 from weekly_projections.web_push import configured as push_configured, public_key as push_public_key, send_web_push
 from weekly_projections.gameday import (
@@ -719,6 +721,7 @@ def _allowed_hosts() -> list[str]:
     return sorted(values)
 
 
+app.add_middleware(GZipMiddleware, minimum_size=500)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts())
 app.mount("/static", StaticFiles(directory=PACKAGE_DIR / "static"), name="static")
 
@@ -778,7 +781,9 @@ async def secure_local_responses(request: Request, call_next):
             _persist_account_preferences(
                 current, default_season=current.year, default_league_id=league_id,
             )
-    response.headers["Cache-Control"] = "no-store"
+    response.headers["Cache-Control"] = cache_control_for(
+        request.url.path, versioned=bool(request.query_params.get("v")),
+    )
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
@@ -1085,7 +1090,8 @@ def _persistent_report_identity(label: str) -> tuple[str, str] | None:
     """Map allow-listed display reports to bounded database cache keys."""
     if label in {
         "details", "standings", "schedule", "franchise-names",
-        "league-rosters", "lineup-settings", "players",
+        "league-rosters", "lineup-settings", "players", "command-center",
+        "injury-roundup",
     }:
         return label, ""
     for prefix in (
@@ -1271,7 +1277,12 @@ def _serialize_report_snapshot(label: str, value: object) -> dict | None:
     if not identity:
         return None
     report_type, _ = identity
-    if report_type == "details" and isinstance(value, MFLLeagueDetails):
+    if report_type in {"command-center", "injury-roundup"} and isinstance(value, dict):
+        encoded = json.dumps(value, separators=(",", ":"), sort_keys=True)
+        if len(encoded.encode("utf-8")) > 2 * 1024 * 1024:
+            return None
+        data = value
+    elif report_type == "details" and isinstance(value, MFLLeagueDetails):
         data = {
             "name": value.name,
             "divisions": [list(item) for item in value.divisions],
@@ -1420,6 +1431,9 @@ def _deserialize_report_snapshot(label: str, payload: dict) -> object | None:
     report_type, _ = identity
     value = payload.get("value")
     try:
+        if report_type in {"command-center", "injury-roundup"} and isinstance(value, dict):
+            encoded = json.dumps(value, separators=(",", ":"), sort_keys=True)
+            return value if len(encoded.encode("utf-8")) <= 2 * 1024 * 1024 else None
         if report_type == "details" and isinstance(value, dict):
             raw_franchises = value.get("franchises")
             if not isinstance(raw_franchises, dict) or len(raw_franchises) > 256:
@@ -4814,6 +4828,25 @@ def service_worker() -> FileResponse:
     )
 
 
+@app.get("/robots.txt", include_in_schema=False)
+def robots_policy() -> FileResponse:
+    """Keep automated crawlers out of this private, authenticated application."""
+    return FileResponse(
+        PACKAGE_DIR / "static" / "robots.txt",
+        media_type="text/plain",
+    )
+
+
+@app.get("/agent.md", include_in_schema=False)
+@app.get("/AGENT.md", include_in_schema=False)
+def automated_agent_policy() -> FileResponse:
+    """Publish the safety rules for automated agents that reach the public site."""
+    return FileResponse(
+        PACKAGE_DIR / "static" / "AGENT.md",
+        media_type="text/markdown",
+    )
+
+
 @app.get("/offline", response_class=HTMLResponse, include_in_schema=False)
 def offline_page(request: Request):
     return templates.TemplateResponse(request=request, name="offline.html", context={})
@@ -5015,17 +5048,171 @@ def command_center_page(request: Request, league: str = ""):
     })
 
 
+@app.get("/api/command-center")
+def command_center_batch(request: Request):
+    """Return every league brief in one bounded, progressively cached batch."""
+    current = _require_session(request)
+    workers = min(2, max(1, len(current.leagues)))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        rows = list(executor.map(
+            lambda selected: _safe_command_center_league_payload(current, selected),
+            current.leagues,
+        ))
+    return {
+        "leagues": [row for row in rows if isinstance(row, dict)],
+        "captured_at": int(time.time()),
+    }
+
+
+@app.get("/api/command-center/queues")
+def command_center_queue_batch(request: Request):
+    """Return every MFL transaction queue without one browser request per league."""
+    current = _require_session(request)
+    workers = min(2, max(1, len(current.leagues)))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        rows = list(executor.map(
+            lambda selected: _command_center_queue_payload(current, selected),
+            current.leagues,
+        ))
+    return {"leagues": rows, "captured_at": int(time.time())}
+
+
+@app.get("/api/command-center/injuries")
+def command_center_injury_roundup(request: Request):
+    """Build one bounded weekly injury report across the owner's leagues."""
+    current = _require_session(request)
+    workers = min(2, max(1, len(current.leagues)))
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        rows = list(executor.map(
+            lambda selected: _safe_injury_roundup_payload(current, selected),
+            current.leagues,
+        ))
+    return {
+        "leagues": rows,
+        "captured_at": int(time.time()),
+        "weekday": datetime.now(_APP_TIME_ZONE).strftime("%A"),
+    }
+
+
+def _safe_injury_roundup_payload(
+    current: BrowserSession, selected: MFLLeague,
+) -> dict[str, object]:
+    try:
+        return _cached_session_read(
+            current, selected.id, "injury-roundup",
+            lambda: _build_injury_roundup_payload(current, selected),
+            ttl=6 * 3600, stale_ttl=2 * 86400,
+        )
+    except (MFLApiError, ValueError) as error:
+        if isinstance(error, MFLApiError):
+            _log_provider_error_once(
+                current, selected.id, "injury_roundup_unavailable", error, window=1800,
+            )
+        return {
+            "league_id": selected.id, "league_name": selected.name,
+            "error": "The injury report could not refresh for this league.",
+            "injuries": [], "updated_at": int(time.time()),
+        }
+
+
+def _build_injury_roundup_payload(
+    current: BrowserSession, selected: MFLLeague,
+) -> dict[str, object]:
+    insight = _load_insights(
+        current, selected, include_external=False, include_accuracy=False,
+    )
+    lineup = insight["lineup"]
+    settings = insight["settings"]
+    injuries = []
+    for row in insight.get("rows", ()):
+        item = row["item"]
+        if not item.currently_starting or item.injury is None:
+            continue
+        plan = injury_replacement_plan(lineup, settings, {item.player.id})
+        candidates = []
+        if plan is not None:
+            unavailable = next(
+                (entry for entry in plan.unavailable if entry.player.id == item.player.id),
+                None,
+            )
+            if unavailable is not None:
+                candidates = [{
+                    "id": candidate.player.id,
+                    "name": candidate.player.name,
+                    "position": candidate.player.position,
+                    "team": candidate.player.team,
+                    "projection": candidate.projection,
+                } for candidate in unavailable.candidates[:3]]
+        injuries.append({
+            "player_id": item.player.id,
+            "player_name": item.player.name,
+            "position": item.player.position,
+            "nfl_team": item.player.team,
+            "status": row["injury_status"],
+            "details": row["injury_details"],
+            "severity": row["severity"],
+            "locked": bool(item.locked),
+            "replacements": candidates,
+            "news_url": row["news_url"],
+        })
+    return {
+        "league_id": selected.id,
+        "league_name": selected.name,
+        "week": insight["week"],
+        "injuries": injuries,
+        "updated_at": int(time.time()),
+        "links": {
+            "lineup": f"/lineup?league={selected.id}&week={insight['week']}",
+            "moves": f"/moves?league={selected.id}",
+        },
+    }
+
+
 @app.get("/api/command-center/{league_id}")
 def command_center_league(request: Request, league_id: str):
     """Load one league's decision brief without fanning out provider reads."""
     current = _require_session(request)
     selected = _league(current, league_id)
-    cache_key = f"{current.year}:{selected.id}:report:command-center-core"
-    with current.read_lock:
-        cached = current.read_cache.get(cache_key)
-        if cached and cached[0] > time.monotonic():
-            cache_telemetry.record("memory_hit")
-            return cached[1]
+    try:
+        return _command_center_league_payload(current, selected)
+    except (MFLApiError, ValueError) as error:
+        if isinstance(error, MFLApiError):
+            _log_provider_error_once(current, selected.id, "command_center_league_unavailable", error)
+        return JSONResponse({
+            "league_id": selected.id, "name": selected.name,
+            "error": "This league could not refresh. Its other cards are still available.",
+        }, status_code=503)
+
+
+def _command_center_league_payload(
+    current: BrowserSession, selected: MFLLeague,
+) -> dict[str, object]:
+    return _cached_session_read(
+        current, selected.id, "command-center",
+        lambda: _build_command_center_league_payload(current, selected),
+        ttl=90, stale_ttl=1800,
+    )
+
+
+def _safe_command_center_league_payload(
+    current: BrowserSession, selected: MFLLeague,
+) -> dict[str, object]:
+    try:
+        return _command_center_league_payload(current, selected)
+    except (MFLApiError, ValueError) as error:
+        if isinstance(error, MFLApiError):
+            _log_provider_error_once(
+                current, selected.id, "command_center_league_unavailable", error,
+            )
+        return {
+            "league_id": selected.id, "name": selected.name,
+            "error": "This league could not refresh. Its other cards are still available.",
+        }
+
+
+def _build_command_center_league_payload(
+    current: BrowserSession, selected: MFLLeague,
+) -> dict[str, object]:
     try:
         insight = _load_insights(
             current, selected, include_external=False, include_accuracy=False,
@@ -5165,18 +5352,11 @@ def command_center_league(request: Request, league_id: str):
                 "standings": f"/league?league={selected.id}&view=overview#standings",
             },
         }
-        # This card aggregates several reports. Keep it briefly as one unit so
-        # browser revisits and redirects do not rebuild the same MFL fan-out.
-        with current.read_lock:
-            current.read_cache[cache_key] = (time.monotonic() + 90, payload)
         return payload
     except (MFLApiError, ValueError) as error:
         if isinstance(error, MFLApiError):
             _log_provider_error_once(current, selected.id, "command_center_league_unavailable", error)
-        return JSONResponse({
-            "league_id": selected.id, "name": selected.name,
-            "error": "This league could not refresh. Its other cards are still available.",
-        }, status_code=503)
+        raise
 
 
 @app.get("/api/command-center/{league_id}/queue")
@@ -5184,6 +5364,12 @@ def command_center_queue(request: Request, league_id: str):
     """Add pending MFL transactions after every league's core brief is visible."""
     current = _require_session(request)
     selected = _league(current, league_id)
+    return _command_center_queue_payload(current, selected)
+
+
+def _command_center_queue_payload(
+    current: BrowserSession, selected: MFLLeague,
+) -> dict[str, object]:
     client = _client(current, selected)
     errors = []
     try:
@@ -6187,12 +6373,17 @@ def confirm_pending_transaction_action(
             "reject": "MFL confirmed the trade was rejected.",
             "revoke": "MFL confirmed the pending transaction was withdrawn.",
         }[draft.action]
-        _clear_report_cache(current, selected.id, "pending-waivers", "pending-trades", "activity")
+        _clear_report_cache(
+            current, selected.id, "pending-waivers", "pending-trades", "activity",
+            "command-center",
+        )
     except MFLWriteUncertainError as exc:
         draft.status = "uncertain"
         draft.message = "MFL may have received this action. Check Pending Transactions on MFL before trying again."
         log_error("pending_transaction_action_uncertain", exc)
-        _clear_report_cache(current, selected.id, "pending-waivers", "pending-trades")
+        _clear_report_cache(
+            current, selected.id, "pending-waivers", "pending-trades", "command-center",
+        )
     except (MFLApiError, ValueError) as exc:
         draft.status = "failed"
         draft.message = str(exc)
@@ -6420,7 +6611,7 @@ def _update_notification_state(
     if action_id not in current.active_notification_ids.get(league_id, set()):
         raise HTTPException(status_code=404, detail="This alert is no longer active")
     current.notification_states[action_id] = state
-    _clear_report_cache(current, league_id, "home-briefing")
+    _clear_report_cache(current, league_id, "home-briefing", "command-center")
 
 
 @app.post("/notifications/acknowledge")
@@ -6470,7 +6661,7 @@ def update_all_notifications(
     state = "acknowledged" if operation == "acknowledge" else "cleared"
     for action_id in current.active_notification_ids.get(selected.id, set()):
         current.notification_states[action_id] = state
-    _clear_report_cache(current, selected.id, "home-briefing")
+    _clear_report_cache(current, selected.id, "home-briefing", "command-center")
     return RedirectResponse(
         f"/insights?league={selected.id}#action-center", status_code=303,
     )
@@ -8233,9 +8424,7 @@ def submit_lineup(request: Request, pending_id: str, csrf_token: str = Form(...)
         current.read_cache.pop(
             f"{current.year}:{league.id}:report:home-briefing", None,
         )
-        current.read_cache.pop(
-            f"{current.year}:{league.id}:report:command-center-core", None,
-        )
+        _clear_report_cache(current, league.id, "command-center", "injury-roundup")
         error = None
         operation_status = "completed"
     except (MFLApiError, ValueError) as caught:

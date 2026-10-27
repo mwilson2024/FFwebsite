@@ -81,6 +81,26 @@ def test_pwa_manifest_worker_and_offline_shell_do_not_cache_private_pages() -> N
     assert "private league pages are never saved" in offline.text
 
 
+def test_public_automation_policies_block_crawlers_and_reject_credentials() -> None:
+    client = TestClient(web_app.app)
+
+    robots = client.get("/robots.txt")
+    assert robots.status_code == 200
+    assert robots.headers["content-type"].startswith("text/plain")
+    assert "User-agent: *" in robots.text
+    assert "Disallow: /" in robots.text
+
+    policy = client.get("/AGENT.md")
+    assert policy.status_code == 200
+    assert "Do not request, collect, store, reveal, or transmit" in policy.text
+    assert "Do not attempt to sign in" in policy.text
+    assert "one concise access request" in policy.text
+    assert "leave the site, stop all activity" in policy.text
+    assert "Do not repeat an access request" in policy.text
+    assert "never grants access" in policy.text
+    assert client.get("/agent.md").status_code == 200
+
+
 def test_pwa_score_shortcut_uses_remembered_league(monkeypatch) -> None:
     web_app.sessions.clear()
     league = MFLLeague("11111", "0001", "Home League")
@@ -740,7 +760,7 @@ def test_rosters_tab_shows_every_member_and_groups_roster_tools(monkeypatch) -> 
     assert "Rival Quarterback" in response.text and "Lions Defense" in response.text
     assert 'id="roster-player-search"' not in response.text
     assert 'aria-current="page"><strong>Rosters</strong>' in response.text
-    assert "Free agents" in response.text and "Add, drop &amp; waivers" in response.text
+    assert "Market &amp; research" in response.text and "Waivers, watchlist &amp; compare" in response.text
     top_nav = response.text.split('<nav class="section-nav"', 1)[1].split("</nav>", 1)[0]
     assert ">Players<" in top_nav and ">Rosters<" not in top_nav and ">Trades<" not in top_nav
 
@@ -920,7 +940,7 @@ def test_player_leaders_show_official_ranks_ownership_and_primary_rank(monkeypat
     assert "Hidden Linebacker" not in response.text
     assert "Combined MFL + ESPN + FantasyPros + CBS + ML ranks" in response.text
     tabs = response.text.split('<nav class="roster-tools"', 1)[1].split("</nav>", 1)[0]
-    assert tabs.index("Watch &amp; compare") < tabs.index("League leaders")
+    assert tabs.index("Market &amp; research") < tabs.index("League leaders")
     position_select = response.text.split('<select name="position">', 1)[1].split("</select>", 1)[0]
     assert position_select.index("WR + TE") < position_select.index("FLEX (RB + WR + TE)")
     assert position_select.rfind(">DEF<") > position_select.index("FLEX (RB + WR + TE)")
@@ -1209,7 +1229,7 @@ def test_notification_center_and_first_run_guide(monkeypatch) -> None:
     assert cleared.status_code == 303
     assert current.notification_states[action_id] == "cleared"
     home = client.get("/home?league=88883")
-    assert "Which rankings should lead your player lists?" in home.text and "My activity" in home.text
+    assert "Which rankings should lead your player lists?" in home.text and "Inbox &amp; alerts" in home.text
     saved = client.post("/preferences/rankings", data={
         "league": "88883", "ranking_preference": "espn-ppr", "csrf_token": "csrf",
     }, follow_redirects=False)

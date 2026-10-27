@@ -1,0 +1,6 @@
+<nav class="context-tabs lineup-context-tabs" aria-label="Lineup tools">
+  <a href="/lineup?league={{ league.id }}{% if week %}&amp;week={{ week }}{% endif %}" {% if active_tool == 'lineup' %}class="active" aria-current="page"{% endif %}>Set lineup</a>
+  <a href="/planner?league={{ league.id }}" {% if active_tool == 'planner' %}class="active" aria-current="page"{% endif %}>Multi-week planner</a>
+  <a href="/simulator?league={{ league.id }}" {% if active_tool == 'simulator' %}class="active" aria-current="page"{% endif %}>Decision lab</a>
+  <a href="/lineup?league={{ league.id }}{% if week %}&amp;week={{ week }}{% endif %}#emergency-lineup">Safeguards</a>
+</nav>

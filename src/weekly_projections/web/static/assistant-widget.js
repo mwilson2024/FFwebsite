@@ -11,10 +11,19 @@
   }
 
   document.querySelectorAll('[data-assistant-context-form]').forEach((form) => {
+    const choice = form.querySelector('[data-assistant-include-context]');
+    const preview = form.querySelector('[data-assistant-context-preview]');
+    const refreshPreview = () => {
+      const value = choice?.checked === false ? '' : pageContext();
+      if (preview) preview.textContent = value || 'No page context will be sent.';
+      return value;
+    };
+    form.querySelector('.assistant-context-preview')?.addEventListener('toggle', refreshPreview);
+    choice?.addEventListener('change', refreshPreview);
     form.addEventListener('submit', () => {
       form.elements.page_title.value = document.title.slice(0, 200);
       form.elements.page_path.value = window.location.pathname.slice(0, 240);
-      form.elements.page_context.value = pageContext();
+      form.elements.page_context.value = refreshPreview();
     });
   });
 
@@ -27,6 +36,13 @@
     const status = widget.querySelector('[data-assistant-status]');
     const textarea = form?.querySelector('textarea');
     const submit = form?.querySelector('button[type="submit"]');
+    const contextChoice = form?.querySelector('[data-assistant-include-context]');
+    const contextPreview = form?.querySelector('[data-assistant-context-preview]');
+    const refreshPreview = () => {
+      const value = contextChoice?.checked === false ? '' : pageContext();
+      if (contextPreview) contextPreview.textContent = value || 'No page context will be sent.';
+      return value;
+    };
 
     const close = () => {
       drawer.hidden = true;
@@ -38,6 +54,7 @@
       opener.setAttribute('aria-expanded', 'true');
       textarea?.focus();
       if (transcript) transcript.scrollTop = transcript.scrollHeight;
+      refreshPreview();
     });
     closer?.addEventListener('click', close);
     drawer.addEventListener('keydown', (event) => {
@@ -79,7 +96,7 @@
             message,
             page_title: document.title.slice(0, 200),
             page_path: window.location.pathname.slice(0, 240),
-            page_context: pageContext(),
+            page_context: refreshPreview(),
           }),
         });
         let result = {};
@@ -97,5 +114,7 @@
         textarea.focus();
       }
     });
+    form.querySelector('.assistant-context-preview')?.addEventListener('toggle', refreshPreview);
+    contextChoice?.addEventListener('change', refreshPreview);
   });
 })();

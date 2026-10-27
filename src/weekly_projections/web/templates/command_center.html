@@ -9,9 +9,9 @@
   <link rel="stylesheet" href="/static/workspace.css?v=3">
   <link rel="stylesheet" href="/static/command-center.css?v=20261014-overview-links">
   <link rel="stylesheet" href="/static/command-center-live.css?v=3">
-  <link rel="stylesheet" href="/static/command-center-polish.css?v=20261018-summary-restyle">
+  <link rel="stylesheet" href="/static/command-center-polish.css?v=20261027-injury-roundup">
   <link rel="stylesheet" href="/static/lions.css?v=1">
-  <script src="/static/command-center.js?v=20261014-overview-links" defer></script>
+  <script src="/static/command-center.js?v=20261027-injury-roundup" defer></script>
   {% include '_theme_assets.html' %}
 </head>
 <body class="gameday-page">
@@ -40,6 +40,10 @@
       </div>
       <p><span class="command-live-dot" aria-hidden="true"></span> Core data loads first; transaction queues follow.</p>
     </div>
+    <section class="command-injury-roundup" aria-labelledby="injury-roundup-title" data-command-injuries>
+      <header><div><p class="eyebrow">WEEKLY SAFETY CHECK</p><h2 id="injury-roundup-title">Tuesday starter injury roundup</h2><p>Injured saved starters and legal replacements already on each roster.</p></div><span data-injury-updated>Loading…</span></header>
+      <div class="command-injury-grid" data-injury-grid><p class="command-injury-loading">Building the cross-league report in the background…</p></div>
+    </section>
     <div class="command-grid" id="command-board" data-command-center data-league-count="{{ leagues|length }}">
       {% for item in leagues %}
       <article class="command-card loading" data-command-league="{{ item.id }}" data-command-category="loading">

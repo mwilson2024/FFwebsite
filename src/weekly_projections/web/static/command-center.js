@@ -177,23 +177,82 @@
     card.querySelector('.command-card-footer span:last-child').textContent = 'Queue checked';
     applyFilter(); updateSummary();
   };
-  (async () => {
-    for (const card of cards) {
-      try {
-        const response = await fetch(`/api/command-center/${encodeURIComponent(card.dataset.commandLeague)}`, {headers:{'Accept':'application/json'}});
-        const data = await response.json(); render(card, data);
-      } catch (_) { render(card, {league_id:card.dataset.commandLeague, error:'This league could not load.'}); }
-      coreLoaded += 1; updateSummary();
-    }
-    for (const card of cards) {
-      if (!boardData.has(card.dataset.commandLeague)) { queueLoaded += 1; updateSummary(); continue; }
-      try {
-        const response = await fetch(`/api/command-center/${encodeURIComponent(card.dataset.commandLeague)}/queue`, {headers:{'Accept':'application/json'}});
-        if (!response.ok) throw new Error('Queue unavailable'); renderQueue(card, await response.json());
-      } catch (_) {
-        const queue = card.querySelector('[data-command-queue]'); queue?.querySelector('.queue-loading')?.replaceWith(element('p', 'queue-warning', 'Pending transactions could not refresh. Open Review all to retry.'));
+  const renderInjuryRoundup = payload => {
+    const grid = document.querySelector('[data-injury-grid]');
+    const updated = document.querySelector('[data-injury-updated]');
+    if (!grid) return;
+    grid.replaceChildren();
+    const leagues = payload.leagues || [];
+    leagues.forEach(data => {
+      const panel = element('article', 'command-injury-league');
+      const head = element('header');
+      head.append(element('strong', '', data.league_name || 'League'), element('small', '', data.week ? `Week ${data.week}` : 'Unavailable'));
+      panel.append(head);
+      if (data.error) {
+        panel.append(element('p', 'queue-warning', data.error));
+      } else if (!data.injuries?.length) {
+        panel.append(element('p', 'all-clear', 'No injured saved starters reported by MFL.'));
+      } else {
+        const list = element('ul');
+        data.injuries.forEach(injury => {
+          const row = element('li', `tone-${injury.severity || 'warning'}`);
+          const copy = element('div');
+          copy.append(element('strong', '', injury.player_name), element('small', '', `${injury.position || '—'} · ${injury.nfl_team || 'FA'} · ${injury.status}${injury.locked ? ' · Locked' : ''}`));
+          const replacement = injury.replacements?.[0];
+          copy.append(element('p', '', replacement ? `Best legal roster replacement: ${replacement.name}${replacement.projection == null ? '' : ` (${Number(replacement.projection).toFixed(1)} proj)`}` : 'No legal roster replacement is currently available.'));
+          const actions = element('div', 'command-injury-actions');
+          actions.append(link('MFL news', injury.news_url));
+          actions.append(link(replacement ? 'Review lineup' : 'Search market', replacement ? data.links.lineup : data.links.moves));
+          row.append(copy, actions); list.append(row);
+        });
+        panel.append(list);
       }
-      queueLoaded += 1; updateSummary();
+      grid.append(panel);
+    });
+    if (!leagues.length) grid.append(element('p', 'all-clear', 'No connected leagues are available.'));
+    if (updated) updated.textContent = `Updated ${new Date((payload.captured_at || Date.now() / 1000) * 1000).toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})}`;
+  };
+  (async () => {
+    try {
+      const response = await fetch('/api/command-center', {headers:{'Accept':'application/json'}, signal:AbortSignal.timeout(30000)});
+      if (!response.ok) throw new Error('Command center unavailable');
+      const payload = await response.json();
+      const rows = new Map((payload.leagues || []).map(item => [String(item.league_id), item]));
+      cards.forEach(card => render(card, rows.get(card.dataset.commandLeague) || {
+        league_id:card.dataset.commandLeague, error:'This league could not load.'
+      }));
+    } catch (_) {
+      cards.forEach(card => render(card, {
+        league_id:card.dataset.commandLeague, error:'This league could not load.'
+      }));
     }
+    coreLoaded = cards.length; updateSummary();
+
+    fetch('/api/command-center/injuries', {headers:{'Accept':'application/json'}, signal:AbortSignal.timeout(30000)})
+      .then(response => { if (!response.ok) throw new Error(); return response.json(); })
+      .then(renderInjuryRoundup)
+      .catch(() => {
+        const grid = document.querySelector('[data-injury-grid]');
+        if (grid) grid.replaceChildren(element('p', 'queue-warning', 'The weekly injury report could not refresh. League cards are still available below.'));
+      });
+
+    try {
+      const response = await fetch('/api/command-center/queues', {headers:{'Accept':'application/json'}, signal:AbortSignal.timeout(20000)});
+      if (!response.ok) throw new Error('Queues unavailable');
+      const payload = await response.json();
+      const rows = new Map((payload.leagues || []).map(item => [String(item.league_id), item]));
+      cards.forEach(card => {
+        const row = rows.get(card.dataset.commandLeague);
+        if (row && boardData.has(card.dataset.commandLeague)) renderQueue(card, row);
+        queueLoaded += 1;
+      });
+    } catch (_) {
+      cards.forEach(card => {
+        const queue = card.querySelector('[data-command-queue]');
+        queue?.querySelector('.queue-loading')?.replaceWith(element('p', 'queue-warning', 'Pending transactions could not refresh. Open Review all to retry.'));
+        queueLoaded += 1;
+      });
+    }
+    updateSummary();
   })();
 })();

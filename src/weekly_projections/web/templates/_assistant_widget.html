@@ -22,6 +22,8 @@
       <form class="assistant-widget-compose" data-assistant-widget-form>
         <label for="assistant-widget-message-{{ assistant_widget_league.id }}">Message</label>
         <textarea id="assistant-widget-message-{{ assistant_widget_league.id }}" maxlength="2000" rows="3" required placeholder="Ask about what you're viewing…"></textarea>
+        <label class="assistant-context-choice"><input type="checkbox" data-assistant-include-context checked> Include this page's visible text</label>
+        <details class="assistant-context-preview"><summary>Preview what page context will be sent</summary><pre data-assistant-context-preview>No page context collected yet.</pre></details>
         <div><span data-assistant-status role="status"></span><button type="submit">Send <span aria-hidden="true">→</span></button></div>
       </form>
       <a class="assistant-widget-full" href="/assistant?league={{ assistant_widget_league.id }}">Open full assistant</a>

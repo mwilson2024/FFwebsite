@@ -177,3 +177,17 @@ html[data-theme] .command-toolbar button.active {
   .command-toolbar > div { width: 100%; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
   html[data-theme] .command-toolbar button { padding-inline: .35rem; font-size: .75rem; }
 }
+.command-injury-roundup { margin:0 0 1rem; padding:1rem; border:1px solid var(--site-line); border-radius:16px; background:var(--site-panel); }
+.command-injury-roundup>header { display:flex; align-items:flex-start; justify-content:space-between; gap:1rem; margin-bottom:.8rem; }
+.command-injury-roundup h2,.command-injury-roundup p { margin:.12rem 0; }
+.command-injury-roundup>header>span { color:var(--site-muted); font-size:.78rem; white-space:nowrap; }
+.command-injury-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:.7rem; }
+.command-injury-league { padding:.8rem; border:1px solid var(--site-line); border-radius:12px; background:var(--site-raised); }
+.command-injury-league>header { display:flex; justify-content:space-between; gap:.7rem; padding-bottom:.55rem; }
+.command-injury-league ul { display:grid; gap:.55rem; margin:0; padding:0; list-style:none; }
+.command-injury-league li { display:flex; justify-content:space-between; gap:.7rem; padding:.65rem; border-left:4px solid var(--site-warning,#ffc928); background:var(--site-panel); border-radius:8px; }
+.command-injury-league li.tone-danger { border-left-color:var(--site-danger,#ff665c); }
+.command-injury-league li p { color:var(--site-muted); font-size:.78rem; }
+.command-injury-actions { display:flex; flex-direction:column; align-items:flex-end; gap:.35rem; white-space:nowrap; }
+.command-injury-actions a { color:var(--site-link); font-size:.76rem; font-weight:750; }
+@media(max-width:600px) { .command-injury-roundup>header,.command-injury-league li { flex-direction:column; } .command-injury-actions { flex-direction:row; align-items:center; } }

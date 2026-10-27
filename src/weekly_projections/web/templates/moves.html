@@ -20,6 +20,11 @@
   <main class="move-shell" id="main-content">
     <section class="move-workspace waiver-workspace" data-player-market-verification="/api/player-market/verify?league={{ league.id|urlencode }}&amp;revision={{ market_snapshot_revision|urlencode }}" data-player-market-enrichment="/api/player-market/enrichment?league={{ league.id|urlencode }}&amp;revision={{ market_snapshot_revision|urlencode }}" data-market-verified="{{ 'true' if market_verified else 'false' }}">
       {% include '_roster_tabs.html' %}
+      <nav class="market-research-links" aria-label="Player research tools">
+        <a href="/watchlist?league={{ league.id }}">Watchlist</a>
+        <a href="/watchlist?league={{ league.id }}&amp;view=compare">Compare players</a>
+        <a href="/simulator?league={{ league.id }}&amp;kind=waiver">Waiver what-if</a>
+      </nav>
       <div class="page-heading waiver-heading">
         <div><p class="eyebrow">WEEK {{ week or '—' }} · PLAYERS</p><h1>League player market</h1></div>
         <div class="board-summary" aria-label="Player board summary">

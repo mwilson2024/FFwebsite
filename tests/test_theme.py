@@ -95,16 +95,17 @@ def test_additional_detroit_themes_are_complete_and_selectable(theme, accent, he
     assert title in script
 
 
-def test_roster_tool_tabs_keep_five_columns_and_readable_active_text():
+def test_roster_tool_tabs_consolidate_research_and_keep_readable_active_text():
     root = Path(__file__).resolve().parents[1] / 'src/weekly_projections'
     css = (root / 'web/static/rosters.css').read_text(encoding='utf-8')
     tabs = (root / 'web/templates/_roster_tabs.html').read_text(encoding='utf-8')
-    assert 'grid-template-columns:repeat(5,minmax(0,1fr));' in css
+    assert 'grid-template-columns:repeat(4,minmax(0,1fr));' in css
     assert '.roster-tools a.active :is(strong,small)' in css
     assert 'color:var(--site-on-accent) !important;' in css
-    assert tabs.count('<a ') == 5
-    assert 'Watch &amp; compare' in tabs
-    assert tabs.rfind('League leaders') > tabs.rfind('Compare')
+    assert tabs.count('<a ') == 4
+    assert 'Market &amp; research' in tabs
+    assert 'Watch &amp; compare' not in tabs
+    assert tabs.rfind('League leaders') > tabs.rfind('Trades')
 
 
 def test_league_switcher_uses_one_control_height_on_every_page():
@@ -116,7 +117,7 @@ def test_league_switcher_uses_one_control_height_on_every_page():
     assert '.header-league-picker .league-switch-button' in css
     assert 'height:44px; min-height:44px;' in css
     assert '.league-topbar .brand-mark { display:grid; width:44px; height:44px; }' in css
-    assert '/static/interface.css?v=20261014-context-widget' in assets
+    assert '/static/interface.css?v=20261027-navigation-search' in assets
     assert '<span class="sr-only">Switch league</span>' in header
 
 

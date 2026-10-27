@@ -47,6 +47,8 @@
           <input type="hidden" name="page_path" value="">
           <input type="hidden" name="page_context" value="">
           <label for="assistant-message">Your question<textarea id="assistant-message" name="message" maxlength="2000" rows="4" required placeholder="Ask about fantasy strategy or how Fantasy HQ works…"></textarea></label>
+          <label class="assistant-context-choice"><input type="checkbox" data-assistant-include-context checked> Include this page's visible text</label>
+          <details class="assistant-context-preview"><summary>Preview what page context will be sent</summary><pre data-assistant-context-preview>No page context collected yet.</pre></details>
           <div><small>Session-only chat · visible page context included when sent · advice never submits an action</small><button type="submit">Ask OpenAI <span aria-hidden="true">→</span></button></div>
         </form>
       </section>

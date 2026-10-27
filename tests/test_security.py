@@ -538,6 +538,20 @@ def test_security_headers_are_applied():
     assert response.headers["cross-origin-opener-policy"] == "same-origin"
 
 
+def test_private_pages_are_not_cached_but_versioned_assets_are_immutable():
+    client = TestClient(web.app)
+    page = client.get("/")
+    asset = client.get("/static/app.css?v=test")
+    unversioned = client.get("/static/favicon.svg")
+    worker = client.get("/service-worker.js")
+
+    assert page.headers["cache-control"] == "no-store"
+    assert asset.headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert unversioned.headers["cache-control"] == "public, max-age=3600"
+    assert worker.headers["cache-control"] == "no-cache"
+    assert asset.headers["content-encoding"] == "gzip"
+
+
 def test_access_logging_skips_health_and_static_but_records_pages(monkeypatch):
     records = []
     monkeypatch.setattr(

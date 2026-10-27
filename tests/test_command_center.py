@@ -117,6 +117,31 @@ def test_command_center_queue_loads_after_core_and_splits_trade_direction(monkey
     assert data["errors"] == []
 
 
+def test_command_center_batch_returns_core_and_queue_snapshots(monkeypatch):
+    client = _session(monkeypatch)
+    core = client.get("/api/command-center").json()
+    queues = client.get("/api/command-center/queues").json()
+
+    assert [row["league_id"] for row in core["leagues"]] == ["league"]
+    assert core["leagues"][0]["priority"] == "Needs action"
+    assert queues["leagues"][0]["pending_total"] == 3
+
+
+def test_command_center_injury_roundup_is_batched_and_read_only(monkeypatch):
+    client = _session(monkeypatch)
+    result = client.get("/api/command-center/injuries")
+    assert result.status_code == 200
+    data = result.json()
+    assert data["leagues"] == [{
+        "league_id": "league", "league_name": "Test League", "week": 3,
+        "injuries": [], "updated_at": data["leagues"][0]["updated_at"],
+        "links": {
+            "lineup": "/lineup?league=league&week=3",
+            "moves": "/moves?league=league",
+        },
+    }]
+
+
 def test_command_center_omits_player_boxscore_when_matchup_is_not_live(monkeypatch):
     client = _session(monkeypatch)
     future = web.LivePlayerView(MFLPlayer("1", "Starter", "QB", "DET"), 0.0, "starter", 3600, 20.0)
@@ -145,8 +170,10 @@ def test_command_center_client_renders_both_live_team_panels():
     assert "pts from opening" in script
     assert ".chance-change.is-up" in styles and ".chance-change.is-down" in styles
     assert "/static/command-center-live.css?v=3" in template
-    assert "/static/command-center-polish.css?v=20261018-summary-restyle" in template
-    assert "/static/command-center.js?v=20261014-overview-links" in template
+    assert "/static/command-center-polish.css?v=20261027-injury-roundup" in template
+    assert "/static/command-center.js?v=20261027-injury-roundup" in template
+    assert "Tuesday starter injury roundup" in template
+    assert "fetch('/api/command-center/injuries'" in script
     assert 'data-command-overview-filter="action"' in template
     assert 'data-command-overview-filter="pending"' in template
     assert 'data-command-overview-filter="upside"' in template
