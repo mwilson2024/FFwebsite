@@ -1397,6 +1397,9 @@ def test_player_card_returns_bounded_weekly_totals_and_trend(monkeypatch) -> Non
             if period == "YTD": return {player.id: 50.0}
             if period == "AVG": return {player.id: 12.5}
             return {player.id: weekly[int(period)]}
+        def nfl_team_kickoffs(self, **kwargs):
+            self.week_games = {"DET": {"kickoff": 1, "final": True}}
+            return {"DET": 1}
         def scoring_rules(self): return {}
 
     monkeypatch.setattr(web_app, "_client", lambda *args: CardClient())
@@ -1424,6 +1427,111 @@ def test_player_card_returns_bounded_weekly_totals_and_trend(monkeypatch) -> Non
     assert data["primary_rank"] == {
         "rank": 4.0, "position": "RB", "label": "ESPN PPR weekly consensus",
     }
+
+
+def test_player_card_excludes_upcoming_zero_and_bye_from_trend(monkeypatch) -> None:
+    web_app.sessions.clear()
+    league = MFLLeague("88884", "0001", "Schedule League")
+    current = web_app.BrowserSession("schedule-cookie", 2026, [league], "csrf")
+    web_app.sessions["schedule-session"] = current
+    player = MFLPlayer("p1", "Allen, Josh", "QB", "BUF")
+    weekly = {3: 17.0, 4: 20.5, 5: 37.5, 6: 22.3, 7: None, 8: 0.0}
+
+    class ScheduleCardClient:
+        config = MFLConfig(2026, league.id, league.franchise_id, user_cookie="cookie")
+        def __init__(self): self._players = {player.id: player}
+        def players(self): return self._players
+        def projected_scores(self, **kwargs): return {player.id: 24.0}
+        def live_scoring(self, **kwargs):
+            live_player = MFLLivePlayer(player.id, 0.0, "starter", 0)
+            team = MFLLiveFranchise("0001", 0.0, False, 1, 0, 0, (live_player,))
+            return MFLLiveScoring(8, (MFLLiveMatchup((team,)),))
+        def player_scores(self, period, **kwargs):
+            if period == "YTD": return {player.id: 188.8}
+            if period == "AVG": return {player.id: 31.5}
+            value = weekly[int(period)]
+            return {} if value is None else {player.id: value}
+        def nfl_team_kickoffs(self, **kwargs):
+            future = int(time.time()) + 3600
+            self.week_games = {"BUF": {"kickoff": future, "final": False}}
+            return {"BUF": future, **{f"T{index}": future for index in range(24)}}
+        def scoring_rules(self): return {}
+
+    monkeypatch.setattr(web_app, "_client", lambda *args: ScheduleCardClient())
+    monkeypatch.setattr(
+        web_app, "_load_reference_projection_blend",
+        lambda *args, **kwargs: ProjectionBlend(
+            {player.id: 24.0}, {player.id: 24.0}, {}, 0,
+            espn_ranks={player.id: 1.0}, espn_matched=1,
+        ),
+    )
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", "schedule-session")
+
+    response = client.get("/api/players/p1?league=88884&week=8")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["actual_points"] is None
+    assert data["weekly_points"][-2] == {"week": 7, "points": None, "state": "no-score"}
+    assert data["weekly_points"][-1] == {"week": 8, "points": None, "state": "upcoming"}
+    assert data["season_summary"]["recent_average"] == pytest.approx(26.77)
+    assert data["trend"]["delta"] == pytest.approx(11.15)
+
+
+def test_global_player_search_suggests_players_without_loading_market(monkeypatch) -> None:
+    web_app.sessions.clear()
+    league = MFLLeague("88886", "0001", "Search League")
+    current = web_app.BrowserSession("search-cookie", 2026, [league], "csrf")
+    web_app.sessions["search-session"] = current
+    players = {
+        "1": MFLPlayer("1", "Jahmyr Gibbs", "RB", "DET"),
+        "2": MFLPlayer("2", "Gibbs, Joe", "QB", "FA"),
+        "3": MFLPlayer("3", "Detroit Defense", "Def", "DET"),
+        "4": MFLPlayer("4", "Gibbs Linebacker", "LB", "MIN"),
+    }
+
+    class SearchClient:
+        config = MFLConfig(2026, league.id, league.franchise_id, user_cookie="search-cookie")
+        def __init__(self): self._players = players
+        def players(self): return self._players
+
+    monkeypatch.setattr(web_app, "_client", lambda *args: SearchClient())
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", "search-session")
+
+    response = client.get("/api/player-search?league=88886&q=gibbs")
+    assert response.status_code == 200
+    assert [row["name"] for row in response.json()["suggestions"]] == [
+        "Gibbs, Joe", "Jahmyr Gibbs",
+    ]
+    assert client.get("/api/player-search?league=88886&q=g").json() == {"suggestions": []}
+
+
+def test_player_summary_returns_identity_without_heavy_card_reports(monkeypatch) -> None:
+    web_app.sessions.clear()
+    league = MFLLeague("88887", "0001", "Fast Card League")
+    current = web_app.BrowserSession("summary-cookie", 2026, [league], "csrf")
+    current.watchlists[league.id] = {"p1"}
+    web_app.sessions["summary-session"] = current
+    player = MFLPlayer("p1", "Fast Runner", "RB", "DET", college="Alabama")
+
+    class SummaryClient:
+        config = MFLConfig(2026, league.id, league.franchise_id, user_cookie="summary-cookie")
+        def __init__(self): self._players = {player.id: player}
+        def players(self): return self._players
+        def projected_scores(self, **kwargs): raise AssertionError("summary loaded projections")
+        def player_scores(self, *args, **kwargs): raise AssertionError("summary loaded history")
+
+    monkeypatch.setattr(web_app, "_client", lambda *args: SummaryClient())
+    client = TestClient(web_app.app)
+    client.cookies.set("wp_session", "summary-session")
+
+    response = client.get("/api/player-summary/p1?league=88887&week=6")
+    assert response.status_code == 200
+    assert response.json()["name"] == "Fast Runner"
+    assert response.json()["week"] == 6
+    assert response.json()["watched"] is True
 
 
 def test_projection_tracker_summary_identifies_leaders_and_weighted_rank_signal() -> None:
@@ -2531,7 +2639,7 @@ def test_league_hq_renders_intelligence_and_tracks_session_side_bets(monkeypatch
     assert "Waiver wire intelligence" not in response.text
     assert "/static/league.css?v=20261002-lineup-what-if" in response.text
     assert "What if the initial lineup stayed unchanged?" in response.text
-    assert "/static/interface.js?v=4" in response.text
+    assert "/static/interface.js?v=20261027-player-suggestions" in response.text
     assert 'class="bracket-round bracket-round-3"' in response.text
     assert "Championship" in response.text
     assert "Projected advancement" in response.text

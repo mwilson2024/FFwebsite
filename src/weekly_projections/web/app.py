@@ -4019,6 +4019,29 @@ def _adaptive_accuracy_report(
         return ProjectionAccuracyReport((), (), (), ())
 
 
+def _available_adaptive_accuracy_report(
+    current: BrowserSession,
+    selected: MFLLeague,
+    *,
+    week: int | None,
+    players: dict[str, MFLPlayer],
+) -> ProjectionAccuracyReport:
+    """Reuse tracker history on lightweight views without rebuilding it inline."""
+    if (
+        _ranking_preference(current.ranking_preference)
+        not in {"best-projection", "best-ranker", "top-consensus"}
+        or week is None
+    ):
+        return ProjectionAccuracyReport((), (), (), ())
+    roster_scope = hashlib.sha256("|".join(sorted(players)).encode()).hexdigest()[:12]
+    label = f"projection-accuracy:{week}:all-sources:{roster_scope}"
+    key = f"{current.year}:{selected.id}:report:{label}"
+    with current.read_lock:
+        cached = current.read_cache.get(key)
+        value = cached[1] if cached and cached[0] > time.monotonic() else None
+    return value if isinstance(value, ProjectionAccuracyReport) else ProjectionAccuracyReport((), (), (), ())
+
+
 def _projection_tracker_summary(report: ProjectionAccuracyReport) -> dict:
     by_source: dict[str, list] = {}
     by_position: dict[str, dict] = {}
@@ -9051,6 +9074,88 @@ def api_touchdown_clips(request: Request, player_id: str, league: str, week: int
     return result
 
 
+@app.get("/api/player-search")
+def api_player_search(request: Request, league: str, q: str = ""):
+    """Return a small MFL-only suggestion list without loading the player market."""
+    current = _require_session(request)
+    selected = _league(current, league)
+    query = " ".join(str(q).strip().casefold().split())[:80]
+    if len(query) < 2:
+        return {"suggestions": []}
+    client = _client(current, selected)
+    try:
+        catalog = _cached_session_read(
+            current, selected.id, "players", client.players,
+            ttl=3600, stale_ttl=86400,
+        )
+    except MFLApiError as error:
+        _log_provider_error_once(
+            current, selected.id, "player_search_catalog_unavailable", error,
+        )
+        return {"suggestions": []}
+    _remember_catalog(current, client)
+    matches = []
+    for player in catalog.values():
+        if not _include_on_player_board(player):
+            continue
+        name = str(player.name or "").casefold()
+        haystack = (
+            f"{name} {str(player.position or '').casefold()} "
+            f"{str(player.team or '').casefold()}"
+        )
+        if query not in haystack:
+            continue
+        matches.append((
+            0 if name.startswith(query) else 1 if any(
+                part.startswith(query) for part in name.split()
+            ) else 2,
+            name,
+            player,
+        ))
+    matches.sort(key=lambda item: (item[0], item[1], item[2].id))
+    return {"suggestions": [{
+        "id": player.id,
+        "name": player.name,
+        "position": _board_position(player),
+        "team": player.team,
+    } for _, _, player in matches[:10]]}
+
+
+@app.get("/api/player-summary/{player_id}")
+def api_player_summary(
+    request: Request, player_id: str, league: str, week: int | None = None,
+):
+    """Return identity/actions first so the player dialog opens immediately."""
+    current = _require_session(request)
+    selected = _league(current, league)
+    client = _client(current, selected)
+    try:
+        catalog = _cached_session_read(
+            current, selected.id, "players", client.players,
+            ttl=3600, stale_ttl=86400,
+        )
+    except MFLApiError as error:
+        _log_provider_error_once(
+            current, selected.id, "player_summary_catalog_unavailable", error,
+        )
+        raise HTTPException(
+            status_code=503, detail="Player details are temporarily unavailable.",
+        ) from error
+    player = catalog.get(player_id)
+    if player is None:
+        raise HTTPException(status_code=404, detail="Player not found")
+    _remember_catalog(current, client)
+    selected_week = week if week is not None else current.selected_week
+    return {
+        "name": player.name, "position": player.position, "team": player.team,
+        "photo": player.photo_url, "jersey": player.jersey,
+        "college": player.college, "height": player.height, "weight": player.weight,
+        "draft_year": player.draft_year, "week": selected_week,
+        "source": "Player details: MyFantasyLeague · Photos: ESPN",
+        "watched": player_id in current.watchlists.get(selected.id, set()),
+    }
+
+
 @app.get("/api/players/{player_id}")
 def api_player_card(request: Request, player_id: str, league: str, week: int | None = None):
     current = _require_session(request)
@@ -9076,10 +9181,22 @@ def api_player_card(request: Request, player_id: str, league: str, week: int | N
             raise HTTPException(status_code=503, detail="The current MFL week is temporarily unavailable.") from error
     if selected_week is None or not 1 <= selected_week <= 18:
         raise HTTPException(status_code=400, detail="Choose a valid week")
+    card_cache_key = (
+        f"{current.year}:{selected.id}:player-card:{player_id}:"
+        f"{selected_week}:{_ranking_preference(current.ranking_preference)}"
+    )
+    with current.read_lock:
+        cached_card = current.read_cache.get(card_cache_key)
+        if cached_card and cached_card[0] > time.monotonic():
+            return {
+                **cached_card[1],
+                "watched": player_id in current.watchlists.get(selected.id, set()),
+            }
     projection = actual = None
     weekly_points: list[dict] = []
     season_summary = {"ytd": None, "average": None, "recent_average": None, "high": None, "games": 0}
     trend = {"direction": "neutral", "label": "Trend needs at least two scored weeks", "delta": None}
+    selected_week_game_state = "unverified"
     league_rank: dict | None = None
     primary_rank: dict | None = None
     scoring = []
@@ -9100,8 +9217,8 @@ def api_player_card(request: Request, player_id: str, league: str, week: int | N
             week=selected_week,
             mfl_scores=projections,
         )
-        accuracy = _adaptive_accuracy_report(
-            current, selected, client, week=selected_week, players=eligible, blend=blend,
+        accuracy = _available_adaptive_accuracy_report(
+            current, selected, week=selected_week, players=eligible,
         )
         primary_ranks, primary_label = _primary_projection_ranks(current, eligible, blend, accuracy)
         if player_id in primary_ranks:
@@ -9118,6 +9235,33 @@ def api_player_card(request: Request, player_id: str, league: str, week: int | N
     except MFLApiError as error:
         _log_provider_error_once(current, selected.id, "player_card_points_unavailable", error)
     try:
+        def load_selected_week_schedule():
+            kickoffs = client.nfl_team_kickoffs(week=selected_week)
+            return kickoffs, dict(getattr(client, "week_games", {}))
+
+        kickoffs, week_games = _cached_session_read(
+            current, "mfl-global", f"nfl-schedule:{selected_week}",
+            load_selected_week_schedule, ttl=_WEEKLY_STATIC_TTL,
+            stale_ttl=30 * 86400, shared=True,
+        )
+        team = str(player.team or "").strip().upper()
+        game = week_games.get(team) if team else None
+        kickoff = int(kickoffs.get(team) or 0) if team else 0
+        now = int(time.time())
+        if game is not None and kickoff > now:
+            selected_week_game_state = "upcoming"
+            actual = None
+        elif game is not None and bool(game.get("final")):
+            selected_week_game_state = "final"
+        elif game is not None and kickoff:
+            selected_week_game_state = "live"
+        elif team and len(kickoffs) >= 24:
+            selected_week_game_state = "bye"
+            actual = None
+    except (MFLApiError, AttributeError, TypeError, ValueError) as error:
+        if isinstance(error, MFLApiError):
+            _log_provider_error_once(current, selected.id, "player_card_schedule_unavailable", error)
+    try:
         _load_player_score_summaries(client, current, selected_week)
         for history_week in range(max(1, selected_week - 5), selected_week + 1):
             scores = _cached_session_read(
@@ -9127,10 +9271,19 @@ def api_player_card(request: Request, player_id: str, league: str, week: int | N
                 stale_ttl=30 * 86400,
             )
             points = scores.get(player_id)
+            state = "final" if history_week < selected_week and points is not None else "no-score"
             if history_week == selected_week and actual is not None:
                 points = actual
-            weekly_points.append({"week": history_week, "points": points})
-        scored = [float(item["points"]) for item in weekly_points if item["points"] is not None]
+            if history_week == selected_week:
+                state = selected_week_game_state
+                if state in {"upcoming", "bye"}:
+                    points = None
+            weekly_points.append({"week": history_week, "points": points, "state": state})
+        scored = [
+            float(item["points"])
+            for item in weekly_points
+            if item["points"] is not None and item["state"] not in {"live", "upcoming", "bye"}
+        ]
         recent = scored[-3:]
         season_summary = {
             "ytd": getattr(client, "player_ytd_scores", {}).get(player_id),
@@ -9193,7 +9346,7 @@ def api_player_card(request: Request, player_id: str, league: str, week: int | N
                 scoring.append({"event":value("event"), "range":value("range"), "points":value("points")})
     except MFLApiError as error:
         _log_provider_error_once(current, selected.id, "player_card_rules_unavailable", error)
-    return {
+    payload = {
         "name": player.name, "position": player.position, "team": player.team,
         "photo": player.photo_url, "jersey": player.jersey, "college": player.college,
         "height": player.height, "weight": player.weight, "draft_year": player.draft_year,
@@ -9206,6 +9359,9 @@ def api_player_card(request: Request, player_id: str, league: str, week: int | N
         "primary_rank": primary_rank, "league_rank": league_rank,
         "watched": player_id in current.watchlists.get(selected.id, set()),
     }
+    with current.read_lock:
+        current.read_cache[card_cache_key] = (time.monotonic() + 30, payload)
+    return payload
 
 
 class PushKeysRequest(BaseModel):

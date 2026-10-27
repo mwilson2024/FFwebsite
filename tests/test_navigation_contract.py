@@ -16,6 +16,22 @@ def test_navigation_groups_decision_tools_by_user_job():
     assert "Watch &amp; compare" not in players
     assert 'action="/moves" role="search"' in header
     assert 'placeholder="Search any player' in header
+    assert 'list="global-player-options"' in header
+
+
+def test_global_search_loads_bounded_server_suggestions():
+    script = (ROOT / "static/interface.js").read_text(encoding="utf-8")
+    assert "/api/player-search?" in script
+    assert "window.setTimeout(loadPlayerSuggestions, 160)" in script
+    assert "payload.suggestions" in script
+
+
+def test_player_card_renders_identity_before_heavy_performance_details():
+    script = (ROOT / "static/app.js").read_text(encoding="utf-8")
+    assert "/api/player-summary/" in script
+    assert script.index("/api/player-summary/") < script.index("/api/players/")
+    assert "Loading weekly performance and league ranks" in script
+    assert "AbortSignal.timeout(25000)" in script
 
 
 def test_assistant_exposes_optional_page_context_preview():

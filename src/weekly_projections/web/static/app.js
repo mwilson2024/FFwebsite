@@ -334,15 +334,50 @@
     card.querySelector('#card-team').textContent = ''; card.querySelector('#card-source').textContent = ''; photo.hidden = true;
     if (watchButton) { watchButton.hidden = true; watchButton.disabled = false; watchButton.dataset.player = ''; watchButton.dataset.league = ''; }
     if (compareLink) compareLink.hidden = true;
+    const renderIdentity = (player) => {
+      if (requestId !== cardRequest) return;
+      name.textContent = player.name;
+      card.querySelector('#card-team').textContent = `${player.team} · ${player.position}${player.jersey ? ' · #' + player.jersey : ''}`;
+      if (player.photo) { photo.onerror = () => { photo.hidden = true; }; photo.src = player.photo; photo.hidden = false; }
+      details.replaceChildren();
+      [['College',player.college],['Height',player.height ? player.height + ' in' : ''],['Weight',player.weight ? player.weight + ' lb' : ''],['Draft year',player.draft_year]].forEach(([label,value]) => {
+        if (!value) return;
+        const dt = document.createElement('dt'); const dd = document.createElement('dd'); dt.textContent = label; dd.textContent = value; details.append(dt,dd);
+      });
+      card.querySelector('#card-source').textContent = player.source || 'Player details: MyFantasyLeague';
+      if (watchButton) {
+        watchButton.dataset.player = button.dataset.playerCard;
+        watchButton.dataset.league = button.dataset.league;
+        watchButton.dataset.watched = player.watched ? 'true' : 'false';
+        watchButton.textContent = player.watched ? 'Remove from watchlist' : 'Add to watchlist';
+        watchButton.hidden = false;
+      }
+      if (compareLink) {
+        compareLink.href = `/watchlist?${new URLSearchParams({league:button.dataset.league,view:"compare",p1:button.dataset.playerCard})}`;
+        compareLink.hidden = false;
+      }
+    };
     card.showModal();
+    let summaryLoaded = false;
+    const query = new URLSearchParams({league:button.dataset.league});
+    if (button.dataset.week) query.set('week',button.dataset.week);
     try {
-      const query = new URLSearchParams({league:button.dataset.league});
-      if (button.dataset.week) query.set('week',button.dataset.week);
-      const response = await fetch(`/api/players/${encodeURIComponent(button.dataset.playerCard)}?${query}`);
+      const summaryResponse = await fetch(`/api/player-summary/${encodeURIComponent(button.dataset.playerCard)}?${query}`, {signal:AbortSignal.timeout(8000)});
+      if (!summaryResponse.ok) throw new Error();
+      const summary = await summaryResponse.json();
+      if (requestId !== cardRequest) return;
+      renderIdentity(summary);
+      summaryLoaded = true;
+      status.textContent = 'Loading weekly performance and league ranks…';
+    } catch (_) {
+      if (requestId === cardRequest) status.textContent = 'Loading player details…';
+    }
+    try {
+      const response = await fetch(`/api/players/${encodeURIComponent(button.dataset.playerCard)}?${query}`, {signal:AbortSignal.timeout(25000)});
       if (!response.ok) throw new Error('Player details unavailable');
       const player = await response.json();
       if (requestId !== cardRequest) return;
-      name.textContent = player.name; status.textContent = '';
+      renderIdentity(player); status.textContent = '';
       card.querySelector('#card-points').hidden = false;
       card.querySelector('#card-week').textContent = `Week ${player.week}`;
       card.querySelector('#card-projection').textContent = player.projection == null ? '—' : Number(player.projection).toFixed(1);
@@ -364,8 +399,10 @@
         const row = document.createElement('li');
         const weekLabel = document.createElement('span'); weekLabel.textContent = `W${item.week}`;
         const meter = document.createElement('meter'); meter.min = 0; meter.max = chartMaximum; meter.value = item.points == null ? 0 : Number(item.points);
-        meter.setAttribute('aria-label', item.points == null ? `Week ${item.week}: no score` : `Week ${item.week}: ${Number(item.points).toFixed(2)} points`);
-        const points = document.createElement('strong'); points.textContent = item.points == null ? '—' : Number(item.points).toFixed(1);
+        const stateLabel = item.state === 'bye' ? 'Bye' : item.state === 'upcoming' ? 'Not played' : item.state === 'live' ? 'Live' : '';
+        meter.setAttribute('aria-label', item.points == null ? `Week ${item.week}: ${stateLabel || 'no score'}` : `Week ${item.week}: ${Number(item.points).toFixed(2)} points${stateLabel ? `, ${stateLabel}` : ''}`);
+        const points = document.createElement('strong');
+        points.textContent = item.points == null ? (stateLabel || '—') : `${Number(item.points).toFixed(1)}${stateLabel ? ` · ${stateLabel}` : ''}`;
         row.append(weekLabel, meter, points); weeklyList.append(row);
       });
       if (!player.weekly_points?.length) {
@@ -388,25 +425,11 @@
         card.querySelector('#card-scoring-rules').append(item);
       });
       if (!player.scoring_rules?.length) card.querySelector('#card-scoring-league').textContent += ' · Rules unavailable; displayed points still come from MFL.';
-      card.querySelector('#card-team').textContent = `${player.team} · ${player.position}${player.jersey ? ' · #' + player.jersey : ''}`;
-      if (player.photo) { photo.onerror = () => { photo.hidden = true; }; photo.src = player.photo; photo.hidden = false; }
-      [['College',player.college],['Height',player.height ? player.height + ' in' : ''],['Weight',player.weight ? player.weight + ' lb' : ''],['Draft year',player.draft_year]].forEach(([label,value]) => {
-        if (!value) return;
-        const dt = document.createElement('dt'); const dd = document.createElement('dd'); dt.textContent = label; dd.textContent = value; details.append(dt,dd);
-      });
-      card.querySelector('#card-source').textContent = player.source;
-      if (watchButton) {
-        watchButton.dataset.player = button.dataset.playerCard;
-        watchButton.dataset.league = button.dataset.league;
-        watchButton.dataset.watched = player.watched ? 'true' : 'false';
-        watchButton.textContent = player.watched ? 'Remove from watchlist' : 'Add to watchlist';
-        watchButton.hidden = false;
-      }
-      if (compareLink) {
-        compareLink.href = `/watchlist?${new URLSearchParams({league:button.dataset.league,view:"compare",p1:button.dataset.playerCard})}`;
-        compareLink.hidden = false;
-      }
-    } catch { if (requestId === cardRequest) status.textContent = 'Player details are unavailable. Close this card and try again.'; }
+    } catch (error) {
+      if (requestId === cardRequest) status.textContent = summaryLoaded
+        ? (error.name === 'TimeoutError' ? 'Weekly performance is taking too long. Identity and player actions are still available.' : 'Weekly performance is temporarily unavailable. Identity and player actions are still available.')
+        : 'Player details are unavailable. Close this card and try again.';
+    }
   }));
   watchButton?.addEventListener('click', async () => {
     if (!watchButton.dataset.player || !watchButton.dataset.league) return;

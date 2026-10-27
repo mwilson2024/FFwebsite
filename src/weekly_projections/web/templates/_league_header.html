@@ -8,7 +8,8 @@
   </form>
   <form class="header-player-search" method="get" action="/moves" role="search">
     <input type="hidden" name="league" value="{{ league.id }}">
-    <label for="global-player-search"><span class="sr-only">Search every player in this league</span><input id="global-player-search" name="q" type="search" maxlength="80" autocomplete="off" placeholder="Search any player…"></label>
+    <label for="global-player-search"><span class="sr-only">Search every player in this league</span><input id="global-player-search" name="q" type="search" list="global-player-options" maxlength="80" autocomplete="off" placeholder="Search any player…"></label>
+    <datalist id="global-player-options" data-player-search-options></datalist>
     <button type="submit" aria-label="Search players">Search</button>
   </form>
   <a class="all-leagues-link" href="/command-center?league={{ league.id }}">All leagues</a>
