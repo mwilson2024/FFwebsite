@@ -130,6 +130,21 @@ def test_mobile_navigation_fits_the_five_primary_tabs_on_one_row():
     assert 'grid-template-columns:repeat(5,minmax(0,1fr));' in mobile
 
 
+def test_mobile_lineup_and_scoring_use_compact_player_rows_only_on_phones():
+    root = Path(__file__).resolve().parents[1] / 'src/weekly_projections/web'
+    css = (root / 'static/fantasy.css').read_text(encoding='utf-8')
+    mobile = css.rsplit('@media(max-width:700px) {', 1)[1].split('@media(', 1)[0]
+    lineup = (root / 'templates/lineup.html').read_text(encoding='utf-8')
+    scores = (root / 'templates/scores.html').read_text(encoding='utf-8')
+    assert '.lineup-editor-page .editor-player' in mobile
+    assert 'grid-template-columns:24px minmax(0,1fr) 58px 44px;' in mobile
+    assert '.lineup-editor-page .editor-player-projection>small { display:none;' in mobile
+    assert '.matchup-player-row { grid-template-columns:minmax(0,1fr) 24px minmax(0,1fr);' in mobile
+    assert '.matchup-stat-row .player-stat-line { display:none;' in mobile
+    assert '/static/fantasy.css?v=20261102-mobile-density' in lineup
+    assert '/static/fantasy.css?v=20261102-mobile-density' in scores
+
+
 def test_activity_wall_only_scrolls_after_reaching_waiver_height():
     css = (Path(__file__).resolve().parents[1] / 'src/weekly_projections/web/static/league.css').read_text(
         encoding='utf-8'
