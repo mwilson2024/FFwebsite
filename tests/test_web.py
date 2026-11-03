@@ -2793,6 +2793,50 @@ def test_local_playoff_projection_builds_full_three_round_bracket(monkeypatch) -
     assert cached_hq is not hq
 
 
+def test_league_hq_refreshes_results_when_mfl_week_advances(monkeypatch) -> None:
+    league = MFLLeague("rollover", "0001", "Rollover League")
+    current = web_app.BrowserSession("rollover-cookie", 2026, [league], "csrf")
+    teams = {
+        "0001": MFLFranchise("0001", "Alpha"),
+        "0002": MFLFranchise("0002", "Beta"),
+    }
+    state = {"week": 8, "standings_reads": 0, "schedule_reads": 0}
+
+    class RolloverClient:
+        config = MFLConfig(2026, league.id, league.franchise_id, user_cookie="cookie")
+        _players = {}
+        def league_details(self):
+            return MFLLeagueDetails((), teams, last_regular_season_week=14)
+        def league_standings(self):
+            state["standings_reads"] += 1
+            wins = "5" if state["week"] == 9 else "4"
+            losses = "3"
+            return [
+                {"id": "0001", "h2hw": wins, "h2hl": losses, "h2ht": "0", "pf": "900", "pa": "800"},
+                {"id": "0002", "h2hw": losses, "h2hl": wins, "h2ht": "0", "pf": "800", "pa": "900"},
+            ]
+        def fantasy_schedule(self):
+            state["schedule_reads"] += 1
+            games = [MFLFantasyGame(7, ("0001", "0002"), (101.0, 90.0))]
+            if state["week"] == 9:
+                games.append(MFLFantasyGame(8, ("0001", "0002"), (115.0, 99.0)))
+            return tuple(games)
+
+    client = RolloverClient()
+    monkeypatch.setattr(web_app, "_client", lambda *args: client)
+    monkeypatch.setattr(web_app, "_cached_current_week", lambda *args: state["week"])
+
+    week_eight_hq = web_app._league_hq(current, league)
+    state["week"] = 9
+    week_nine_hq = web_app._league_hq(current, league)
+
+    assert week_eight_hq["recap"].week == 7
+    assert week_nine_hq["recap"].week == 8
+    assert week_nine_hq["standings"][0]["h2hw"] == "5"
+    assert state["standings_reads"] == 2
+    assert state["schedule_reads"] == 2
+
+
 def test_league_activity_view_skips_unrelated_slow_reports(monkeypatch) -> None:
     league = MFLLeague("activity-fast", "0001", "Activity")
     current = web_app.BrowserSession("activity-fast-cookie", 2026, [league], "csrf")

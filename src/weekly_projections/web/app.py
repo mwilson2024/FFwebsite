@@ -1095,7 +1095,7 @@ def _persistent_report_identity(label: str) -> tuple[str, str] | None:
     }:
         return label, ""
     for prefix in (
-        "nfl-schedule:", "projections:", "player-scores:",
+        "standings:", "schedule:", "nfl-schedule:", "projections:", "player-scores:",
         "reference-projections:", "league-intelligence:", "matchup-history:",
     ):
         if label.startswith(prefix):
@@ -2497,6 +2497,18 @@ def _cache_status_metadata(raw_label: str) -> dict[str, str]:
             "detail": "Public player identities, positions and NFL teams shared across connected leagues.",
             "cadence": "Checked daily",
         }
+    if raw_label == "standings" or raw_label.startswith("standings:"):
+        return {
+            "label": "League standings",
+            "detail": "Official MFL records and points through the latest completed scoring week.",
+            "cadence": "Refreshed immediately when MFL advances the scoring week",
+        }
+    if raw_label == "schedule" or raw_label.startswith("schedule:"):
+        return {
+            "label": "League schedule and results",
+            "detail": "Official MFL matchups and finalized team scores used by recaps and rankings.",
+            "cadence": "Refreshed immediately when MFL advances the scoring week",
+        }
     if raw_label.startswith("nfl-schedule:"):
         week = raw_label.rsplit(":", 1)[-1]
         return {
@@ -3025,11 +3037,6 @@ def _league_hq(
     channel: str = "board",
 ) -> dict:
     """Build League HQ data without exposing the mutable cached container."""
-    cache_key = f"{current.year}:{selected.id}:league-hq:{view}:{channel}"
-    now = time.monotonic()
-    cached = current.read_cache.get(cache_key)
-    if cached and cached[0] > now:
-        return dict(cached[1])
     client = _client(current, selected)
     errors: dict[str, str] = {}
     details = _cached_session_read(
@@ -3052,17 +3059,27 @@ def _league_hq(
     current_week = read(
         "week", lambda: _cached_current_week(current, client), None,
     ) or details.start_week
+    cache_key = (
+        f"{current.year}:{selected.id}:league-hq:week-{current_week}:"
+        f"{view}:{channel}"
+    )
+    now = time.monotonic()
+    cached = current.read_cache.get(cache_key)
+    if cached and cached[0] > now:
+        return dict(cached[1])
     daily_ttl = _seconds_until_daily_refresh()
     needs_intelligence = view in {"overview", "community"}
+    standings_label = f"standings:week-{current_week}"
+    schedule_label = f"schedule:week-{current_week}"
     standings = read(
         "standings", lambda: _cached_session_read(
-            current, selected.id, "standings", client.league_standings,
+            current, selected.id, standings_label, client.league_standings,
             ttl=daily_ttl, stale_ttl=_LEAGUE_STATIC_STALE_TTL, shared=True,
         ), [],
     ) if needs_intelligence else []
     schedule = read(
         "schedule", lambda: _cached_session_read(
-            current, selected.id, "schedule", client.fantasy_schedule,
+            current, selected.id, schedule_label, client.fantasy_schedule,
             ttl=daily_ttl, stale_ttl=_LEAGUE_STATIC_STALE_TTL, shared=True,
         ), (),
     ) if needs_intelligence else ()
