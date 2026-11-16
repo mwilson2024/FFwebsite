@@ -3055,6 +3055,59 @@ def test_live_scores_page_renders_mfl_matchup(monkeypatch) -> None:
     returned = client.get("/scores?league=11111")
     assert "Week 1 Scores" in returned.text
 
+    web_app.shared_read_cache.clear()
+    def fake_kickoffs(mfl_client, *, week):
+        mfl_client.week_games = {
+            "NEP": {"opponent": "vs BUF", "kickoff": 1_800_000_000},
+            "SEA": {"opponent": "@ LAR", "kickoff": 1_800_010_800},
+        }
+        return {"NEP": 1_800_000_000, "SEA": 1_800_010_800}
+
+    monkeypatch.setattr(web_app.MFLClient, "nfl_team_kickoffs", fake_kickoffs)
+    timeline = client.get("/scores?league=11111&week=1&view=timeline")
+    assert timeline.status_code == 200
+    assert "Timeline experiment" in timeline.text
+    assert "Starter game timeline" in timeline.text
+    assert "Live Player" in timeline.text
+    assert "Opponent Player" in timeline.text
+    assert "SCORING UPDATES" in timeline.text
+    assert 'data-timeline-scoring-player' in timeline.text
+
+
+def test_experimental_scoring_timeline_places_starters_and_tracks_game_progress() -> None:
+    first = 1_800_000_000
+    own_live = web_app.LivePlayerView(
+        MFLPlayer("p1", "One O'Clock", "WR", "NEP"), 8.5, "starter", 1800, 14.0,
+    )
+    own_late = web_app.LivePlayerView(
+        MFLPlayer("p2", "Late Player", "RB", "SEA"), 0.0, "starter", 3600, 11.0,
+    )
+    opponent_final = web_app.LivePlayerView(
+        MFLPlayer("p3", "Final Player", "QB", "BUF"), 24.0, "starter", 0, 21.0,
+    )
+    matchup = web_app.HeadToHeadView(teams=(
+        web_app.LiveTeamView("0001", "My Team", 8.5, False, 1, 1, (own_live, own_late)),
+        web_app.LiveTeamView("0002", "Other Team", 24.0, True, 0, 0, (opponent_final,)),
+    ))
+
+    timeline = web_app._experimental_scoring_timeline(
+        matchup,
+        {"NEP": first, "BUF": first, "SEA": first + 3 * 3600},
+        {
+            "NEP": {"opponent": "vs BUF"},
+            "BUF": {"opponent": "@ NEP"},
+            "SEA": {"opponent": "vs LAR"},
+        },
+    )
+
+    assert timeline is not None
+    assert timeline["scheduled_players"] == 3
+    assert timeline["starter_count"] == 3
+    assert len(timeline["ticks"]) == 2
+    assert timeline["teams"][0]["groups"][0]["players"][0]["progress"] == 50.0
+    assert timeline["teams"][1]["groups"][0]["players"][0]["progress"] == 100.0
+    assert timeline["teams"][0]["groups"][1]["players"][0]["opponent"] == "vs LAR"
+
 
 def test_pregame_injury_scan_windows_are_60_30_and_5_minutes_only():
     now = 1_000_000

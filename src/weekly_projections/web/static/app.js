@@ -142,6 +142,67 @@
     saveTrackerState(); renderStatTracker();
   };
   renderStatTracker();
+  document.querySelectorAll('[data-timeline-scoring-player]').forEach((panel) => {
+    let loading = false;
+    let loadedAt = 0;
+    const statLines = panel.querySelector('[data-timeline-stats]');
+    const renderLines = (data) => {
+      if (!statLines) return;
+      statLines.replaceChildren();
+      const lines = Array.isArray(data.stat_lines) ? data.stat_lines : [];
+      if (!lines.length) {
+        const empty = document.createElement('span');
+        empty.textContent = data.state === 'Upcoming'
+          ? 'Stats will appear after kickoff.'
+          : 'Detailed stats unavailable; official MFL points are shown.';
+        statLines.append(empty);
+      } else {
+        lines.forEach(line => {
+          const row = document.createElement('span'); row.textContent = line; statLines.append(row);
+        });
+      }
+      const source = document.createElement('b');
+      source.textContent = data.state === 'Final'
+        ? `Final MFL: ${Number(data.official_points).toFixed(2)} points`
+        : data.stat_points !== null
+          ? `Live stat line: ${Number(data.stat_points).toFixed(2)} points`
+          : `Official MFL: ${Number(data.official_points).toFixed(2)} points`;
+      statLines.append(source);
+    };
+    const loadStats = async () => {
+      if (loading || Date.now() - loadedAt < 60000) return;
+      loading = true;
+      if (statLines) statLines.textContent = 'Loading stat line…';
+      try {
+        const query = new URLSearchParams({league:panel.dataset.league, week:panel.dataset.week, franchise:panel.dataset.franchise});
+        const response = await queueStatRead(() => fetch(`/api/scoring/${encodeURIComponent(panel.dataset.scoringPlayer)}?${query}`, {signal:AbortSignal.timeout(25000)}));
+        const data = await response.json();
+        if (!response.ok) throw new Error(response.status === 409 ? data.detail : 'Scoring details are unavailable.');
+        updateStatTracker(panel, data);
+        renderLines(data);
+        loadedAt = Date.now();
+      } catch (error) {
+        if (statLines) statLines.textContent = error.name === 'TimeoutError' ? 'Stats took too long. Tap to retry.' : error.message;
+      } finally { loading = false; }
+    };
+    panel.addEventListener('pointerenter', () => loadStats(), {passive:true});
+    panel.addEventListener('focus', () => loadStats());
+    panel.addEventListener('click', () => {
+      const expanded = !panel.classList.contains('is-expanded');
+      document.querySelectorAll('[data-timeline-scoring-player].is-expanded').forEach(item => {
+        if (item !== panel) { item.classList.remove('is-expanded'); item.setAttribute('aria-expanded', 'false'); }
+      });
+      panel.classList.toggle('is-expanded', expanded);
+      panel.setAttribute('aria-expanded', String(expanded));
+      if (expanded) loadStats();
+    });
+    panel.addEventListener('keydown', event => {
+      if (event.key === 'Escape') {
+        panel.classList.remove('is-expanded'); panel.setAttribute('aria-expanded', 'false'); panel.blur();
+      }
+    });
+    if (panel.dataset.gameState !== 'upcoming') loadStats();
+  });
   pointsCard?.addEventListener('click', event => {
     if (event.target === pointsCard) {
       const rect = pointsCard.getBoundingClientRect();

@@ -6,17 +6,17 @@
   <title>{{ league.name }} · Week {{ week or '—' }} Scores</title>
   <link rel="stylesheet" href="/static/app.css?v=20260910-modern">
   <link rel="stylesheet" href="/static/workspace.css?v=2">
-  <link rel="stylesheet" href="/static/fantasy.css?v=20261102-mobile-density">
+  <link rel="stylesheet" href="/static/fantasy.css?v=20261116-experimental-timeline">
   <link rel="stylesheet" href="/static/lions.css?v=1">
   <meta name="csrf-token" content="{{ session.csrf_token }}">
-  <script src="/static/diagnostics.js" defer></script><script src="/static/app.js?v=20261027-progressive-player-card" defer></script>
+  <script src="/static/diagnostics.js" defer></script><script src="/static/app.js?v=20261116-experimental-timeline" defer></script>
   {% include '_theme_assets.html' %}
 </head>
 <body class="gameday-page" data-live-refresh="{{ refresh_seconds }}" data-next-kickoff="{{ next_kickoff or '' }}" data-live-window="/api/live-window?league={{ league.id }}&week={{ week or 1 }}">
   {% set active_tool = 'scores' %}{% include '_league_header.html' %}
   <main class="gameday-shell" id="main-content">
     <div class="gameday-toolbar">
-      <div><p class="eyebrow">GAME DAY</p><h1>{{ 'League scoreboard' if score_view == 'all' else 'Matchup' }}</h1><nav class="score-view-switch" aria-label="Score view"><a class="{{ 'active' if score_view == 'matchup' else '' }}" href="/scores?league={{ league.id }}&week={{ week }}">Matchup</a><a class="{{ 'active' if score_view == 'all' else '' }}" href="/scores?league={{ league.id }}&week={{ week }}&view=all">League scores</a><a href="/scores?league={{ league.id }}&view=multi">Multi-league</a></nav></div>
+      <div><p class="eyebrow">GAME DAY</p><h1>{{ 'League scoreboard' if score_view == 'all' else 'Timeline experiment' if score_view == 'timeline' else 'Matchup' }}</h1><nav class="score-view-switch" aria-label="Score view"><a class="{{ 'active' if score_view == 'matchup' else '' }}" href="/scores?league={{ league.id }}&week={{ week }}{% if viewed_matchup is not none %}&matchup={{ viewed_matchup }}{% endif %}">Matchup</a><a class="{{ 'active' if score_view == 'timeline' else '' }}" href="/scores?league={{ league.id }}&week={{ week }}&view=timeline{% if viewed_matchup is not none %}&matchup={{ viewed_matchup }}{% endif %}">Timeline <small>Experimental</small></a><a class="{{ 'active' if score_view == 'all' else '' }}" href="/scores?league={{ league.id }}&week={{ week }}&view=all">League scores</a><a href="/scores?league={{ league.id }}&view=multi">Multi-league</a></nav></div>
       <form class="week-picker score-filters" method="get" action="/scores">
         <input type="hidden" name="league" value="{{ league.id }}">
         <input type="hidden" name="view" value="{{ score_view }}">
@@ -58,6 +58,15 @@
         </article>
         {% endfor %}
       </div>
+      {% if score_view == 'timeline' %}
+      {% if experimental_timeline %}{% include '_experimental_scoring_timeline.html' %}{% endif %}
+      <section class="score-timeline live-stat-tracker" data-stat-tracker data-tracker-key="{{ league.id }}:{{ week }}:{% for team in head_to_head.teams %}{{ team.franchise_id }}{% if not loop.last %}-{% endif %}{% endfor %}" aria-labelledby="stat-tracker-title">
+        <div class="score-timeline-heading"><div><p class="eyebrow">SCORING UPDATES</p><h2 id="stat-tracker-title">Live point tracker</h2></div><span><b id="stat-tracker-count">0</b> events this tab</span></div>
+        <div id="stat-discrepancy-alerts" class="stat-discrepancy-alerts" aria-live="polite"></div>
+        <ol class="score-event-list" id="stat-score-event-list"><li class="empty">Waiting for the first live stat-line update.</li></ol>
+        <p class="timeline-disclosure">Scoring events stay in this feed instead of crowding the kickoff timeline. Live player totals use the supported stat line; final totals switch to authoritative MFL scoring.</p>
+      </section>
+      {% else %}
       <div class="matchup-section-heading"><h2>Starters</h2><div>{% if week > 1 %}<a href="/scores?league={{ league.id }}&week={{ week - 1 }}" aria-label="Previous week">‹</a>{% endif %}<span>Week {{ week }}</span>{% if week < 18 %}<a href="/scores?league={{ league.id }}&week={{ week + 1 }}" aria-label="Next week">›</a>{% endif %}</div></div>
       <div class="paired-boxscore">{% set paired_rows = head_to_head.rows() %}{% include '_matchup_rows.html' %}</div>
       {% if not head_to_head.rows() %}<p class="empty">MFL has not published starter scoring for this matchup yet.</p>{% endif %}
@@ -95,6 +104,7 @@
         <ol class="score-event-list" id="stat-score-event-list"><li class="empty">Waiting for the first live stat-line update.</li></ol>
         <p class="timeline-disclosure">During a live game, tracker points come from ESPN’s stat line scored with the supported parts of this league’s MFL rules. When the game becomes final, the tracker switches to MFL’s authoritative total and calls out any difference. Special, tiered, or unsupported rules can cause a discrepancy. The chart remains the app’s projection-based estimate, not an official MFL probability.</p>
       </section>{% endif %}
+      {% endif %}
       <details class="forecast-method"><summary>About the win estimate</summary><p>A rough, uncalibrated estimate from current MFL points, league-scored projections and game time remaining. It assumes independent player outcomes with a 65% projection-based spread. Missing starters or projections can make it unavailable; it is not MFL’s official probability.</p></details>
       <footer class="scoring-attribution">Scores and projections use this league’s MFL scoring rules.<span id="refresh-status">{% if refresh_seconds %}Live · updates in <b id="refresh-countdown">{{ refresh_seconds }}</b>s{% elif next_kickoff %}Auto-updates paused until the next NFL kickoff.{% else %}Auto-updates paused · no NFL game confirmed live.{% endif %}</span><a href="/scores?league={{ league.id }}&week={{ week }}{% if viewed_matchup is not none and viewed_matchup is defined %}&matchup={{ viewed_matchup }}{% endif %}">Refresh now</a></footer>
     </section>

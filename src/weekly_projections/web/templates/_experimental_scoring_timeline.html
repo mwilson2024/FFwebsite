@@ -1,0 +1,47 @@
+<section class="experimental-score-timeline" aria-labelledby="experimental-timeline-title">
+  <header class="experimental-timeline-heading">
+    <div><p class="eyebrow">EXPERIMENTAL VIEW</p><h2 id="experimental-timeline-title">Starter game timeline</h2></div>
+    <p>{{ experimental_timeline.scheduled_players }} of {{ experimental_timeline.starter_count }} starters placed by actual NFL kickoff</p>
+  </header>
+  {% if experimental_timeline.teams %}
+  <p class="experimental-timeline-help">Each fantasy team has its own lane. The shared center rail is NFL game time. A player ring and bar fill from kickoff to final; hover, focus, or tap a player for the live stat line.</p>
+  <div class="starter-timeline-scroll" tabindex="0" role="region" aria-label="Scrollable starter kickoff timeline">
+    <div class="starter-timeline-canvas">
+      {% for team_row in experimental_timeline.teams %}
+      <section class="starter-timeline-lane {{ team_row.lane }}" aria-label="{{ team_row.team.name }} starters">
+        <div class="timeline-team-label"><strong>{{ team_row.team.name }}</strong><span>{{ '%.2f'|format(team_row.team.score) }} points</span></div>
+        {% for group in team_row.groups %}
+        <div class="kickoff-player-group {{ group.edge }}" style="--timeline-x:{{ group.left }}%">
+          <span class="kickoff-group-time">{{ group.label }}</span>
+          <div class="kickoff-player-stack">
+            {% for entry in group.players %}{% set item = entry.item %}{% set player = item.player %}
+            <button type="button" class="timeline-player {{ item.game_state|lower }}" style="--game-progress:{{ entry.progress }}%" data-timeline-scoring-player data-player-name="{{ player.name }}" data-team-name="{{ team_row.team.name }}" data-scoring-player="{{ player.id }}" data-game-state="{{ item.game_state|lower }}" data-league="{{ league.id }}" data-week="{{ week }}" data-franchise="{{ team_row.team.franchise_id }}" data-official-points="{{ item.score }}" aria-expanded="false" aria-label="{{ player.name }}, {{ item.score|round(2) }} points, {{ item.game_state }}. Show stats.">
+              <span class="timeline-player-face" aria-hidden="true"><span>{{ player.position or 'NFL' }}</span>{% if player.photo_url %}<img src="{{ player.photo_url }}" alt="" loading="lazy" width="58" height="58" referrerpolicy="no-referrer">{% endif %}</span>
+              <span class="timeline-player-name">{{ player.name }}</span>
+              <strong>{{ '%.2f'|format(item.score) }}</strong>
+              <span class="timeline-player-progress" aria-hidden="true"><i></i></span>
+              <span class="timeline-player-popover" role="status">
+                <b>{{ player.name }}</b><small>{{ player.position }} · {{ player.team }}{% if entry.opponent %} · {{ entry.opponent }}{% endif %}</small>
+                <span>{{ entry.kickoff_label }} · {{ item.game_state }} · {{ '%.2f'|format(item.score) }} pts{% if item.projection is not none %} · {{ '%.1f'|format(item.projection) }} proj{% endif %}</span>
+                <span class="timeline-stat-lines" data-timeline-stats>Hover or tap to load the stat line.</span>
+              </span>
+            </button>
+            {% endfor %}
+          </div>
+        </div>
+        {% endfor %}
+        {% if team_row.unscheduled %}<div class="timeline-unscheduled"><b>Not placed</b>{% for entry in team_row.unscheduled %}<span>{{ entry.item.player.name }}</span>{% endfor %}</div>{% endif %}
+      </section>
+      {% endfor %}
+      <div class="kickoff-time-rail" aria-label="NFL kickoff times">
+        <span class="timeline-rail-line"></span>
+        {% for tick in experimental_timeline.ticks %}<time style="--timeline-x:{{ tick.left }}%"><i></i><span>{{ tick.label }}</span></time>{% endfor %}
+        <span class="timeline-boundary start"><b>START</b>{{ experimental_timeline.start_label }}</span>
+        <span class="timeline-boundary end"><b>EXPECTED END</b>{{ experimental_timeline.end_label }}</span>
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <p class="empty experimental-timeline-empty">MFL’s NFL kickoff schedule is unavailable, so the starter timeline cannot be placed accurately. The official matchup score remains above.</p>
+  {% endif %}
+</section>

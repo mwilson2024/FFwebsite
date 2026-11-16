@@ -504,6 +504,92 @@ class HeadToHeadView:
         return "Scheduled"
 
 
+def _experimental_scoring_timeline(
+    head_to_head: HeadToHeadView | None,
+    team_kickoffs: dict[str, int],
+    week_games: dict[str, dict] | None = None,
+) -> dict | None:
+    """Place saved starters on one shared, kickoff-based matchup timeline."""
+    if head_to_head is None or len(head_to_head.teams) != 2:
+        return None
+    games = week_games or {}
+    starters = [item for team in head_to_head.teams for item in team.starters]
+    scheduled = [
+        int(team_kickoffs.get(item.player.team.upper()) or 0)
+        for item in starters
+        if item.player.team
+    ]
+    scheduled = [kickoff for kickoff in scheduled if kickoff > 0]
+    if not scheduled:
+        return {
+            "teams": (), "ticks": (), "start_label": "Kickoff schedule unavailable",
+            "end_label": "", "scheduled_players": 0, "starter_count": len(starters),
+        }
+
+    first_kickoff = min(scheduled)
+    final_whistle = max(scheduled) + 4 * 3600
+    duration = max(1, final_whistle - first_kickoff)
+    distinct_kickoffs = sorted(set(scheduled))
+
+    def stamp(value: int) -> str:
+        local = datetime.fromtimestamp(value, _APP_TIME_ZONE)
+        return f"{local.strftime('%a')} {local.strftime('%I:%M %p').lstrip('0')}"
+
+    ticks = tuple({
+        "timestamp": kickoff,
+        "left": round((kickoff - first_kickoff) / duration * 100, 3),
+        "label": stamp(kickoff),
+    } for kickoff in distinct_kickoffs)
+    team_rows = []
+    scheduled_players = 0
+    for team_index, team in enumerate(head_to_head.teams):
+        grouped: dict[int, list[dict]] = {}
+        unscheduled: list[dict] = []
+        for item in team.starters:
+            nfl_team = item.player.team.upper()
+            kickoff = int(team_kickoffs.get(nfl_team) or 0)
+            game = games.get(nfl_team, {}) if isinstance(games.get(nfl_team, {}), dict) else {}
+            progress = 100.0 if item.game_state == "Final" else (
+                max(0.0, min(100.0, (1 - item.game_seconds_remaining / 3600) * 100))
+                if item.game_state == "Live" else 0.0
+            )
+            player_row = {
+                "item": item,
+                "progress": round(progress, 1),
+                "opponent": str(game.get("opponent") or "").strip(),
+                "kickoff_label": stamp(kickoff) if kickoff else "Kickoff unavailable",
+            }
+            if kickoff:
+                grouped.setdefault(kickoff, []).append(player_row)
+                scheduled_players += 1
+            else:
+                unscheduled.append(player_row)
+        groups = []
+        for kickoff, players in sorted(grouped.items()):
+            left = round((kickoff - first_kickoff) / duration * 100, 3)
+            groups.append({
+                "kickoff": kickoff,
+                "label": stamp(kickoff),
+                "left": left,
+                "edge": "start" if left < 4 else "end" if left > 88 else "middle",
+                "players": tuple(players),
+            })
+        team_rows.append({
+            "team": team,
+            "groups": tuple(groups),
+            "unscheduled": tuple(unscheduled),
+            "lane": "top" if team_index == 0 else "bottom",
+        })
+    return {
+        "teams": tuple(team_rows),
+        "ticks": ticks,
+        "start_label": stamp(first_kickoff),
+        "end_label": stamp(final_whistle),
+        "scheduled_players": scheduled_players,
+        "starter_count": len(starters),
+    }
+
+
 def _projected_live_finish(team: LiveTeamView | None) -> float | None:
     if team is None or not team.starters:
         return None
@@ -8122,8 +8208,8 @@ def scores_page(request: Request, league: str, week: int | None = None, matchup:
     if not current:
         return RedirectResponse("/", status_code=303)
     selected = _league(current, league)
-    if view not in {"matchup", "all", "multi"}:
-        raise HTTPException(status_code=400, detail="Choose matchup or league scoreboard")
+    if view not in {"matchup", "timeline", "all", "multi"}:
+        raise HTTPException(status_code=400, detail="Choose matchup, timeline, or league scoreboard")
     if view == "multi":
         return templates.TemplateResponse(
             request=request,
@@ -8164,6 +8250,23 @@ def scores_page(request: Request, league: str, week: int | None = None, matchup:
     gameday_timeline = _observe_gameday_timeline(
         current, selected, selected_week, head_to_head,
     )
+    experimental_timeline = None
+    if view == "timeline" and selected_week is not None and head_to_head is not None:
+        try:
+            def load_timeline_schedule():
+                kickoffs = client.nfl_team_kickoffs(week=selected_week)
+                return kickoffs, dict(getattr(client, "week_games", {}))
+
+            team_kickoffs, week_games = _cached_session_read(
+                current, "mfl-global", f"nfl-schedule:{selected_week}",
+                load_timeline_schedule, ttl=300, stale_ttl=3600, shared=True,
+            )
+            experimental_timeline = _experimental_scoring_timeline(
+                head_to_head, team_kickoffs, week_games,
+            )
+        except (MFLApiError, AttributeError, TypeError, ValueError) as error:
+            _log_provider_error_once(current, selected.id, "scoring_timeline_schedule_unavailable", error)
+            experimental_timeline = _experimental_scoring_timeline(head_to_head, {})
     refresh_state = {"active": False, "next_kickoff": None}
     if selected_week is not None and selected_week == current_week:
         loaded_refresh_state = getattr(client, "live_refresh_state", None)
@@ -8192,6 +8295,7 @@ def scores_page(request: Request, league: str, week: int | None = None, matchup:
             "viewed_matchup": matchup_index,
             "score_view": view,
             "gameday_timeline": gameday_timeline,
+            "experimental_timeline": experimental_timeline,
             "error": api_error,
         },
     )
