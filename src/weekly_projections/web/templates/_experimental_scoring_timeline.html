@@ -6,7 +6,13 @@
   {% if experimental_timeline.windows %}
   <p class="experimental-timeline-help">Follow the matchup from first kickoff to the final whistle. Select a player to explore their stat line.</p>
   <div class="timeline-team-legend" aria-label="Fantasy team timeline lanes">
-    {% for team_row in experimental_timeline.teams %}<article class="{{ team_row.lane }}"><span><i aria-hidden="true"></i>{{ 'A' if loop.first else 'B' }}</span><strong>{{ team_row.team.name }}</strong></article>{% endfor %}
+    {% for team_row in experimental_timeline.teams %}{% set progress = team_row.progress %}
+    <article class="{{ team_row.lane }}">
+      <progress class="team-game-progress" max="100"{% if progress.percent is not none %} value="{{ progress.percent }}"{% endif %} aria-label="{{ team_row.team.name }} game time completed">{{ progress.percent if progress.percent is not none else 'Unavailable' }}%</progress>
+      <strong>{{ team_row.team.name }}</strong>
+      <small class="team-game-time">{% if progress.percent is none %}Awaiting saved starters{% elif progress.empty_slots %}{{ progress.completed }}/{{ progress.starter_count }} final · {{ progress.empty_slots }} open slot{{ 's' if progress.empty_slots != 1 else '' }}{% elif progress.remaining_players == 0 %}All {{ progress.starter_count }} starters final · Complete{% else %}{{ progress.remaining_players }} of {{ progress.starter_count }} remaining · {{ '%g'|format(progress.remaining_minutes) }} player-min left{% endif %}</small>
+    </article>
+    {% endfor %}
   </div>
   <div class="starter-timeline-scroll" tabindex="0" role="region" aria-label="Scrollable starter game timeline">
     <div class="starter-timeline-canvas">

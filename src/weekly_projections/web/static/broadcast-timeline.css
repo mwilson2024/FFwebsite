@@ -40,15 +40,14 @@ html[data-theme] .broadcast-view :is(.arena-projection,.team-points-breakdown su
 .broadcast-view .experimental-timeline-heading>p b { color:var(--pulse-text); font-size:1.25rem; font-variant-numeric:tabular-nums; }
 .broadcast-view .experimental-timeline-help { margin:10px 28px 24px; color:var(--pulse-muted); font-size:.78rem; max-width:580px; line-height:1.6; }
 .broadcast-view .timeline-team-legend { margin:0 20px 0; gap:16px; }
-.broadcast-view .timeline-team-legend article { grid-template-columns:auto minmax(0,1fr); border:0; border-top:2px solid var(--pulse-a); border-radius:0; background:transparent; padding:12px 4px; gap:10px; }
-.broadcast-view .timeline-team-legend article.bottom { border-color:var(--pulse-b); }
-.broadcast-view .timeline-team-legend article>span { display:flex; align-items:center; gap:6px; color:var(--pulse-muted); font-size:.6rem; }
-.broadcast-view .timeline-team-legend i { width:6px; height:6px; border-radius:50%; background:var(--pulse-a); }
-.broadcast-view .timeline-team-legend .bottom i { background:var(--pulse-b); }
+.broadcast-view .timeline-team-legend article { --lane-color:var(--pulse-a); display:grid; grid-template-columns:minmax(0,1fr); border:0; border-radius:0; background:transparent; padding:0 4px 12px; gap:7px; }
+.broadcast-view .timeline-team-legend article.bottom { --lane-color:var(--pulse-b); }
+.broadcast-view .team-game-progress { display:block; width:100%; height:4px; margin:0 0 5px; border:0; border-radius:3px; appearance:none; overflow:hidden; background:#354050; accent-color:var(--lane-color); }
+.broadcast-view .team-game-progress::-webkit-progress-bar { background:#354050; border-radius:3px; }
+.broadcast-view .team-game-progress::-webkit-progress-value { background:var(--lane-color); border-radius:3px; }
+.broadcast-view .team-game-progress::-moz-progress-bar { background:var(--lane-color); border-radius:3px; }
+.broadcast-view .team-game-time { color:var(--pulse-muted); font-size:.65rem; font-variant-numeric:tabular-nums; line-height:1.4; }
 .broadcast-view .timeline-team-legend strong { color:var(--pulse-text); font-size:.8rem; }
-.broadcast-view .timeline-team-legend b { color:var(--pulse-a); font-size:1.1rem; letter-spacing:-.04em; }
-.broadcast-view .timeline-team-legend .bottom b { color:var(--pulse-b); }
-.broadcast-view .timeline-team-legend b small { display:inline; margin-left:5px; color:var(--pulse-muted); font-size:.5rem; letter-spacing:.08em; }
 .broadcast-view .starter-timeline-scroll { margin:0 20px 24px; border:1px solid var(--pulse-line); border-radius:12px; background:#12171e; scrollbar-width:thin; scrollbar-color:#59677c #171d27; }
 .broadcast-view .timeline-window-grid { min-height:460px; padding:12px; }
 .broadcast-view .timeline-game-window { min-height:434px; border-color:#303b4d80; background:linear-gradient(180deg,#ffffff02,transparent); }
@@ -105,10 +104,9 @@ html[data-theme] .broadcast-view .scoring-attribution { background:#101318; colo
   .broadcast-view .experimental-timeline-heading>p b { font-size:1rem; white-space:nowrap; }
   .broadcast-view .experimental-timeline-help { margin:10px 16px 16px; font-size:.72rem; }
   .broadcast-view .timeline-team-legend { position:static; margin:0 10px; gap:10px; }
-  .broadcast-view .timeline-team-legend article { grid-template-columns:12px minmax(0,1fr); padding:10px 0; gap:5px; text-align:left; }
-  .broadcast-view .timeline-team-legend article>span { grid-column:1; font-size:0; }
+  .broadcast-view .timeline-team-legend article { grid-template-columns:minmax(0,1fr); padding:0 0 10px; gap:5px; text-align:left; }
   .broadcast-view .timeline-team-legend strong { font-size:.64rem; }
-  .broadcast-view .timeline-team-legend b { grid-column:2; font-size:.95rem; }
+  .broadcast-view .team-game-time { font-size:.58rem; }
   .broadcast-view .starter-timeline-scroll { margin:0 8px 16px; border-radius:8px; }
   .broadcast-view .timeline-window-grid { min-height:0; padding:0; }
   .broadcast-view .timeline-game-window { min-height:var(--pulse-height); }

@@ -549,8 +549,29 @@ def _experimental_scoring_timeline(
             return "MONDAY NIGHT"
         return weekday
 
+    def team_progress(team: LiveTeamView) -> dict:
+        count = max(len(team.starters), head_to_head.settings.starter_count
+                    if head_to_head.settings else 0)
+        remaining = sum(max(0, min(3600, item.game_seconds_remaining))
+                        for item in team.starters)
+        empty_slots = max(0, count - len(team.starters))
+        completed = sum(item.game_seconds_remaining <= 0 for item in team.starters)
+        # Every starter owns one equal share. Only MFL game-clock updates fill
+        # that share; wall-clock time must not advance during halftime/stoppages.
+        elapsed = sum(3600 - max(0, min(3600, item.game_seconds_remaining))
+                      for item in team.starters)
+        return {
+            "percent": round(elapsed / (count * 3600) * 100, 2) if count else None,
+            "starter_count": count,
+            "completed": completed,
+            "remaining_players": len(team.starters) - completed,
+            "remaining_minutes": round(remaining / 60, 1),
+            "empty_slots": empty_slots,
+        }
+
     team_rows = tuple({
         "team": team,
+        "progress": team_progress(team),
         "lane": "top" if index == 0 else "bottom",
         "unscheduled": tuple(item for item in team.starters
                              if not int(team_kickoffs.get(item.player.team.upper()) or 0)),

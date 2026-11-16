@@ -3140,6 +3140,33 @@ def test_pulse_focuses_live_then_upcoming_then_final_window(
     assert timeline["focus_index"] == expected
 
 
+@pytest.mark.parametrize("last_remaining,expected_percent,expected_remaining,expected_empty", [
+    (3600, 87.5, 1, 0),
+    (1800, 93.75, 1, 0),
+    (0, 100.0, 0, 0),
+    (None, 87.5, 0, 1),
+])
+def test_pulse_team_progress_weights_each_starter_and_preserves_empty_slots(
+    last_remaining, expected_percent, expected_remaining, expected_empty,
+) -> None:
+    starters = tuple(web_app.LivePlayerView(
+        MFLPlayer(str(index), f"Player {index}", "WR", "BUF"), 10, "starter", 0,
+    ) for index in range(7))
+    if last_remaining is not None:
+        starters += (web_app.LivePlayerView(
+            MFLPlayer("last", "Last starter", "WR", "BUF"), 0, "starter", last_remaining,
+        ),)
+    team = web_app.LiveTeamView("0001", "Mine", 70, False, 0, 0, starters)
+    other = web_app.LiveTeamView("0002", "Theirs", 70, True, 0, 0, starters)
+    matchup = web_app.HeadToHeadView((team, other), settings=MFLLineupSettings(8, ()))
+    result = web_app._experimental_scoring_timeline(matchup, {"BUF": 1})
+    progress = result["teams"][0]["progress"]
+    assert progress["percent"] == expected_percent
+    assert progress["remaining_players"] == expected_remaining
+    assert progress["empty_slots"] == expected_empty
+    assert progress["remaining_minutes"] == (last_remaining or 0) / 60
+
+
 def test_pregame_injury_scan_windows_are_60_30_and_5_minutes_only():
     now = 1_000_000
     assert web_app._injury_scan_phase(now + 3600, now=now) == 60
