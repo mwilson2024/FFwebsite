@@ -509,84 +509,99 @@ def _experimental_scoring_timeline(
     team_kickoffs: dict[str, int],
     week_games: dict[str, dict] | None = None,
 ) -> dict | None:
-    """Place saved starters on one shared, kickoff-based matchup timeline."""
+    """Place every saved starter in a roomy NFL kickoff-window timeline."""
     if head_to_head is None or len(head_to_head.teams) != 2:
         return None
     games = week_games or {}
     starters = [item for team in head_to_head.teams for item in team.starters]
-    scheduled = [
-        int(team_kickoffs.get(item.player.team.upper()) or 0)
-        for item in starters
-        if item.player.team
-    ]
-    scheduled = [kickoff for kickoff in scheduled if kickoff > 0]
-    if not scheduled:
+    if not any(int(team_kickoffs.get(item.player.team.upper()) or 0) > 0
+               for item in starters if item.player.team):
         return {
-            "teams": (), "ticks": (), "start_label": "Kickoff schedule unavailable",
-            "end_label": "", "scheduled_players": 0, "starter_count": len(starters),
+            "teams": (), "windows": (), "scheduled_players": 0,
+            "starter_count": len(starters), "minimum_width": 0,
         }
 
-    first_kickoff = min(scheduled)
-    final_whistle = max(scheduled) + 4 * 3600
-    duration = max(1, final_whistle - first_kickoff)
-    distinct_kickoffs = sorted(set(scheduled))
+    def local_time(value: int) -> datetime:
+        return datetime.fromtimestamp(value, _APP_TIME_ZONE)
 
-    def stamp(value: int) -> str:
+    def stamp(value: int, *, include_day: bool = True) -> str:
         local = datetime.fromtimestamp(value, _APP_TIME_ZONE)
-        return f"{local.strftime('%a')} {local.strftime('%I:%M %p').lstrip('0')}"
+        prefix = f"{local.strftime('%a')} " if include_day else ""
+        return f"{prefix}{local.strftime('%I:%M %p').lstrip('0')}"
 
-    ticks = tuple({
-        "timestamp": kickoff,
-        "left": round((kickoff - first_kickoff) / duration * 100, 3),
-        "label": stamp(kickoff),
-    } for kickoff in distinct_kickoffs)
-    team_rows = []
+    def window_label(kickoff: int) -> str:
+        local = local_time(kickoff)
+        weekday = local.strftime("%A").upper()
+        hour = local.hour
+        if weekday == "THURSDAY":
+            return "THURSDAY NIGHT"
+        if weekday == "SUNDAY":
+            if hour < 12:
+                return "SUNDAY MORNING"
+            if hour < 15:
+                return "SUNDAY EARLY"
+            if hour < 19:
+                return "SUNDAY LATE"
+            return "SUNDAY NIGHT"
+        if weekday == "MONDAY":
+            return "MONDAY NIGHT"
+        return weekday
+
+    team_rows = tuple({
+        "team": team,
+        "lane": "top" if index == 0 else "bottom",
+        "unscheduled": tuple(item for item in team.starters
+                             if not int(team_kickoffs.get(item.player.team.upper()) or 0)),
+    } for index, team in enumerate(head_to_head.teams))
+    buckets: dict[tuple, dict] = {}
     scheduled_players = 0
     for team_index, team in enumerate(head_to_head.teams):
-        grouped: dict[int, list[dict]] = {}
-        unscheduled: list[dict] = []
         for item in team.starters:
             nfl_team = item.player.team.upper()
             kickoff = int(team_kickoffs.get(nfl_team) or 0)
+            if not kickoff:
+                continue
             game = games.get(nfl_team, {}) if isinstance(games.get(nfl_team, {}), dict) else {}
             progress = 100.0 if item.game_state == "Final" else (
                 max(0.0, min(100.0, (1 - item.game_seconds_remaining / 3600) * 100))
                 if item.game_state == "Live" else 0.0
             )
-            player_row = {
+            local = local_time(kickoff)
+            key = (local.date().isoformat(), window_label(kickoff))
+            bucket = buckets.setdefault(key, {
+                "label": key[1], "kickoffs": set(), "teams": [[], []],
+                "sort": kickoff,
+            })
+            bucket["kickoffs"].add(kickoff)
+            bucket["sort"] = min(bucket["sort"], kickoff)
+            bucket["teams"][team_index].append({
                 "item": item,
                 "progress": round(progress, 1),
                 "opponent": str(game.get("opponent") or "").strip(),
                 "kickoff_label": stamp(kickoff) if kickoff else "Kickoff unavailable",
-            }
-            if kickoff:
-                grouped.setdefault(kickoff, []).append(player_row)
-                scheduled_players += 1
-            else:
-                unscheduled.append(player_row)
-        groups = []
-        for kickoff, players in sorted(grouped.items()):
-            left = round((kickoff - first_kickoff) / duration * 100, 3)
-            groups.append({
-                "kickoff": kickoff,
-                "label": stamp(kickoff),
-                "left": left,
-                "edge": "start" if left < 4 else "end" if left > 88 else "middle",
-                "players": tuple(players),
             })
-        team_rows.append({
-            "team": team,
-            "groups": tuple(groups),
-            "unscheduled": tuple(unscheduled),
-            "lane": "top" if team_index == 0 else "bottom",
+            scheduled_players += 1
+
+    windows = []
+    total_slots = 0
+    for bucket in sorted(buckets.values(), key=lambda item: item["sort"]):
+        kickoffs = sorted(bucket["kickoffs"])
+        clock_labels = [stamp(value, include_day=False) for value in kickoffs]
+        slot_count = max(1, *(len(players) for players in bucket["teams"]))
+        total_slots += slot_count
+        windows.append({
+            "label": bucket["label"],
+            "time_label": " / ".join(clock_labels),
+            "slot_count": slot_count,
+            "layout_slots": min(slot_count, 12),
+            "teams": tuple(tuple(players) for players in bucket["teams"]),
         })
     return {
-        "teams": tuple(team_rows),
-        "ticks": ticks,
-        "start_label": stamp(first_kickoff),
-        "end_label": stamp(final_whistle),
+        "teams": team_rows,
+        "windows": tuple(windows),
         "scheduled_players": scheduled_players,
         "starter_count": len(starters),
+        "minimum_width": max(1000, total_slots * 138 + len(windows) * 28),
     }
 
 

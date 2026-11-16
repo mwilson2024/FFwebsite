@@ -142,7 +142,7 @@ def test_mobile_lineup_and_scoring_use_compact_player_rows_only_on_phones():
     assert '.matchup-player-row { grid-template-columns:minmax(0,1fr) 24px minmax(0,1fr);' in mobile
     assert '.matchup-stat-row .player-stat-line { display:none;' in mobile
     assert '/static/fantasy.css?v=20261102-mobile-density' in lineup
-    assert '/static/fantasy.css?v=20261116-experimental-timeline' in scores
+    assert '/static/fantasy.css?v=20261116-experimental-timeline-v6' in scores
 
 
 def test_activity_wall_only_scrolls_after_reaching_waiver_height():

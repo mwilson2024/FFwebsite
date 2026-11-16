@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 import json
 import time
+from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
 import pytest
@@ -3075,7 +3076,7 @@ def test_live_scores_page_renders_mfl_matchup(monkeypatch) -> None:
 
 
 def test_experimental_scoring_timeline_places_starters_and_tracks_game_progress() -> None:
-    first = 1_800_000_000
+    first = int(datetime(2026, 9, 20, 13, 0, tzinfo=ZoneInfo("America/New_York")).timestamp())
     own_live = web_app.LivePlayerView(
         MFLPlayer("p1", "One O'Clock", "WR", "NEP"), 8.5, "starter", 1800, 14.0,
     )
@@ -3092,7 +3093,7 @@ def test_experimental_scoring_timeline_places_starters_and_tracks_game_progress(
 
     timeline = web_app._experimental_scoring_timeline(
         matchup,
-        {"NEP": first, "BUF": first, "SEA": first + 3 * 3600},
+        {"NEP": first, "BUF": first, "SEA": first + 4 * 3600},
         {
             "NEP": {"opponent": "vs BUF"},
             "BUF": {"opponent": "@ NEP"},
@@ -3103,10 +3104,13 @@ def test_experimental_scoring_timeline_places_starters_and_tracks_game_progress(
     assert timeline is not None
     assert timeline["scheduled_players"] == 3
     assert timeline["starter_count"] == 3
-    assert len(timeline["ticks"]) == 2
-    assert timeline["teams"][0]["groups"][0]["players"][0]["progress"] == 50.0
-    assert timeline["teams"][1]["groups"][0]["players"][0]["progress"] == 100.0
-    assert timeline["teams"][0]["groups"][1]["players"][0]["opponent"] == "vs LAR"
+    assert [window["label"] for window in timeline["windows"]] == [
+        "SUNDAY EARLY", "SUNDAY LATE",
+    ]
+    assert timeline["windows"][0]["teams"][0][0]["progress"] == 50.0
+    assert timeline["windows"][0]["teams"][1][0]["progress"] == 100.0
+    assert timeline["windows"][1]["teams"][0][0]["opponent"] == "vs LAR"
+    assert timeline["minimum_width"] >= 1000
 
 
 def test_pregame_injury_scan_windows_are_60_30_and_5_minutes_only():
