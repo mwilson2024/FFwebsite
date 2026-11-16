@@ -3068,11 +3068,13 @@ def test_live_scores_page_renders_mfl_matchup(monkeypatch) -> None:
     timeline = client.get("/scores?league=11111&week=1&view=timeline")
     assert timeline.status_code == 200
     assert "Timeline experiment" in timeline.text
-    assert "Starter game timeline" in timeline.text
+    assert "Your week. In motion." in timeline.text
+    assert "broadcast-timeline.css" in timeline.text
     assert "Live Player" in timeline.text
     assert "Opponent Player" in timeline.text
     assert "SCORING UPDATES" in timeline.text
     assert 'data-timeline-scoring-player' in timeline.text
+    assert 'data-timeline-focus' in timeline.text
 
 
 def test_experimental_scoring_timeline_places_starters_and_tracks_game_progress() -> None:
@@ -3111,6 +3113,31 @@ def test_experimental_scoring_timeline_places_starters_and_tracks_game_progress(
     assert timeline["windows"][0]["teams"][1][0]["progress"] == 100.0
     assert timeline["windows"][1]["teams"][0][0]["opponent"] == "vs LAR"
     assert timeline["minimum_width"] >= 1000
+
+
+@pytest.mark.parametrize("elapsed,early_remaining,late_remaining,expected", [
+    (-3600, 3600, 3600, 0),  # Before kickoff: first upcoming window.
+    (3600, 1800, 3600, 0),   # Sunday early is live.
+    (10800, 0, 3600, 1),    # Between games: next kickoff.
+    (18000, 600, 2400, 1),  # Overlapping games: most recent live window.
+    (86400, 0, 0, 1),       # Completed matchup: last window.
+])
+def test_pulse_focuses_live_then_upcoming_then_final_window(
+    elapsed, early_remaining, late_remaining, expected,
+) -> None:
+    first = int(datetime(2026, 9, 20, 13, tzinfo=ZoneInfo("America/New_York")).timestamp())
+    matchup = web_app.HeadToHeadView(teams=(
+        web_app.LiveTeamView("0001", "Mine", 0, False, 0, 0, (
+            web_app.LivePlayerView(MFLPlayer("a", "Early", "QB", "BUF"), 0, "starter", early_remaining),
+        )),
+        web_app.LiveTeamView("0002", "Theirs", 0, True, 0, 0, (
+            web_app.LivePlayerView(MFLPlayer("b", "Late", "WR", "SEA"), 0, "starter", late_remaining),
+        )),
+    ))
+    timeline = web_app._experimental_scoring_timeline(
+        matchup, {"BUF": first, "SEA": first + 4 * 3600}, now=first + elapsed,
+    )
+    assert timeline["focus_index"] == expected
 
 
 def test_pregame_injury_scan_windows_are_60_30_and_5_minutes_only():

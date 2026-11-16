@@ -12,7 +12,12 @@ def test_all_pages_load_their_requested_theme_last():
         assert "{% include '_theme_assets.html' %}" in source, page.name
         source = source.replace("{% include '_theme_assets.html' %}", (templates / '_theme_assets.html').read_text(encoding='utf-8'))
         soup = BeautifulSoup(source, 'html.parser')
-        assert soup.select('link[rel="stylesheet"]')[-1]['href'] == '/static/themes.css?v=20261014-context-widget', page.name
+        expected = (
+            '/static/broadcast-timeline.css?v=20261116-4'
+            if page.name == 'scores.html'
+            else '/static/themes.css?v=20261014-context-widget'
+        )
+        assert soup.select('link[rel="stylesheet"]')[-1]['href'] == expected, page.name
         assert len(soup.select('meta[name="theme-color"]')) == 1
         assert soup.select_one('script[src="/static/theme.js?v=20260924-league-themes"]')
         assert soup.select_one('meta[name="wp-theme-scope"]')

@@ -108,7 +108,17 @@ class DemoClient:
     def lineup_settings(self):
         return MFLLineupSettings(5, (MFLLineupRule("QB",1,1), MFLLineupRule("RB",1,2), MFLLineupRule("WR",1,2), MFLLineupRule("TE",1,1)))
     def player_roster_statuses(self, ids, *, week=None): return dict(STATUSES)
-    def nfl_team_kickoffs(self, *, week): return {"BUF": 1}
+    def nfl_team_kickoffs(self, *, week):
+        kickoffs = {
+            "BUF":1789085700, "MIN":1789306200, "PHI":1789318800,
+            "CIN":1789318800, "DET":1789331100, "BAL":1789345200,
+            "ARI":1789431300,
+        }
+        self.week_games = {
+            team: {"kickoff": kickoff, "opponent": "vs NFL"}
+            for team, kickoff in kickoffs.items()
+        }
+        return kickoffs
     def projected_scores(self, **kwargs): return dict(SCORES)
     def injuries(self, **kwargs): return {}
     def submit_lineup(self, *, week, starter_ids): return {"status":"test-only; nothing sent"}

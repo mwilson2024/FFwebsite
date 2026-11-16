@@ -142,6 +142,21 @@
     saveTrackerState(); renderStatTracker();
   };
   renderStatTracker();
+  const timelineFocus = document.querySelector('[data-timeline-focus]');
+  if (timelineFocus && !location.hash && performance.getEntriesByType('navigation')[0]?.type !== 'back_forward') {
+    requestAnimationFrame(() => {
+      const scroller = timelineFocus.closest('.starter-timeline-scroll');
+      if (!scroller) return;
+      if (matchMedia('(max-width:700px)').matches) {
+        timelineFocus.scrollIntoView({block:'start', behavior:'instant'});
+      } else {
+        // Move only the timeline rail; keep the overall matchup score in view.
+        const target = timelineFocus.getBoundingClientRect();
+        const container = scroller.getBoundingClientRect();
+        scroller.scrollLeft += target.left - container.left - 16;
+      }
+    });
+  }
   document.querySelectorAll('[data-timeline-scoring-player]').forEach((panel) => {
     let loading = false;
     let loadedAt = 0;
@@ -209,7 +224,7 @@
       if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) pointsCard.close();
     }
   });
-  document.querySelectorAll('[data-scoring-player]').forEach((panel) => {
+  document.querySelectorAll('[data-scoring-player]:not([data-timeline-scoring-player])').forEach((panel) => {
     let loading = false;
     let loadedAt = 0;
     const statLine = document.getElementById(panel.dataset.statLine || '');

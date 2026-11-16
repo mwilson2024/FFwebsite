@@ -508,6 +508,8 @@ def _experimental_scoring_timeline(
     head_to_head: HeadToHeadView | None,
     team_kickoffs: dict[str, int],
     week_games: dict[str, dict] | None = None,
+    *,
+    now: float | None = None,
 ) -> dict | None:
     """Place every saved starter in a roomy NFL kickoff-window timeline."""
     if head_to_head is None or len(head_to_head.teams) != 2:
@@ -591,14 +593,25 @@ def _experimental_scoring_timeline(
         total_slots += slot_count
         windows.append({
             "label": bucket["label"],
+            "kickoff": kickoffs[0],
+            "has_live": any(entry["item"].game_state == "Live"
+                            for players in bucket["teams"] for entry in players),
             "time_label": " / ".join(clock_labels),
             "slot_count": slot_count,
             "layout_slots": min(slot_count, 12),
             "teams": tuple(tuple(players) for players in bucket["teams"]),
         })
+    current_time = time.time() if now is None else now
+    live_indices = [index for index, window in enumerate(windows)
+                    if window["has_live"] and window["kickoff"] <= current_time]
+    upcoming_indices = [index for index, window in enumerate(windows)
+                        if window["kickoff"] > current_time]
+    focus_index = (live_indices[-1] if live_indices else upcoming_indices[0]
+                   if upcoming_indices else len(windows) - 1)
     return {
         "teams": team_rows,
         "windows": tuple(windows),
+        "focus_index": focus_index,
         "scheduled_players": scheduled_players,
         "starter_count": len(starters),
         "minimum_width": max(1000, total_slots * 138 + len(windows) * 28),
