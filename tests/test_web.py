@@ -3015,11 +3015,13 @@ def test_live_scores_page_renders_mfl_matchup(monkeypatch) -> None:
         0,
         11.5,
     )
+    own_bench = web_app.LivePlayerView(MFLPlayer("bench-own", "Own Bench", "RB", "BAL"), 8.75, "nonstarter", 1800, 10.5)
+    other_bench = web_app.LivePlayerView(MFLPlayer("bench-other", "Opponent Bench", "QB", "CIN"), 0, "nonstarter", 3600, None)
     head_to_head = web_app.HeadToHeadView(
         teams=(
-            web_app.LiveTeamView("0001", "My Team", 42.5, False, 2, 1, (own_player,)),
+            web_app.LiveTeamView("0001", "My Team", 42.5, False, 2, 1, (own_player, own_bench)),
             web_app.LiveTeamView(
-                "0002", "Opponent", 38.0, True, 3, 0, (opponent_player,)
+                "0002", "Opponent", 38.0, True, 3, 0, (opponent_player, other_bench)
             ),
         )
     )
@@ -3089,6 +3091,17 @@ def test_live_scores_page_renders_mfl_matchup(monkeypatch) -> None:
     assert 'aria-label="Collapse matchup score"' in timeline.text
     from bs4 import BeautifulSoup
     timeline_markup = BeautifulSoup(timeline.text, 'html.parser')
+    bench = timeline_markup.select_one('#timeline-bench')
+    assert bench is not None and not bench.has_attr('open')
+    assert {row['data-bench-player'] for row in bench.select('[data-bench-player]')} == {'bench-own', 'bench-other'}
+    assert 'Own Bench' in bench.get_text() and 'Opponent Bench' in bench.get_text()
+    assert '8.75' in bench.get_text() and '10.5 proj' in bench.get_text()
+    assert 'Playing' in bench.get_text() and 'Yet to play' in bench.get_text()
+    assert 'Projection unavailable' in bench.get_text()
+    assert not bench.select('[data-scoring-player]')  # No automatic stat requests for hidden bench rows.
+    starter_timeline = timeline_markup.select_one('.experimental-score-timeline')
+    assert 'Own Bench' not in starter_timeline.get_text() and 'Opponent Bench' not in starter_timeline.get_text()
+    assert bench.sourceline < timeline_markup.select_one('#stat-tracker-title').sourceline
     assert not timeline_markup.select_one('#pulse-score-strip').has_attr('hidden')
     assert timeline_markup.select_one('[data-pulse-open]').has_attr('hidden')
     assert timeline_markup.select_one('[data-pulse-open]')['aria-expanded'] == 'true'
@@ -3098,6 +3111,17 @@ def test_live_scores_page_renders_mfl_matchup(monkeypatch) -> None:
     assert '&view=timeline">Refresh now' in timeline.text
     assert client.get("/scores?league=11111&week=1&view=timeline").status_code == 200
     assert logo_reads == [True]
+
+
+def test_timeline_bench_handles_no_reported_bench_players() -> None:
+    teams = tuple(web_app.LiveTeamView(str(index), name, 0, True, 0, 0, ())
+                  for index, name in enumerate(('One', 'Two'), 1))
+    html = web_app.templates.env.get_template('_timeline_bench.html').render(
+        head_to_head=web_app.HeadToHeadView(teams),
+    )
+    assert html.count('MFL has not reported bench players for this team and week.') == 2
+    assert 'data-bench-player=' not in html
+    assert 'Open starter slot' not in html
 
 
 @pytest.mark.parametrize("state,left_score,right_score,left_projection,expected_label,angle", [

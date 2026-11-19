@@ -147,6 +147,41 @@ html[data-theme] .broadcast-view .scoring-attribution { background:#101318; colo
   .broadcast-view .timeline-player { transition:none; }
 }
 
+.pulse-bench { border-top:1px solid var(--pulse-line); color:var(--pulse-text); background:var(--pulse-bg); }
+.pulse-bench>summary { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:52px; padding:12px 28px; cursor:pointer; font-size:.9rem; font-weight:700; }
+.pulse-bench>summary>span::before { content:'▸'; display:inline-block; margin-right:8px; color:var(--pulse-muted); }
+.pulse-bench[open]>summary>span::before { content:'▾'; }
+.pulse-bench>summary small { color:var(--pulse-muted); font-size:.65rem; font-weight:400; }
+.pulse-bench-help { margin:0; padding:0 28px 14px; color:var(--pulse-muted); font-size:.75rem; line-height:1.5; }
+.pulse-bench-teams { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:24px; padding:0 28px 20px; }
+.pulse-bench-teams section { min-width:0; }
+.pulse-bench-teams header { display:flex; justify-content:space-between; align-items:baseline; gap:12px; padding:10px 0; border-bottom:2px solid var(--pulse-a); }
+.pulse-bench-teams section+section header { border-color:var(--pulse-b); }
+.pulse-bench-teams h3 { margin:0; color:var(--pulse-text); font-size:.85rem; }
+.pulse-bench-teams header>span { color:var(--pulse-muted); font-size:.65rem; white-space:nowrap; }
+.pulse-bench-teams ul { margin:0; padding:0; list-style:none; }
+.pulse-bench-teams li { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:66px; padding:8px 0; border-bottom:1px solid var(--pulse-line); }
+.pulse-bench-player { min-width:0; flex:1; }
+html[data-theme] .broadcast-view .pulse-bench .player-identity { width:100%; min-height:38px; padding:0; color:var(--pulse-text)!important; text-align:left; gap:8px; flex-wrap:nowrap; justify-content:flex-start; }
+.pulse-bench .player-identity>span:last-child { min-width:0; }
+.pulse-bench .player-identity strong { color:var(--pulse-text); font-size:.8rem; line-height:1.25; }
+html[data-theme] .broadcast-view .pulse-bench .player-identity small { color:var(--pulse-muted); font-size:.6rem; }
+.pulse-bench .headshot-wrap { width:30px; height:32px; flex-basis:30px; background:var(--pulse-panel); }
+.pulse-bench-state { display:block; margin-left:38px; color:var(--pulse-muted); font-size:.6rem; }
+.pulse-bench-state.live { color:var(--pulse-a); }
+.pulse-bench-state.live::before { content:'● '; }
+.pulse-bench-points { flex:0 0 auto; text-align:right; font-variant-numeric:tabular-nums; }
+.pulse-bench-points strong { display:block; color:var(--pulse-text); font-size:1rem; }
+.pulse-bench-points small { display:block; color:var(--pulse-muted); font-size:.6rem; }
+.pulse-bench-empty { padding:12px 0; color:var(--pulse-muted); font-size:.75rem; line-height:1.5; }
+.pulse-bench :is(summary,button):focus-visible { outline:2px solid var(--pulse-a); outline-offset:3px; }
+@media(max-width:700px) {
+  .pulse-bench>summary { padding:12px 16px; }
+  .pulse-bench-help { padding:0 16px 12px; }
+  .pulse-bench-teams { grid-template-columns:1fr; gap:18px; padding:0 16px 18px; }
+  .pulse-bench-teams li { min-height:64px; }
+}
+
 /* The mobile score dock shares Pulse's team identity and normal score refresh. */
 .pulse-score-dock { display:none; }
 @media(max-width:700px) {

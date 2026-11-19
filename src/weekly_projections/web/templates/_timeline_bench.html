@@ -1,0 +1,25 @@
+<details class="pulse-bench" id="timeline-bench">
+  <summary><span>Bench players</span><small>View outside the timeline</small></summary>
+  <p class="pulse-bench-help">Bench points do not count toward the matchup. Select a player for their card and weekly stats.</p>
+  <div class="pulse-bench-teams">
+    {% for team in head_to_head.teams %}
+    {% set bench = team.players|rejectattr('is_starter')|list %}
+    <section aria-labelledby="bench-team-{{ loop.index }}">
+      <header><h3 id="bench-team-{{ loop.index }}">{{ team.name }}</h3><span>{{ bench|length }} on bench</span></header>
+      {% if bench %}
+      <ul>
+        {% for item in bench %}
+        <li data-bench-player="{{ item.player.id }}">
+          <div class="pulse-bench-player">
+            {% set player = item.player %}{% include '_player_identity.html' %}
+            <span class="pulse-bench-state {{ item.game_state|lower }}">{{ 'Playing' if item.game_state == 'Live' else 'Yet to play' if item.game_state == 'Upcoming' else 'Final' }}</span>
+          </div>
+          <div class="pulse-bench-points"><strong>{{ '%.2f'|format(item.score) }}</strong><small>{% if item.projection is not none %}{{ '%.1f'|format(item.projection) }} proj{% else %}Projection unavailable{% endif %}</small></div>
+        </li>
+        {% endfor %}
+      </ul>
+      {% else %}<p class="pulse-bench-empty">MFL has not reported bench players for this team and week.</p>{% endif %}
+    </section>
+    {% endfor %}
+  </div>
+</details>

@@ -11,7 +11,7 @@
   <meta name="csrf-token" content="{{ session.csrf_token }}">
   <script src="/static/diagnostics.js" defer></script><script src="/static/app.js?v=20261116-pulse-current-window" defer></script>
   {% include '_theme_assets.html' %}
-  {% if score_view == 'timeline' %}<link rel="stylesheet" href="/static/broadcast-timeline.css?v=20261119-mobile-score-refinement"><script src="/static/mobile-timeline-score.js?v=20261119-open-strip" defer></script>{% endif %}
+  {% if score_view == 'timeline' %}<link rel="stylesheet" href="/static/broadcast-timeline.css?v=20261119-bench-compact"><script src="/static/mobile-timeline-score.js?v=20261119-open-strip" defer></script>{% endif %}
 </head>
 <body class="gameday-page{% if score_view == 'timeline' %} broadcast-view{% endif %}" data-live-refresh="{{ refresh_seconds }}" data-next-kickoff="{{ next_kickoff or '' }}" data-live-window="/api/live-window?league={{ league.id }}&week={{ week or 1 }}">
   {% set active_tool = 'scores' %}{% include '_league_header.html' %}
@@ -61,6 +61,7 @@
       </div>
       {% if score_view == 'timeline' %}
       {% if experimental_timeline %}{% include '_experimental_scoring_timeline.html' %}{% endif %}
+      {% include '_timeline_bench.html' %}
       <section class="score-timeline live-stat-tracker" data-stat-tracker data-tracker-key="{{ league.id }}:{{ week }}:{% for team in head_to_head.teams %}{{ team.franchise_id }}{% if not loop.last %}-{% endif %}{% endfor %}" aria-labelledby="stat-tracker-title">
         <div class="score-timeline-heading"><div><p class="eyebrow">SCORING UPDATES</p><h2 id="stat-tracker-title">Live point tracker</h2></div><span><b id="stat-tracker-count">0</b> events this tab</span></div>
         <div id="stat-discrepancy-alerts" class="stat-discrepancy-alerts" aria-live="polite"></div>
