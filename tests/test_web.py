@@ -3087,6 +3087,11 @@ def test_live_scores_page_renders_mfl_matchup(monkeypatch) -> None:
     assert '11111_franchise_logo0001.png' in timeline.text
     assert 'pulse-gauge-needle' in timeline.text
     assert 'aria-label="Collapse matchup score"' in timeline.text
+    from bs4 import BeautifulSoup
+    timeline_markup = BeautifulSoup(timeline.text, 'html.parser')
+    assert not timeline_markup.select_one('#pulse-score-strip').has_attr('hidden')
+    assert timeline_markup.select_one('[data-pulse-open]').has_attr('hidden')
+    assert timeline_markup.select_one('[data-pulse-open]')['aria-expanded'] == 'true'
     assert 'data-pulse-score ' not in response.text
     assert 'mobile-timeline-score.js' not in response.text
     assert 'data-pulse-score ' not in client.get("/scores?league=11111&week=1&view=all").text

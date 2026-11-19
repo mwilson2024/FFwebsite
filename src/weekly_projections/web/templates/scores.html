@@ -11,7 +11,7 @@
   <meta name="csrf-token" content="{{ session.csrf_token }}">
   <script src="/static/diagnostics.js" defer></script><script src="/static/app.js?v=20261116-pulse-current-window" defer></script>
   {% include '_theme_assets.html' %}
-  {% if score_view == 'timeline' %}<link rel="stylesheet" href="/static/broadcast-timeline.css?v=20261119-mobile-score"><script src="/static/mobile-timeline-score.js?v=20261119" defer></script>{% endif %}
+  {% if score_view == 'timeline' %}<link rel="stylesheet" href="/static/broadcast-timeline.css?v=20261119-mobile-score-refinement"><script src="/static/mobile-timeline-score.js?v=20261119-open-strip" defer></script>{% endif %}
 </head>
 <body class="gameday-page{% if score_view == 'timeline' %} broadcast-view{% endif %}" data-live-refresh="{{ refresh_seconds }}" data-next-kickoff="{{ next_kickoff or '' }}" data-live-window="/api/live-window?league={{ league.id }}&week={{ week or 1 }}">
   {% set active_tool = 'scores' %}{% include '_league_header.html' %}

@@ -1,5 +1,5 @@
 <aside class="pulse-score-dock" data-pulse-score data-pulse-key="{{ league.id }}:{{ week }}:{% for team in head_to_head.teams %}{{ team.franchise_id }}{% if not loop.last %}-{% endif %}{% endfor %}" aria-label="Current matchup score">
-  <section class="pulse-score-strip" id="pulse-score-strip" aria-label="Matchup score summary" hidden>
+  <section class="pulse-score-strip" id="pulse-score-strip" aria-label="Matchup score summary">
     <button class="pulse-score-close" type="button" data-pulse-close aria-label="Collapse matchup score">×</button>
     <div class="pulse-score-line">
       {% for team in timeline_score.teams %}
@@ -21,7 +21,7 @@
       {% endfor %}
     </div>
   </section>
-  <button class="pulse-score-toggle" type="button" data-pulse-open aria-controls="pulse-score-strip" aria-expanded="false" aria-label="Expand {{ timeline_score.teams[0].name }} {{ '%.2f'|format(timeline_score.teams[0].score) }} versus {{ timeline_score.teams[1].name }} {{ '%.2f'|format(timeline_score.teams[1].score) }} matchup score">
+  <button class="pulse-score-toggle" type="button" data-pulse-open aria-controls="pulse-score-strip" aria-expanded="true" hidden aria-label="Expand {{ timeline_score.teams[0].name }} {{ '%.2f'|format(timeline_score.teams[0].score) }} versus {{ timeline_score.teams[1].name }} {{ '%.2f'|format(timeline_score.teams[1].score) }} matchup score">
     <span class="pulse-score-mini-state">{{ head_to_head.game_state }} · W{{ week }}</span>
     {% for team in timeline_score.teams %}<span class="pulse-score-mini-row"><span class="pulse-score-logo" aria-hidden="true"><b>{{ team.initials }}</b>{% if team.logo_url %}<img src="{{ team.logo_url }}" alt="" width="28" height="28" referrerpolicy="no-referrer">{% endif %}</span><strong>{{ '%.2f'|format(team.score) }}</strong></span>{% endfor %}
   </button>

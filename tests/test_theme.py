@@ -13,7 +13,7 @@ def test_all_pages_load_their_requested_theme_last():
         source = source.replace("{% include '_theme_assets.html' %}", (templates / '_theme_assets.html').read_text(encoding='utf-8'))
         soup = BeautifulSoup(source, 'html.parser')
         expected = (
-            '/static/broadcast-timeline.css?v=20261119-mobile-score'
+            '/static/broadcast-timeline.css?v=20261119-mobile-score-refinement'
             if page.name == 'scores.html'
             else '/static/themes.css?v=20261014-context-widget'
         )

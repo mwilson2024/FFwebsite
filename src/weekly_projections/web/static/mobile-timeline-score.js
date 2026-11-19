@@ -5,9 +5,9 @@
   const toggle = dock.querySelector('[data-pulse-open]');
   const close = dock.querySelector('[data-pulse-close]');
   const key = `wp-pulse-score:${dock.dataset.pulseKey}`;
-  let expanded = false;
+  let expanded = true;
   // Per-tab display preference only; carry through the existing scoring reload.
-  try { expanded = sessionStorage.getItem(key) === 'expanded'; } catch (_) {}
+  try { expanded = sessionStorage.getItem(key) !== 'collapsed'; } catch (_) {}
   const render = (open, focus = false) => {
     expanded = open;
     strip.hidden = !open;

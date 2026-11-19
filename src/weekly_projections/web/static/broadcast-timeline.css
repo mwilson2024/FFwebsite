@@ -155,27 +155,27 @@ html[data-theme] .broadcast-view .scoring-attribution { background:#101318; colo
   .broadcast-view .pulse-score-dock { display:block; position:fixed; inset:auto 0 var(--pulse-nav-height,0px); z-index:90; pointer-events:none; color:var(--pulse-text); }
   .broadcast-view .pulse-score-dock.is-obscured { visibility:hidden; }
   .pulse-score-dock [hidden] { display:none!important; }
-  .pulse-score-strip,.pulse-score-toggle { pointer-events:auto; background:rgb(25 30 38 / .62)!important; -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px); box-shadow:0 -4px 16px #0002; }
-  .pulse-score-strip { padding:10px 44px 10px 12px; border-top:1px solid #45516699; border-radius:9px 9px 0 0; }
+  .pulse-score-strip,.pulse-score-toggle { pointer-events:auto; background:rgb(25 30 38 / .48)!important; -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px); box-shadow:0 -3px 12px #0001; font-family:system-ui,sans-serif; }
+  .pulse-score-strip { padding:8px 36px 8px 12px; border-top:1px solid #45516670; border-radius:9px 9px 0 0; }
   .pulse-score-line { display:grid; grid-template-columns:minmax(0,1fr) minmax(64px,80px) minmax(0,1fr); gap:6px; align-items:center; max-width:600px; margin:auto; }
   .pulse-score-team { display:flex; align-items:center; gap:6px; min-width:0; }
   .pulse-score-team.left { flex-direction:row-reverse; justify-content:flex-end; }
   .pulse-score-team.right { justify-content:flex-end; }
-  .pulse-score-team>strong { color:var(--pulse-a); font-size:28px; line-height:34px; font-weight:800; letter-spacing:-.06em; font-variant-numeric:tabular-nums; }
+  .pulse-score-team>strong { color:var(--pulse-a); font-size:25px; line-height:32px; font-weight:650; letter-spacing:-.04em; font-variant-numeric:tabular-nums; }
   .pulse-score-team.right>strong { color:var(--pulse-b); }
-  .pulse-score-logo { display:grid; flex:0 0 28px; place-items:center; position:relative; width:28px; height:28px; overflow:hidden; border:1px solid #ffc87570; border-radius:8px; background:#ffc87515; color:var(--pulse-a); }
-  .pulse-score-logo b { font-size:10px; letter-spacing:-.03em; }
-  .pulse-score-logo img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:var(--pulse-panel); }
-  .pulse-score-team.right .pulse-score-logo,.pulse-score-mini-row:last-child .pulse-score-logo { border-color:#9dbbff70; background:#9dbbff15; color:var(--pulse-b); }
+  .pulse-score-logo { display:grid; flex:0 0 22px; place-items:center; position:relative; width:22px; height:24px; overflow:hidden; color:var(--pulse-a); }
+  .pulse-score-logo b { font-size:11px; font-weight:600; letter-spacing:-.03em; }
+  .pulse-score-logo img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; }
+  .pulse-score-team.right .pulse-score-logo,.pulse-score-mini-row:last-child .pulse-score-logo { color:var(--pulse-b); }
   .pulse-score-favor { display:grid; gap:2px; text-align:center; color:var(--pulse-muted); min-width:0; }
   .pulse-score-favor-label { font-size:10px; white-space:nowrap; font-variant-numeric:tabular-nums; }
-  .pulse-score-gauge { display:block; width:100%; height:32px; overflow:visible; }
-  .pulse-gauge-arc { fill:none; stroke-width:3.5; stroke-linecap:round; }
+  .pulse-score-gauge { display:block; width:100%; height:29px; overflow:visible; }
+  .pulse-gauge-arc { fill:none; stroke-width:2.5; stroke-linecap:round; }
   .pulse-gauge-arc.left { stroke:var(--pulse-a); }
   .pulse-gauge-arc.right { stroke:var(--pulse-b); }
   .pulse-score-favor.unavailable .pulse-gauge-arc { stroke:var(--pulse-line); }
   .pulse-gauge-tick { stroke:var(--pulse-muted); stroke-width:1; }
-  .pulse-gauge-needle { stroke:var(--pulse-text); stroke-width:1.8; stroke-linecap:round; }
+  .pulse-gauge-needle { stroke:var(--pulse-text); stroke-width:1.4; stroke-linecap:round; }
   .pulse-gauge-hub { fill:var(--pulse-text); }
   html[data-theme] .broadcast-view .pulse-score-close { position:absolute; right:0; top:0; display:grid; place-items:center; width:44px; height:44px; min-height:44px; margin:0; padding:0; border:0; border-radius:0; background:transparent!important; color:var(--pulse-muted)!important; font-size:20px; box-shadow:none; }
   html[data-theme] .broadcast-view .pulse-score-toggle { display:grid; gap:4px; position:absolute; right:max(12px,env(safe-area-inset-right,0px)); bottom:12px; width:158px; padding:9px 12px; border:1px solid #455166aa; border-radius:9px; color:var(--pulse-text)!important; text-align:left; }
