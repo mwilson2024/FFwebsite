@@ -504,6 +504,42 @@ class HeadToHeadView:
         return "Scheduled"
 
 
+def _timeline_score_summary(head_to_head: HeadToHeadView, details: MFLLeagueDetails | None) -> dict | None:
+    """Use the displayed matchup's authoritative scores and existing estimate."""
+    if len(head_to_head.teams) != 2:
+        return None
+    teams = []
+    for team in head_to_head.teams:
+        franchise = next((row for key, row in (details.franchises.items() if details else ())
+                          if key.zfill(4) == team.franchise_id.zfill(4)), None)
+        words = team.name.split()
+        initials = ''.join(word[0] for word in words[:2]).upper() or 'TM'
+        teams.append({
+            "name": team.name, "score": team.score, "initials": initials,
+            "logo_url": MFLClient._mfl_image_url(franchise.logo_url) if franchise else "",
+        })
+    forecast = head_to_head.forecast
+    chances = forecast["percentages"] if forecast else (None, None)
+    chance = chances[0]
+    final = bool(forecast and forecast["final"])
+    even = chance == 50 or (final and chance is None)
+    favored = teams[0] if chance is not None and chance > 50 else teams[1]
+    if even:
+        label = "Tied" if final else "Even · 50.00%"
+        description = "Final result: tied" if final else "Even, 50.00 percent estimated win probability"
+    elif chance is None:
+        label, description = "Unavailable", "Win estimate unavailable"
+    else:
+        percent = max(chances)
+        label = f'{favored["initials"]} · {percent:.2f}%'
+        description = f'{favored["name"]} {"won" if final else "favored"}, {percent:.2f} percent'
+        if not final:
+            description += " estimated win probability"
+    return {"teams": teams, "chance": chance, "angle": (50 - chance) * 1.8 if chance is not None else 0,
+            "label": label, "description": description, "final": final, "even": even,
+            "available": chance is not None or even}
+
+
 def _experimental_scoring_timeline(
     head_to_head: HeadToHeadView | None,
     team_kickoffs: dict[str, int],
@@ -8300,7 +8336,17 @@ def scores_page(request: Request, league: str, week: int | None = None, matchup:
         current, selected, selected_week, head_to_head,
     )
     experimental_timeline = None
+    timeline_score = None
     if view == "timeline" and selected_week is not None and head_to_head is not None:
+        details = None
+        try:
+            details = _cached_session_read(
+                current, selected.id, "league-details", client.league_details,
+                ttl=_WEEKLY_STATIC_TTL, stale_ttl=_LEAGUE_STATIC_STALE_TTL,
+            )
+        except MFLApiError as error:
+            _log_provider_error_once(current, selected.id, "timeline_logos_unavailable", error)
+        timeline_score = _timeline_score_summary(head_to_head, details)
         try:
             def load_timeline_schedule():
                 kickoffs = client.nfl_team_kickoffs(week=selected_week)
@@ -8345,6 +8391,7 @@ def scores_page(request: Request, league: str, week: int | None = None, matchup:
             "score_view": view,
             "gameday_timeline": gameday_timeline,
             "experimental_timeline": experimental_timeline,
+            "timeline_score": timeline_score,
             "error": api_error,
         },
     )

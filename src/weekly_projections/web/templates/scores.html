@@ -11,7 +11,7 @@
   <meta name="csrf-token" content="{{ session.csrf_token }}">
   <script src="/static/diagnostics.js" defer></script><script src="/static/app.js?v=20261116-pulse-current-window" defer></script>
   {% include '_theme_assets.html' %}
-  {% if score_view == 'timeline' %}<link rel="stylesheet" href="/static/broadcast-timeline.css?v=20261116-team-progress">{% endif %}
+  {% if score_view == 'timeline' %}<link rel="stylesheet" href="/static/broadcast-timeline.css?v=20261119-mobile-score"><script src="/static/mobile-timeline-score.js?v=20261119" defer></script>{% endif %}
 </head>
 <body class="gameday-page{% if score_view == 'timeline' %} broadcast-view{% endif %}" data-live-refresh="{{ refresh_seconds }}" data-next-kickoff="{{ next_kickoff or '' }}" data-live-window="/api/live-window?league={{ league.id }}&week={{ week or 1 }}">
   {% set active_tool = 'scores' %}{% include '_league_header.html' %}
@@ -107,7 +107,7 @@
       </section>{% endif %}
       {% endif %}
       <details class="forecast-method"><summary>About the win estimate</summary><p>A rough, uncalibrated estimate from current MFL points, league-scored projections and game time remaining. It assumes independent player outcomes with a 65% projection-based spread. Missing starters or projections can make it unavailable; it is not MFL’s official probability.</p></details>
-      <footer class="scoring-attribution">Scores and projections use this league’s MFL scoring rules.<span id="refresh-status">{% if refresh_seconds %}Live · updates in <b id="refresh-countdown">{{ refresh_seconds }}</b>s{% elif next_kickoff %}Auto-updates paused until the next NFL kickoff.{% else %}Auto-updates paused · no NFL game confirmed live.{% endif %}</span><a href="/scores?league={{ league.id }}&week={{ week }}{% if viewed_matchup is not none and viewed_matchup is defined %}&matchup={{ viewed_matchup }}{% endif %}">Refresh now</a></footer>
+      <footer class="scoring-attribution">Scores and projections use this league’s MFL scoring rules.<span id="refresh-status">{% if refresh_seconds %}Live · updates in <b id="refresh-countdown">{{ refresh_seconds }}</b>s{% elif next_kickoff %}Auto-updates paused until the next NFL kickoff.{% else %}Auto-updates paused · no NFL game confirmed live.{% endif %}</span><a href="/scores?league={{ league.id }}&week={{ week }}{% if score_view == 'timeline' %}&view=timeline{% endif %}{% if viewed_matchup is not none and viewed_matchup is defined %}&matchup={{ viewed_matchup }}{% endif %}">Refresh now</a></footer>
     </section>
     {% endif %}
     {% if live %}
@@ -116,6 +116,7 @@
     </div></details>
     {% endif %}
   </main>
+  {% if score_view == 'timeline' and timeline_score %}{% include '_mobile_timeline_score.html' %}{% endif %}
   {% include '_player_card.html' %}
   <dialog id="points-card" class="points-card" aria-labelledby="points-card-title">
     <header><div><p class="eyebrow">LEAGUE SCORING</p><h2 id="points-card-title">Points breakdown</h2></div><form method="dialog"><button aria-label="Close points breakdown">×</button></form></header>

@@ -3065,6 +3065,14 @@ def test_live_scores_page_renders_mfl_matchup(monkeypatch) -> None:
         return {"NEP": 1_800_000_000, "SEA": 1_800_010_800}
 
     monkeypatch.setattr(web_app.MFLClient, "nfl_team_kickoffs", fake_kickoffs)
+    logo_reads = []
+    def fake_details(self):
+        logo_reads.append(True)
+        return MFLLeagueDetails((), {
+            "0001": MFLFranchise("0001", "My Team", "", logo_url="https://www.myfantasyleague.com/fflnetdynamic2026/11111_franchise_logo0001.png"),
+            "0002": MFLFranchise("0002", "Opponent", ""),
+        })
+    monkeypatch.setattr(web_app.MFLClient, "league_details", fake_details)
     timeline = client.get("/scores?league=11111&week=1&view=timeline")
     assert timeline.status_code == 200
     assert "Timeline experiment" in timeline.text
@@ -3075,6 +3083,54 @@ def test_live_scores_page_renders_mfl_matchup(monkeypatch) -> None:
     assert "SCORING UPDATES" in timeline.text
     assert 'data-timeline-scoring-player' in timeline.text
     assert 'data-timeline-focus' in timeline.text
+    assert 'data-pulse-score ' in timeline.text
+    assert '11111_franchise_logo0001.png' in timeline.text
+    assert 'pulse-gauge-needle' in timeline.text
+    assert 'aria-label="Collapse matchup score"' in timeline.text
+    assert 'data-pulse-score ' not in response.text
+    assert 'mobile-timeline-score.js' not in response.text
+    assert 'data-pulse-score ' not in client.get("/scores?league=11111&week=1&view=all").text
+    assert '&view=timeline">Refresh now' in timeline.text
+    assert client.get("/scores?league=11111&week=1&view=timeline").status_code == 200
+    assert logo_reads == [True]
+
+
+@pytest.mark.parametrize("state,left_score,right_score,left_projection,expected_label,angle", [
+    ("live", 10, 10, 20, None, None),
+    ("live", 10, 10, None, "Unavailable", 0),
+    ("live", 10, 10, 0, "Even · 50.00%", 0),
+    ("final", 10, 10, None, "Tied", 0),
+    ("final", 11, 10, None, "BC · 100.00%", -90),
+    ("final", 10, 11, None, "RP · 100.00%", 90),
+])
+def test_timeline_score_uses_existing_forecast_and_validates_logos(
+    state, left_score, right_score, left_projection, expected_label, angle,
+):
+    remaining = 1800 if state == "live" else 0
+    left = web_app.LivePlayerView(MFLPlayer("p1", "A", "QB", "BUF"), left_score, "starter", remaining, left_projection)
+    right = web_app.LivePlayerView(MFLPlayer("p2", "B", "QB", "CIN"), right_score, "starter", remaining, 0)
+    matchup = web_app.HeadToHeadView((
+        web_app.LiveTeamView("1", "Bone Crushers", left_score, True, 0, 1, (left,)),
+        web_app.LiveTeamView("2", "Replacement Players", right_score, False, 0, 1, (right,)),
+    ))
+    details = MFLLeagueDetails((), {
+        "0001": MFLFranchise("0001", "Bone Crushers", "", logo_url="https://www.myfantasyleague.com/logo.png"),
+        "0002": MFLFranchise("0002", "Replacement Players", "", logo_url="https://untrusted.example/logo.png"),
+    })
+    summary = web_app._timeline_score_summary(matchup, details)
+    assert summary["teams"][0]["score"] == left_score
+    assert summary["teams"][0]["logo_url"] == "https://www.myfantasyleague.com/logo.png"
+    assert summary["teams"][1]["logo_url"] == ""
+    assert summary["teams"][1]["initials"] == "RP"
+    if expected_label is not None:
+        assert summary["label"] == expected_label
+        assert summary["angle"] == angle
+    else:
+        assert summary["chance"] == matchup.forecast["percentages"][0]
+        assert summary["angle"] < 0
+    if summary["label"] == "Unavailable":
+        assert not summary["available"]
+    assert web_app._timeline_score_summary(web_app.HeadToHeadView(()), None) is None
 
 
 def test_experimental_scoring_timeline_places_starters_and_tracks_game_progress() -> None:

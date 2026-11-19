@@ -1,0 +1,28 @@
+<aside class="pulse-score-dock" data-pulse-score data-pulse-key="{{ league.id }}:{{ week }}:{% for team in head_to_head.teams %}{{ team.franchise_id }}{% if not loop.last %}-{% endif %}{% endfor %}" aria-label="Current matchup score">
+  <section class="pulse-score-strip" id="pulse-score-strip" aria-label="Matchup score summary" hidden>
+    <button class="pulse-score-close" type="button" data-pulse-close aria-label="Collapse matchup score">×</button>
+    <div class="pulse-score-line">
+      {% for team in timeline_score.teams %}
+      <div class="pulse-score-team {{ 'left' if loop.first else 'right' }}" aria-label="{{ team.name }}: {{ '%.2f'|format(team.score) }} points">
+        <span class="pulse-score-logo" aria-hidden="true"><b>{{ team.initials }}</b>{% if team.logo_url %}<img src="{{ team.logo_url }}" alt="" width="28" height="28" referrerpolicy="no-referrer">{% endif %}</span>
+        <strong>{{ '%.2f'|format(team.score) }}</strong>
+      </div>
+      {% if loop.first %}
+      <div class="pulse-score-favor{% if not timeline_score.available %} unavailable{% endif %}"{% if timeline_score.chance is not none %} role="meter" aria-label="{{ timeline_score.teams[0].name }} {{ 'final result' if timeline_score.final else 'estimated win probability' }}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ timeline_score.chance }}" aria-valuetext="{{ timeline_score.description }}"{% else %} role="group" aria-label="{{ timeline_score.description }}"{% endif %}>
+        <svg class="pulse-score-gauge" viewBox="0 0 80 38" aria-hidden="true">
+          <path class="pulse-gauge-arc left" d="M8 34 A32 32 0 0 1 40 2"/><path class="pulse-gauge-arc right" d="M40 2 A32 32 0 0 1 72 34"/>
+          <line class="pulse-gauge-tick" x1="40" y1="0" x2="40" y2="6"/>
+          {% if timeline_score.available %}<line class="pulse-gauge-needle" x1="40" y1="34" x2="40" y2="9" transform="rotate({{ '%.3f'|format(timeline_score.angle) }} 40 34)"/><circle class="pulse-gauge-hub" cx="40" cy="34" r="2.5"/>{% endif %}
+        </svg>
+        <span class="pulse-score-favor-label">{{ timeline_score.label }}</span>
+        <span class="pulse-score-sr">{{ timeline_score.description }}</span>
+      </div>
+      {% endif %}
+      {% endfor %}
+    </div>
+  </section>
+  <button class="pulse-score-toggle" type="button" data-pulse-open aria-controls="pulse-score-strip" aria-expanded="false" aria-label="Expand {{ timeline_score.teams[0].name }} {{ '%.2f'|format(timeline_score.teams[0].score) }} versus {{ timeline_score.teams[1].name }} {{ '%.2f'|format(timeline_score.teams[1].score) }} matchup score">
+    <span class="pulse-score-mini-state">{{ head_to_head.game_state }} · W{{ week }}</span>
+    {% for team in timeline_score.teams %}<span class="pulse-score-mini-row"><span class="pulse-score-logo" aria-hidden="true"><b>{{ team.initials }}</b>{% if team.logo_url %}<img src="{{ team.logo_url }}" alt="" width="28" height="28" referrerpolicy="no-referrer">{% endif %}</span><strong>{{ '%.2f'|format(team.score) }}</strong></span>{% endfor %}
+  </button>
+</aside>

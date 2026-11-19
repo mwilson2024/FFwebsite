@@ -396,6 +396,14 @@ points leader, explains average miss in plain language, and keeps RMSE/bias in a
 expandable advanced section. ESPN weekly ranks are evaluated separately as a top-half
 ranking hit rate because ranks are not point projections.
 
+Mobile Timeline scoring replaces the floating Ask AI control with a compact score
+dock for the displayed matchup. Tap to expand a translucent score strip above the
+bottom navigation; X/Escape collapses it. Team-page logos reuse the weekly league
+details cache, with validated MFL artwork and monogram fallbacks. The needle uses
+the same win estimate as the main scoreboard (or an honest unavailable/tied state),
+and scores update through the existing game-aware refresh without extra polling.
+Only the per-tab expanded/collapsed preference survives a score-page reload.
+
 The site is installable as a PWA on supported browsers. Its service worker caches
 only the public offline shell and static icon assets; authenticated league HTML,
 MFL responses, credentials, CSRF state, and transactions are never cached offline.
