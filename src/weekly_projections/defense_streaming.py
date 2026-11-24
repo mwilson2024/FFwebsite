@@ -44,12 +44,13 @@ def _team_code(value: str) -> str:
 class DefenseStream:
     item: PlayerRecommendation
     opponent: str
-    talent_rank: int | None
+    talent_rank: float | None
     offense_rank: int | None
     score: float | None
     label: str
     explanation: str
     league_matchup_rank: int | None = None
+    talent_stats: dict | None = None
 
 
 def rank_defense_streams(
@@ -59,6 +60,8 @@ def rank_defense_streams(
     games: Mapping[str, dict],
     opponent_strength: Mapping[str, dict],
     now: float,
+    week: int | None = None,
+    talent: Mapping[str, dict] | None = None,
 ) -> list[DefenseStream]:
     """Compare claimable defenses and the owner's defense using known inputs.
 
@@ -83,7 +86,10 @@ def rank_defense_streams(
         opponent = _team_code(str(game.get("opponent_team") or ""))
         if not opponent:
             opponent = _team_code(str(game.get("opponent") or "").removeprefix("vs ").removeprefix("@ "))
-        talent_rank = ranks[team][1] if team in ranks else None
+        talent_stats = (talent or {}).get(team) if week and week > 3 else None
+        talent_rank = (talent_stats.get("rank") if talent_stats else None) if week and week > 3 else (
+            ranks[team][1] if team in ranks else None
+        )
         offense_rank = ranks[opponent][0] if opponent in ranks else None
         try:
             kickoff = float(game.get("kickoff") or 0)
@@ -95,6 +101,8 @@ def rank_defense_streams(
             label, explanation = "Talent data unavailable", "No verified talent snapshot exists for this season."
         elif not opponent:
             label, explanation = "No scheduled opponent", "Bye or unavailable schedule; no streaming score is assigned."
+        elif week and week > 3 and talent_rank is None:
+            label, explanation = "Season stats unavailable", "Three complete games per NFL team are required. Preseason defense grades are not reused after Week 3."
         elif talent_rank is None or offense_rank is None:
             label, explanation = "Incomplete talent data", "A verified team rank is missing; no streaming score is assigned."
         elif game.get("final") or (kickoff > 0 and kickoff <= now):
@@ -113,12 +121,14 @@ def rank_defense_streams(
                 score = 100 * (.45 * defense + .45 * weak_offense + .1 * (teams - rank) / (teams - 1))
             score = round(score, 1)
             label = "Strong streaming fit" if score >= 65 else "Matchup-dependent" if score >= 40 else "Risky matchup"
-            explanation = f"Defense talent #{talent_rank} faces offense #{offense_rank} (1 strongest, 32 weakest)."
+            explanation = f"Defense talent #{talent_rank:g} faces offense #{offense_rank} (1 strongest, 32 weakest)."
+            if talent_stats:
+                explanation += f" Season performance through Week {talent_stats['through_week']}; equal-weight run, net pass and total points allowed per game."
             if league_rank is not None:
                 explanation += f" MFL defense matchup #{league_rank} also contributes."
             if kickoff <= 0:
                 explanation += " Kickoff time unavailable; recheck eligibility before using this defense."
-        result.append(DefenseStream(item, opponent, talent_rank, offense_rank, score, label, explanation, league_rank))
+        result.append(DefenseStream(item, opponent, talent_rank, offense_rank, score, label, explanation, league_rank, talent_stats))
     return sorted(result, key=lambda row: (
         row.score is None, -(row.score or 0),
         -(row.item.projection if row.item.projection is not None else -999),

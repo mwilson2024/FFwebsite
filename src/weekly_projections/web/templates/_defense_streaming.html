@@ -1,7 +1,13 @@
 <details class="defense-streaming" id="defense-streaming" open>
   <summary>Defense streaming <span>Week {{ week or '—' }} · Talent + matchup</span></summary>
   <div class="defense-stream-content">
-    <p class="defense-source"><a href="{{ talent_source_url }}" target="_blank" rel="noopener noreferrer">ESPN / Mike Clay unit grades</a> · {{ talent_source_date }} talent snapshot. Not live offensive performance or injury-adjusted ratings.</p>
+    {% include '_weekly_plan_status.html' %}
+    {% if week and week > 3 %}
+    <p class="defense-source">Defense strength uses <a href="https://nflreadr.nflverse.com/articles/dictionary_team_stats.html" target="_blank" rel="noopener noreferrer">nflverse completed-game team stats</a>: equal-weight ranks for rushing yards, net passing yards and total points allowed per game. Lower allowed is better; ties share ranks. This is season performance, not a personnel grade or schedule-adjusted model. Only fully published weeks and teams with at least three games count.</p>
+    <p class="defense-method">Opponent offense still uses the <a href="{{ talent_source_url }}" target="_blank" rel="noopener noreferrer">ESPN / Mike Clay preseason offense grade</a> ({{ talent_source_date }}). Not live offensive performance. If the latest NFL stats are delayed, the card shows the last complete week available; missing season stats receive no defense fit score.</p>
+    {% else %}
+    <p class="defense-source"><a href="{{ talent_source_url }}" target="_blank" rel="noopener noreferrer">ESPN / Mike Clay unit grades</a> · {{ talent_source_date }} talent snapshot. Not live offensive performance or injury-adjusted ratings. Defense strength switches to season stats after Week 3.</p>
+    {% endif %}
     <p class="defense-method">Fit scores weigh defense talent and opposing offense weakness equally. Where available, MFL DEF points-allowed matchup ranks contribute 10% (45/45/10). Fit is not fantasy points or a win probability. Talent ranks: #1 strongest, #32 weakest.</p>
     {% if defense_pricing.bids %}
       <section class="defense-price-history" aria-label="Defense waiver pricing">
@@ -25,10 +31,14 @@
             </div>
             <p class="defense-fit-label">{{ stream.label }}</p>
             <dl class="defense-ranks">
-              <div><dt>Defense talent</dt><dd>{% if stream.talent_rank is not none %}#{{ stream.talent_rank }}{% else %}—{% endif %}</dd></div>
+              <div><dt>{% if week and week > 3 %}Season defense strength{% else %}Defense talent{% endif %}</dt><dd>{% if stream.talent_rank is not none %}#{{ '%g'|format(stream.talent_rank) }}{% else %}—{% endif %}</dd></div>
               <div><dt>Opponent offense</dt><dd>{% if stream.offense_rank is not none %}#{{ stream.offense_rank }}{% else %}—{% endif %}</dd></div>
               <div><dt>MFL projection</dt><dd>{% if stream.item.projection is not none %}{{ '%.1f'|format(stream.item.projection) }} pts{% else %}Unavailable{% endif %}</dd></div>
             </dl>
+            {% if stream.talent_stats %}
+            {% set stats = stream.talent_stats %}
+            <p class="defense-method">Through Week {{ stats.through_week }} · {{ stats.games }} games<br>Run: #{{ '%g'|format(stats.run_rank) }} · {{ '%.1f'|format(stats.run_allowed) }} yds/game<br>Net pass: #{{ '%g'|format(stats.pass_rank) }} · {{ '%.1f'|format(stats.pass_allowed) }} yds/game<br>Total points allowed: #{{ '%g'|format(stats.points_rank) }} · {{ '%.1f'|format(stats.points_allowed) }}/game (includes opponent return scores).</p>
+            {% endif %}
             <p class="defense-explanation">{{ stream.explanation }}</p>
             {% if stream.item.is_rostered %}
               <p class="defense-availability">Your roster · MFL league scoring</p>
@@ -50,6 +60,6 @@
         {% endfor %}
       </div>
     {% endfor %}
-    <p class="defense-method">Up to six targets shown, highest fit first. Schedule, ownership and locks are rechecked before a move is submitted. Talent cards reuse loaded data; waiver prices share the League HQ activity cache.</p>
+    <p class="defense-method">Up to six saved targets shown, highest fit first. Suggestions and bids stay fixed until the next weekly run; a new scoring week gets one initial calculation. Current ownership and drop locks filter the saved plan. Schedule, ownership, locks and balance are verified before submission. These are advisory snapshots, not pending MFL claims.</p>
   </div>
 </details>

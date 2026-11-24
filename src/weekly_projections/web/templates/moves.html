@@ -118,7 +118,7 @@
           <label class="conditional-field replace-claims" data-mode-field="replace" hidden><span><input name="replace_existing" type="checkbox" value="1"> Replace existing claims in this round</span><small>Leave off to append. Turning this on replaces claims already saved in the same MFL round.</small></label>
           <button type="submit" class="review-button" id="review-move" disabled>Review move <span>→</span></button>
         </section>
-        <div id="market-waiver-enrichment" aria-live="polite">{% if enrichment_pending %}<section class="waiver-optimizer"><p class="empty-state">Player pool ready. Building the waiver queue in the background…</p></section>{% else %}{% include '_waiver_optimizer.html' %}{% endif %}</div>
+        <div id="market-waiver-enrichment" aria-live="polite">{% if enrichment_pending %}<section class="waiver-optimizer"><p class="empty-state">Player pool ready. Loading the saved weekly waiver queue…</p></section>{% else %}{% include '_waiver_optimizer.html' %}{% endif %}</div>
       </form>
       <div id="market-defense-enrichment" aria-live="polite">{% if enrichment_pending %}<section class="defense-streaming"><p class="empty-state">Defense streaming intelligence is loading in the background…</p></section>{% else %}{% include '_defense_streaming.html' %}{% endif %}</div>
     </section>

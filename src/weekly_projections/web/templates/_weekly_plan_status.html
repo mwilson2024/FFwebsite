@@ -1,0 +1,5 @@
+{% if weekly_plan %}
+<p class="defense-method" role="status">Weekly plan · Tuesdays at 2:00 a.m. Eastern.<br>Calculated {{ weekly_plan.computed }} · Roster/projection inputs {{ weekly_plan.inputs }} · Budget/history snapshot {{ weekly_plan.budget }}.<br>Next scheduled calculation: {{ weekly_plan.next }}. {% if weekly_plan.stale_inputs %}Saved inputs are over a day old; review changes in MFL before using these suggestions.{% endif %}</p>
+{% else %}
+<p class="defense-method" role="status">The weekly plan is unavailable. You can still research players and use the reviewed move builder.</p>
+{% endif %}

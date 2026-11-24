@@ -929,6 +929,44 @@ class EncryptedSessionStore:
                 ),
             )
 
+    def load_weekly_advisory_tasks(self, *, cycle: str, limit: int = 100) -> list[dict]:
+        """Internal worker only: enumerate due, non-secret display snapshots.
+
+        Scope hashes never leave the worker or become browser authorization.
+        Reuse provider_cache; no credential or pending-action schema changes.
+        """
+        if not self.database_url:
+            return []
+        with self._connect_postgres() as connection:
+            rows = connection.execute(
+                "SELECT scope_hash, season, league_id, payload FROM fantasy_hq.provider_cache "
+                "WHERE report_key = 'weekly-advisory' AND schema_version = 1 "
+                "AND stale_until >= now() "
+                "AND coalesce(payload->>'attempt_cycle', payload->>'cycle', '') <> %s "
+                "ORDER BY fetched_at DESC LIMIT %s",
+                (cycle, max(1, min(100, int(limit)))),
+            ).fetchall()
+        return [
+            {"scope_hash": bytes(row[0]), "year": int(row[1]), "league_id": str(row[2]),
+             "payload": json.loads(row[3]) if isinstance(row[3], str) else row[3]}
+            for row in rows if isinstance(row[3], (dict, str))
+        ]
+
+    def finish_weekly_advisory_task(self, task: dict, payload: dict) -> bool:
+        """Compare-and-swap prevents overwriting a newer page's saved inputs."""
+        if not self.database_url:
+            return False
+        with self._connect_postgres() as connection:
+            result = connection.execute(
+                "UPDATE fantasy_hq.provider_cache SET payload = %s::jsonb "
+                "WHERE scope_hash = %s AND season = %s AND league_id = %s "
+                "AND report_key = 'weekly-advisory' AND schema_version = 1 "
+                "AND payload = %s::jsonb",
+                (json.dumps(payload, allow_nan=False), task["scope_hash"], task["year"],
+                 task["league_id"], json.dumps(task["payload"], allow_nan=False)),
+            )
+        return result.rowcount == 1
+
     def prune_expired_provider_cache(
         self, *, retention_seconds: int = 7 * 86400, batch_size: int = 500,
     ) -> int:

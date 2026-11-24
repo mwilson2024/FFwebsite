@@ -9,9 +9,10 @@ import time
 import hashlib
 import json
 import re
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from itertools import zip_longest
 from pathlib import Path
 from threading import BoundedSemaphore, Event, Lock, RLock, Thread
@@ -78,10 +79,11 @@ from weekly_projections.insights import (
     weather_for_roster,
 )
 from weekly_projections.roster_planner import build_roster_plan, load_nfl_schedule
-from weekly_projections.waiver_optimizer import optimize_waiver_queue
+from weekly_projections.waiver_optimizer import WaiverQueue
 from weekly_projections.live_stats import weekly_boxscore, weekly_touchdown_clips, scoring_components
 from weekly_projections.recommendations import PlayerRecommendation, build_player_board
-from weekly_projections.defense_streaming import rank_defense_streams, defense_waiver_pricing, TALENT_SOURCE_URL, TALENT_SOURCE_DATE
+from weekly_projections.defense_streaming import TALENT_SOURCE_URL, TALENT_SOURCE_DATE
+from weekly_projections.weekly_advisory import WeeklyAdvisoryCache, plan_context, weekly_cycle
 from weekly_projections.trade_engine import suggest_trades, analyze_target_trade
 from weekly_projections.league_intelligence import (
     LeagueRecap,
@@ -879,8 +881,74 @@ push_worker_stop = Event()
 push_worker: Thread | None = None
 injury_scan_lock = Lock()
 injury_scan_receipts: dict[str, float] = {}
+weekly_advisories = WeeklyAdvisoryCache(
+    lambda: _persistent_store() if os.environ.get("WP_DATABASE_URL", "").strip() else None,
+    log_error,
+)
+weekly_worker_stop = Event()
+
+
+def _refresh_active_weekly_inputs() -> None:
+    """Use valid in-memory logins for fresh MFL inputs; never restore credentials."""
+    with sessions_lock:
+        active = sorted(sessions.values(), key=lambda row: row.created_at, reverse=True)
+    seen = set()
+    remaining = 20
+    for current in active:
+        if current.expires_at <= time.monotonic() or not current.owner_fingerprint:
+            continue
+        for league in current.leagues:
+            key = (current.owner_fingerprint, current.year, league.id)
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                if not weekly_advisories.registered(*key):
+                    continue
+                _market_enrichment_context(current, league, _client(current, league), scheduled=True)
+            except Exception as error:
+                _log_provider_error_once(current, league.id, "weekly_advisory_refresh_failed", error)
+            remaining -= 1
+            if remaining <= 0 or weekly_worker_stop.is_set():
+                return
+
+
+def _weekly_advisory_loop() -> None:
+    completed_cycle = ""
+    refreshed_cycle = ""
+    while not weekly_worker_stop.is_set():
+        cycle = weekly_cycle(time.time()).date().isoformat()
+        if cycle != completed_cycle:
+            try:
+                if refreshed_cycle != cycle:
+                    refreshed_cycle = cycle
+                    _refresh_active_weekly_inputs()
+                count = weekly_advisories.run_due()
+                log_event("weekly_advisory_cycle", cycle=cycle, plans_updated=count)
+                if count < 100:
+                    completed_cycle = cycle
+            except Exception as error:
+                log_error("weekly_advisory_worker_failed", error)
+        weekly_worker_stop.wait(60)
+
+
+@asynccontextmanager
+async def _app_lifespan(application):
+    worker = None
+    if os.environ.get("WP_DATABASE_URL", "").strip():
+        weekly_worker_stop.clear()
+        worker = Thread(target=_weekly_advisory_loop, name="weekly-advisory", daemon=True)
+        worker.start()
+    try:
+        yield
+    finally:
+        weekly_worker_stop.set()
+        if worker:
+            worker.join(timeout=2)
+
+
 initialize_log()
-app = FastAPI(title="Weekly Projections · MFL Moves", docs_url=None, redoc_url=None)
+app = FastAPI(title="Weekly Projections · MFL Moves", docs_url=None, redoc_url=None, lifespan=_app_lifespan)
 
 
 def _allowed_hosts() -> list[str]:
@@ -7879,60 +7947,71 @@ def _market_enrichment_context(
     current: BrowserSession,
     selected: MFLLeague,
     client: MFLClient,
+    *, scheduled: bool = False,
 ) -> dict:
     """Load the slower advisory layers after the usable player pool is visible."""
-    week, roster, recommendations, blend, roster_locked = _load_player_board(client, current)
+    week, roster, recommendations, blend, roster_locked = _load_player_board(
+        client, current, **({"include_reference": False, "include_score_context": False} if scheduled else {}),
+    )
     _remember_catalog(current, client)
-    defense_streams = rank_defense_streams(
-        recommendations,
-        year=current.year,
-        games=getattr(client, "week_games", {}) if week is not None else {},
-        opponent_strength=getattr(client, "opponent_strength", {}),
-        now=time.time(),
-    )
-    waiver_defenses = [row for row in defense_streams if not row.item.is_rostered
-                       and row.item.market_status in {"waiver", "locked"}]
-    waiver_candidates = [item for item in recommendations if not item.is_rostered
-                         and item.market_status in {"waiver", "locked"}
-                         and item.suggested_drop is not None
-                         and item.roster_delta is not None and item.roster_delta > 0]
-    balance = None
-    activity = ()
-    pricing_error = None
-    if waiver_candidates or waiver_defenses:
+    def prepare():
+        balance, activity, pricing_error = None, (), None
+        candidates = any(
+            not item.is_rostered and item.is_claimable and (
+                _board_position(item.player) == "DEF" or (
+                    item.market_status in {"waiver", "locked"}
+                    and item.suggested_drop is not None
+                    and item.roster_delta is not None and item.roster_delta > 0
+                )
+            ) for item in recommendations
+        )
+        if candidates:
+            try:
+                details = _cached_session_read(current, selected.id, "details", client.league_details, ttl=300)
+                franchise = details.franchises.get(selected.franchise_id.zfill(4))
+                balance = franchise.faab_balance if franchise else None
+                activity = _cached_session_read(
+                    current, selected.id, "activity",
+                    lambda: client.transactions(days=_ACTIVITY_LOOKBACK_DAYS, count=200), ttl=90,
+                )
+            except MFLApiError as caught:
+                _log_provider_error_once(current, selected.id, "defense_pricing_unavailable", caught)
+                pricing_error = "Recent pricing or budget data is unavailable. Suggestions may use a budget-only heuristic."
+        ids = {player_id for transaction in activity for player_id in transaction.adds}
+        return {
+            "balance": balance, "budget_at": time.time(),
+            "activity": [asdict(transaction) for transaction in activity],
+            "catalog": {key: asdict(value) for key, value in (current.player_catalog or {}).items() if key in ids},
+            "pricing_error": pricing_error,
+        }
+
+    advisory = {
+        "defense_targets": [], "owned_defenses": [],
+        "defense_pricing": {"bids": {}, "balance": None, "history": [], "sample_count": 0, "median": None},
+        "defense_pricing_error": None,
+        "waiver_queue": WaiverQueue((), None, None, 0), "weekly_plan": None,
+    }
+    if week is not None and 1 <= week <= 18:
         try:
-            details = _cached_session_read(current, selected.id, "details", client.league_details, ttl=300)
-            franchise = details.franchises.get(selected.franchise_id.zfill(4))
-            balance = franchise.faab_balance if franchise else None
-            activity = _cached_session_read(
-                current, selected.id, "activity",
-                lambda: client.transactions(days=_ACTIVITY_LOOKBACK_DAYS, count=200), ttl=90,
+            snapshot = weekly_advisories.resolve(
+                current.owner_fingerprint or current.assistant_safety_id,
+                current.year, selected.id, week,
+                inputs={
+                    "board": [asdict(item) for item in recommendations],
+                    "games": getattr(client, "week_games", {}),
+                    "strength": getattr(client, "opponent_strength", {}),
+                    "locked": sorted(roster_locked),
+                },
+                prepare=prepare,
             )
-        except MFLApiError as caught:
-            _log_provider_error_once(current, selected.id, "defense_pricing_unavailable", caught)
-            pricing_error = "Recent pricing or budget data is unavailable. Suggestions may use a budget-only heuristic."
-    defense_pricing = defense_waiver_pricing(
-        waiver_defenses, balance=balance, transactions=activity,
-        catalog=current.player_catalog or {}, now=time.time(),
-    )
-    waiver_queue = optimize_waiver_queue(
-        recommendations,
-        balance=balance,
-        transactions=activity,
-        catalog=current.player_catalog or {},
-        locked_drop_ids=roster_locked,
-    )
+            advisory = plan_context(snapshot, recommendations, roster_locked, now=time.time(), roster=roster,
+                                    games=getattr(client, "week_games", {}))
+        except Exception as caught:
+            _log_provider_error_once(current, selected.id, "weekly_advisory_unavailable", caught)
+            advisory["defense_pricing_error"] = "The saved weekly plan is unavailable. The player market and reviewed moves remain available."
     return {
-        "week": week,
-        "roster": roster,
-        "recommendations": recommendations,
-        "blend": blend,
-        "roster_locked": roster_locked,
-        "defense_targets": [row for row in defense_streams if not row.item.is_rostered][:6],
-        "owned_defenses": [row for row in defense_streams if row.item.market_status == "mine"],
-        "defense_pricing": defense_pricing,
-        "defense_pricing_error": pricing_error,
-        "waiver_queue": waiver_queue,
+        "week": week, "roster": roster, "recommendations": recommendations,
+        "blend": blend, "roster_locked": roster_locked, **advisory,
     }
 
 
@@ -9998,6 +10077,7 @@ def api_player_market_enrichment(request: Request, league: str, revision: str = 
         "request": request,
         "week": context["week"],
         "waiver_queue": context["waiver_queue"],
+        "weekly_plan": context["weekly_plan"],
         "defense_targets": context["defense_targets"],
         "owned_defenses": context["owned_defenses"],
         "defense_pricing": context["defense_pricing"],

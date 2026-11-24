@@ -216,6 +216,45 @@ job. The web process removes at most 500 long-expired snapshots once every six
 hours, keeping the free Supabase project small without a separate worker or cron
 service.
 
+Defense streaming and the **Conditional claim plan / Waiver queue optimizer**
+reuse a saved weekly result instead of recomputing on every market-page load.
+The web process checks the Tuesday **2:00 a.m. America/New_York** boundary once a
+minute (including daylight-saving changes) and catches up after a restart.
+It uses the existing private `provider_cache` from migration 007; no new migration,
+paid scheduler, or additional service is required. Keep the web service running
+with the existing single-worker/single-replica deployment. If the host sleeps,
+the job catches up when the process resumes; it cannot run while the host is off.
+
+Opening a league's player market initializes its weekly plan. First setup and a
+new MFL scoring week each receive one initial calculation; later visits reuse it
+and capture updated, read-only inputs for Tuesday. On the scheduled run, valid
+in-memory MFL sessions can refresh registered leagues (at most 20 per pass), using
+MFL projections without extra reference-ranking or scoring-history downloads.
+If the login has expired, the worker uses saved inputs up to eight days old and
+does not restore credentials. The saved plan remains tied to that input's scoring
+week; opening the market after MFL rolls to a new week initializes that new week's
+plan. Plan, roster/projection, and budget/history timestamps are shown separately.
+Suggested bids are frozen budget estimates, not current balances or pending
+claims. Page rendering filters newly ineligible players/drops without re-running
+the solver. All existing live MFL review/submission checks still apply.
+
+After Week 3, **only streamer defense strength** switches from the preseason grade
+to season-to-date nflverse completed-game statistics: equal-weight average ranks
+of rushing yards allowed/game, net passing yards allowed/game (passing yards less
+sack yards), and total scoreboard points allowed/game. Ties share average ranks;
+byes do not count as games. A minimum of three games for every team and complete
+published weeks is required. The component ranks, averages, sample size, and last
+complete week appear on each defense card. Scoreboard points include opponent
+return scores; this is a descriptive team-performance rating, not MFL fantasy
+points, personnel scouting, or a schedule-adjusted rating. Opponent offense keeps
+its separately labeled preseason grade. General player rankings are unchanged.
+NFL stats are fetched once per season/week/Tuesday cycle and shared across leagues;
+if publication is delayed, the last complete available week is labeled honestly.
+Missing season stats never silently fall back to preseason defense grades after
+Week 3. Logs use `weekly_advisory_cycle`, `weekly_advisory_*_failed`, and
+`defense_talent_unavailable`. Without `WP_DATABASE_URL`, only process-memory
+caching is available and no offline scheduled plan is promised.
+
 Apply [`supabase/migrations/009_web_push_subscriptions.sql`](supabase/migrations/009_web_push_subscriptions.sql)
 to enable opt-in background Web Push. The full browser subscription (including its
 capability-bearing endpoint) is encrypted with `WP_SESSION_SECRET`; PostgreSQL

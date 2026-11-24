@@ -182,7 +182,7 @@ def test_move_page_renders_budget_safe_waiver_queue(monkeypatch) -> None:
     client.cookies.set("wp_session", "queue-session")
     response = client.get("/moves?league=11111")
     assert response.status_code == 200
-    assert "Player pool ready. Building the waiver queue in the background" in response.text
+    assert "Player pool ready. Loading the saved weekly waiver queue" in response.text
     enriched = client.get("/api/player-market/enrichment?league=11111")
     assert enriched.status_code == 200
     assert "Waiver queue optimizer" in enriched.json()["waiver_html"]
