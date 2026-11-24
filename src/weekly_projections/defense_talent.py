@@ -17,6 +17,24 @@ SOURCE_URL = "https://nflreadr.nflverse.com/articles/dictionary_team_stats.html"
 
 
 @dataclass(frozen=True)
+class DefenseRecent:
+    rank: float
+    run_rank: float
+    pass_rank: float
+    points_rank: float
+    run_allowed: float
+    pass_allowed: float
+    points_allowed: float
+    weeks: tuple[int, ...]
+    rank_change: float
+    direction: str | None
+    previous_games: int
+    run_change: float | None
+    pass_change: float | None
+    points_change: float | None
+
+
+@dataclass(frozen=True)
 class DefenseTalent:
     rank: float
     run_rank: float
@@ -27,6 +45,7 @@ class DefenseTalent:
     points_allowed: float
     games: int
     through_week: int
+    recent: DefenseRecent | None = None
 
 
 def _number(value: object) -> float:
@@ -75,7 +94,7 @@ def build_defense_talent(stats: list[dict], schedule: list[dict], *, year: int,
                         raise ValueError("NFL team opponent does not match schedule")
                     pair.append((defense, _number(offense["rushing_yards"]),
                                  _number(offense["passing_yards"]) - _number(offense["sack_yards_lost"]),
-                                 points))
+                                 points, week))
                 ready.extend(pair)
             except (KeyError, TypeError, ValueError):
                 break
@@ -85,13 +104,15 @@ def build_defense_talent(stats: list[dict], schedule: list[dict], *, year: int,
             continue
         break
     totals = {team: [0., 0., 0., 0] for team in UNIT_RANKS_2026}
-    for team, run, passing, points in completed:
+    history = {team: [] for team in totals}
+    for team, run, passing, points, game_week in completed:
         if team not in totals:
             raise ValueError("Unknown NFL team")
         values = totals[team]
         for index, value in enumerate((run, passing, points)):
             values[index] += value
         values[3] += 1
+        history[team].append((run, passing, points, game_week))
     if through < 3 or any(row[3] < 3 for row in totals.values()):
         return {}
     averages = {team: [value / row[3] for value in row[:3]] for team, row in totals.items()}
@@ -101,10 +122,31 @@ def build_defense_talent(stats: list[dict], schedule: list[dict], *, year: int,
                 + (sum(v == value for v in values.values()) - 1) / 2
                 for team, value in values.items()}
 
-    components = [ranks({team: values[i] for team, values in averages.items()}) for i in range(3)]
-    overall = ranks({team: sum(component[team] for component in components) / 3 for team in totals})
-    return {team: DefenseTalent(overall[team], *(component[team] for component in components),
-                                *averages[team], int(totals[team][3]), through) for team in totals}
+    def rank_window(window):
+        components = [ranks({team: values[i] for team, values in window.items()}) for i in range(3)]
+        overall = ranks({team: sum(component[team] for component in components) / 3 for team in totals})
+        return overall, components
+
+    overall, components = rank_window(averages)
+    recent_averages = {team: [sum(game[i] for game in games[-3:]) / 3 for i in range(3)]
+                       for team, games in history.items()}
+    recent_overall, recent_components = rank_window(recent_averages)
+    result = {}
+    for team, games in history.items():
+        change = overall[team] - recent_overall[team]
+        direction = ("up" if change > 0 else "down" if change < 0 else "steady") if len(games) > 3 else None
+        previous = [sum(game[i] for game in games[-6:-3]) / 3 for i in range(3)] if len(games) >= 6 else None
+        # Negative deltas mean fewer yards/points allowed. Never fill a bye or
+        # an unavailable game with zero, or compare overlapping windows here.
+        deltas = [recent_averages[team][i] - previous[i] for i in range(3)] if previous else [None] * 3
+        recent = DefenseRecent(
+            recent_overall[team], *(component[team] for component in recent_components),
+            *recent_averages[team], tuple(game[3] for game in games[-3:]), change,
+            direction, 3 if previous else 0, *deltas,
+        )
+        result[team] = DefenseTalent(overall[team], *(component[team] for component in components),
+                                     *averages[team], int(totals[team][3]), through, recent)
+    return result
 
 
 def _csv_rows(url: str) -> list[dict]:

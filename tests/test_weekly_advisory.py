@@ -263,6 +263,8 @@ def test_market_api_renders_season_stats_and_reuses_saved_plan(monkeypatch):
         assert "Through Week 3" in data["defense_html"]
         assert "Run: #" in data["defense_html"] and "Net pass: #" in data["defense_html"]
         assert "Total points allowed:" in data["defense_html"]
+        assert "Last 3 games" in data["defense_html"] and "First three games" in data["defense_html"]
+        assert "Six completed games are needed" in data["defense_html"]
         assert "Tuesdays at 2:00 a.m. Eastern" in data["waiver_html"]
         assert "Budget/history snapshot" in data["waiver_html"]
     assert calls == ["budget"]
@@ -305,3 +307,30 @@ def test_database_outage_does_not_discard_successful_public_stats(monkeypatch):
     houston = next(row for row in saved["plan"]["streams"] if row["player_id"] == "HOU")
     assert houston["talent_rank"] == 1
     assert errors == ["defense_talent_cache_load_failed", "defense_talent_cache_save_failed"]
+
+
+def test_older_plan_and_public_talent_cache_upgrade_once(monkeypatch):
+    store = Store()
+    old = module.WeeklyAdvisoryCache(lambda: store, lambda *args: None)
+    now = epoch("2026-11-24T03:00:00")
+    old.resolve("owner", 2026, "1", 2, inputs=inputs(), prepare=funding, now=now)
+    key = ("owner", 2026, "1", module.REPORT, "")
+    store.records[key]["version"] = 1
+    calls = []
+    def prepare():
+        calls.append("upgrade")
+        return funding()
+    current = module.WeeklyAdvisoryCache(lambda: store, lambda *args: None)
+    current.resolve("owner", 2026, "1", 2, inputs=inputs(), prepare=prepare, now=now)
+    current.resolve("owner", 2026, "1", 2, inputs=inputs(), prepare=fail_prepare, now=now + 60)
+    assert calls == ["upgrade"]
+    assert store.records[key]["version"] == module.VERSION
+    # Existing public season-only snapshots must not hide the new recent data.
+    store.save_league_report_snapshot("public-defense-talent-v1", year=2026, league_id="0",
+                                     report_type="defense-talent", report_key="7:2026-11-24",
+                                     payload={"DET": {"rank": 20}})
+    public_calls = []
+    monkeypatch.setattr(module, "load_defense_talent", lambda *args: public_calls.append(args) or {})
+    current._talent(2026, 7, now)
+    current._talent(2026, 7, now)
+    assert public_calls == [(2026, 7)]

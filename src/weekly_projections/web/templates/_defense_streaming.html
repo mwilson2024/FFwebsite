@@ -38,6 +38,7 @@
             {% if stream.talent_stats %}
             {% set stats = stream.talent_stats %}
             <p class="defense-method">Through Week {{ stats.through_week }} · {{ stats.games }} games<br>Run: #{{ '%g'|format(stats.run_rank) }} · {{ '%.1f'|format(stats.run_allowed) }} yds/game<br>Net pass: #{{ '%g'|format(stats.pass_rank) }} · {{ '%.1f'|format(stats.pass_allowed) }} yds/game<br>Total points allowed: #{{ '%g'|format(stats.points_rank) }} · {{ '%.1f'|format(stats.points_allowed) }}/game (includes opponent return scores).</p>
+            {% if stats.recent %}{% include '_defense_recent_trend.html' %}{% endif %}
             {% endif %}
             <p class="defense-explanation">{{ stream.explanation }}</p>
             {% if stream.item.is_rostered %}

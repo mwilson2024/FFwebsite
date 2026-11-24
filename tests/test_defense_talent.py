@@ -23,6 +23,18 @@ def season(weeks=4):
     return stats, schedule
 
 
+def set_allowed(stats, schedule, team, weeks, *, run, passing, points):
+    for row in stats:
+        if row["opponent_team"] == team and int(row["week"]) in weeks:
+            row.update(rushing_yards=str(run), passing_yards=str(passing), sack_yards_lost="20")
+    for game_row in schedule:
+        if int(game_row["week"]) in weeks:
+            if game_row["home_team"] == team:
+                game_row["away_score"] = str(points)
+            elif game_row["away_team"] == team:
+                game_row["home_score"] = str(points)
+
+
 def test_after_week_three_uses_completed_per_game_stats_and_net_passing():
     stats, games = season()
     assert build_defense_talent(stats, games, year=2026, before_week=3) == {}
@@ -116,3 +128,76 @@ def test_download_timeout_and_size_bounds(monkeypatch):
     monkeypatch.setattr(module.requests, "get", get)
     with pytest.raises(ValueError, match="download bounds"):
         module._csv_rows("https://synthetic.invalid/public-stats.csv")
+
+
+def test_late_season_improvement_uses_last_three_games_across_a_bye():
+    stats, games = season(7)
+    bye = next(g["game_id"] for g in games if g["week"] == "4" and "DET" in {g["home_team"], g["away_team"]})
+    stats = [row for row in stats if row["game_id"] != bye]
+    games = [row for row in games if row["game_id"] != bye]
+    set_allowed(stats, games, "DET", {1, 2, 3}, run=200, passing=350, points=30)
+    set_allowed(stats, games, "DET", {5, 6, 7}, run=25, passing=90, points=3)
+    result = build_defense_talent(stats, games, year=2026, before_week=8)["DET"]
+    assert result.games == 6
+    recent = result.recent
+    assert recent.weeks == (5, 6, 7)
+    assert recent.run_allowed == 25 and recent.pass_allowed == 70 and recent.points_allowed == 3
+    assert recent.previous_games == 3
+    assert recent.run_change == -175 and recent.pass_change == -260 and recent.points_change == -27
+    assert recent.rank < result.rank and recent.direction == "up"
+    assert recent.rank_change == result.rank - recent.rank
+
+
+def test_declining_recent_form_and_independent_previous_three_window():
+    stats, games = season(9)
+    set_allowed(stats, games, "DET", {1, 2, 3}, run=300, passing=450, points=40)
+    set_allowed(stats, games, "DET", {4, 5, 6}, run=100, passing=220, points=20)
+    set_allowed(stats, games, "DET", {7, 8, 9}, run=50, passing=120, points=10)
+    set_allowed(stats, games, "HOU", {1, 2, 3, 4, 5, 6}, run=10, passing=50, points=1)
+    set_allowed(stats, games, "HOU", {7, 8, 9}, run=250, passing=400, points=40)
+    result = build_defense_talent(stats, games, year=2026, before_week=10)
+    detroit, houston = result["DET"].recent, result["HOU"].recent
+    assert detroit.weeks == (7, 8, 9)
+    assert detroit.run_change == -50 and detroit.pass_change == -100 and detroit.points_change == -10
+    assert houston.direction == "down" and houston.rank_change < 0
+    assert houston.run_change > 0 and houston.pass_change > 0 and houston.points_change > 0
+
+
+def test_short_history_does_not_invent_a_previous_window_and_ties_remain_equal():
+    stats, games = season(5)
+    for row in stats:
+        row.update(rushing_yards="100", passing_yards="200", sack_yards_lost="20")
+    for row in games:
+        row.update(home_score="20", away_score="20")
+    first = build_defense_talent(stats, games, year=2026, before_week=4)["DET"].recent
+    assert first.direction is None and first.weeks == (1, 2, 3)
+    assert first.previous_games == 0 and first.run_change is first.pass_change is first.points_change is None
+    later = build_defense_talent(stats, games, year=2026, before_week=6)["DET"].recent
+    assert later.direction == "steady" and later.rank_change == 0 and later.rank == 16.5
+    assert later.previous_games == 0 and later.run_change is None
+
+
+def test_recent_window_excludes_future_unpublished_and_postseason_games():
+    stats, games = season(7)
+    set_allowed(stats, games, "DET", {7}, run=1, passing=20, points=0)
+    before = build_defense_talent(stats, games, year=2026, before_week=7)["DET"]
+    assert before.recent.weeks == (4, 5, 6)
+    missing = stats[:-1]  # An incomplete latest week must never form part of a trend.
+    assert build_defense_talent(missing, games, year=2026, before_week=8)["DET"] == before
+    for row in stats:
+        if row["week"] == "7":
+            row["season_type"] = "POST"
+    assert build_defense_talent(stats, games, year=2026, before_week=8)["DET"] == before
+
+
+def test_recent_rank_does_not_change_season_stream_fit_or_projection():
+    stats, games = season(6)
+    set_allowed(stats, games, "DET", {1, 2, 3}, run=200, passing=350, points=30)
+    set_allowed(stats, games, "DET", {4, 5, 6}, run=25, passing=90, points=3)
+    talent = {team: asdict(row) for team, row in build_defense_talent(stats, games, year=2026, before_week=7).items()}
+    without_recent = {team: {key: value for key, value in row.items() if key != "recent"} for team, row in talent.items()}
+    args = dict(year=2026, week=7, games={"DET": game("MIA")}, opponent_strength={}, now=100)
+    new = rank_defense_streams([defense("DET")], talent=talent, **args)[0]
+    old = rank_defense_streams([defense("DET")], talent=without_recent, **args)[0]
+    assert new.score == old.score and new.item.projection == old.item.projection == 8
+    assert new.talent_stats["recent"]["direction"] == "up"

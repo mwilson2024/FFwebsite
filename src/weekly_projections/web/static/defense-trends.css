@@ -1,0 +1,26 @@
+.defense-trend {
+  border-top: 1px solid var(--site-line);
+  margin-top: 1rem;
+  padding-top: .85rem;
+}
+.defense-trend-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: .35rem .75rem;
+}
+.defense-trend-heading h4 { margin: 0; font-size: .9rem; }
+.defense-trend-heading strong { font-size: .85rem; color: var(--site-link); }
+.defense-trend table { width: 100%; border-collapse: collapse; font-size: .8rem; }
+.defense-trend th,.defense-trend td {
+  padding: .5rem .25rem;
+  border-bottom: 1px solid var(--site-line);
+  text-align: right;
+  vertical-align: top;
+}
+.defense-trend th:first-child { text-align: left; }
+.defense-trend th { font-weight: 600; }
+.defense-trend td small { display: block; color: var(--site-muted); font-size: .72rem; margin-top: .15rem; }
+.defense-trend summary { cursor: pointer; }
+.defense-trend summary:focus-visible { outline: 2px solid var(--site-accent); outline-offset: 3px; }

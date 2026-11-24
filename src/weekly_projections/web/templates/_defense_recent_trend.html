@@ -1,0 +1,27 @@
+{% set recent = stats.recent %}
+<section class="defense-trend" aria-label="{{ stream.item.player.name }} last three games">
+  <div class="defense-trend-heading">
+    <h4>Last 3 games</h4>
+    <strong>Strength #{{ '%g'|format(recent.rank) }}</strong>
+  </div>
+  <p class="defense-method">{% if recent.direction == 'up' %}↑ Stronger recent rank · {{ '%g'|format(recent.rank_change) }} {{ 'place' if recent.rank_change == 1 else 'places' }} above season{% elif recent.direction == 'down' %}↓ Weaker recent rank · {{ '%g'|format(-recent.rank_change) }} {{ 'place' if recent.rank_change == -1 else 'places' }} below season{% elif recent.direction == 'steady' %}→ Same rank as season{% else %}First three games · no earlier baseline yet{% endif %}<br>Games: {% for game_week in recent.weeks %}W{{ game_week }}{% if not loop.last %}, {% endif %}{% endfor %} · Byes excluded</p>
+  <table>
+    <caption class="sr-only">Season and last-three-game defense averages and NFL ranks</caption>
+    <thead><tr><th scope="col">Allowed/game</th><th scope="col">Season</th><th scope="col">Last 3</th></tr></thead>
+    <tbody>
+      {% for label, average, rank, recent_average, recent_rank in [
+        ('Run yards', stats.run_allowed, stats.run_rank, recent.run_allowed, recent.run_rank),
+        ('Net pass yards', stats.pass_allowed, stats.pass_rank, recent.pass_allowed, recent.pass_rank),
+        ('Total points', stats.points_allowed, stats.points_rank, recent.points_allowed, recent.points_rank)
+      ] %}
+      <tr><th scope="row">{{ label }}</th><td>{{ '%.1f'|format(average) }}<small>#{{ '%g'|format(rank) }}</small></td><td>{{ '%.1f'|format(recent_average) }}<small>#{{ '%g'|format(recent_rank) }}</small></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% if recent.previous_games == 3 %}
+  <p class="defense-method"><strong>Change vs previous 3 games</strong><br>Run {{ '%+.1f'|format(recent.run_change) }} yds/game · Net pass {{ '%+.1f'|format(recent.pass_change) }} yds/game · Points {{ '%+.1f'|format(recent.points_change) }}/game.<br>Negative means fewer allowed; positive means more allowed.</p>
+  {% else %}
+  <p class="defense-method">Six completed games are needed to compare with a separate previous-three-game window.</p>
+  {% endif %}
+  <details class="defense-method"><summary>How to read recent form</summary><p>Recent strength ranks all 32 defenses using the same equal-weight run, net pass and total points allowed method, limited to each team's last three completed games. Rank movement compares recent rank with season rank; it is relative to other defenses. Opponent quality is not adjusted. The streaming fit score continues to use season strength.</p></details>
+</section>

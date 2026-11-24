@@ -248,6 +248,14 @@ complete week appear on each defense card. Scoreboard points include opponent
 return scores; this is a descriptive team-performance rating, not MFL fantasy
 points, personnel scouting, or a schedule-adjusted rating. Opponent offense keeps
 its separately labeled preseason grade. General player rankings are unchanged.
+Cards also compare the last three completed games with season averages and show
+a separate recent-strength rank using the same method across all 32 teams. Rank
+movement labels stronger/weaker recent form relative to season rank; it does not
+change the streaming fit formula. After six appearances, non-overlapping last-three
+and previous-three averages show signed run/pass/points changes (negative means
+fewer allowed). Byes and unavailable games never count as zero appearances.
+Recent form shares the Tuesday calculation and source downloads. Existing cached
+plans get one format-upgrade calculation so the new trend appears before next Tuesday.
 NFL stats are fetched once per season/week/Tuesday cycle and shared across leagues;
 if publication is delayed, the last complete available week is labeled honestly.
 Missing season stats never silently fall back to preseason defense grades after

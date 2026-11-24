@@ -15,7 +15,7 @@ from weekly_projections.waiver_optimizer import WaiverQueue, WaiverQueueItem, op
 
 EASTERN = ZoneInfo("America/New_York")
 REPORT = "weekly-advisory"
-VERSION = 1
+VERSION = 2
 
 
 def weekly_cycle(now: float) -> datetime:
@@ -143,7 +143,7 @@ class WeeklyAdvisoryCache:
             try:
                 if store:
                     stored = store.load_league_report_snapshot(
-                        "public-defense-talent-v1", year=year, league_id="0",
+                        "public-defense-talent-v2", year=year, league_id="0",
                         report_type="defense-talent", report_key=f"{week}:{key[2]}",
                     )
             except Exception as error:
@@ -156,7 +156,7 @@ class WeeklyAdvisoryCache:
             if store and not stored:
                 try:
                     store.save_league_report_snapshot(
-                        "public-defense-talent-v1", year=year, league_id="0",
+                        "public-defense-talent-v2", year=year, league_id="0",
                         report_type="defense-talent", report_key=f"{week}:{key[2]}",
                         payload=value, ttl_seconds=8 * 86400,
                     )
@@ -231,14 +231,14 @@ class WeeklyAdvisoryCache:
                 return 0
             for task in store.load_weekly_advisory_tasks(cycle=cycle, limit=100):
                 snapshot = dict(task["payload"])
-                if snapshot.get("version") != VERSION or not 1 <= snapshot.get("week", 0) <= 18:
+                if snapshot.get("version") not in {1, VERSION} or not 1 <= snapshot.get("week", 0) <= 18:
                     continue
                 if now - snapshot.get("inputs_at", 0) > 8 * 86400:
                     continue
                 try:
                     plan = compute_plan(snapshot["inputs"], year=task["year"], week=snapshot["week"],
                                         now=now, talent=self._talent(task["year"], snapshot["week"], now))
-                    updated = {**snapshot, "cycle": cycle, "computed_at": now,
+                    updated = {**snapshot, "version": VERSION, "cycle": cycle, "computed_at": now,
                                "plan_inputs_at": snapshot["inputs_at"], "plan": plan}
                     updated.pop("attempt_cycle", None)
                     if store.finish_weekly_advisory_task(task, updated):
